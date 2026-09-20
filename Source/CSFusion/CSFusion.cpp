@@ -1,0 +1,27 @@
+// Copyright (c) 2026 CS-Fusion. All Rights Reserved.
+
+#include "CSFusion.h"
+#include "Core/CSLog.h"
+#include "Modules/ModuleManager.h"
+
+#define LOCTEXT_NAMESPACE "FCSFusionModule"
+
+void FCSFusionModule::StartupModule()
+{
+#if CS_WITH_FUSION
+	UE_LOG(LogCS, Log, TEXT("CSFusion module started (Photon Fusion 3 backend ENABLED)."));
+#else
+	UE_LOG(LogCS, Warning,
+		TEXT("CSFusion module started (Photon Fusion 3 backend DISABLED - offline fallback). ")
+		TEXT("Install the SDK into Plugins/PhotonFusion and rebuild. See docs/PHOTON_SETUP.md."));
+#endif
+}
+
+void FCSFusionModule::ShutdownModule()
+{
+	UE_LOG(LogCS, Log, TEXT("CSFusion module shut down."));
+}
+
+#undef LOCTEXT_NAMESPACE
+
+IMPLEMENT_PRIMARY_GAME_MODULE(FCSFusionModule, CSFusion, "CSFusion");

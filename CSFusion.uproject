@@ -1,0 +1,38 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "5.8",
+	"Category": "",
+	"Description": "CS-Fusion — competitive multiplayer FPS built on Unreal Engine 5.8 + Photon Fusion 3 (Unreal SDK).",
+	"Modules": [
+		{
+			"Name": "CSFusion",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"AdditionalDependencies": [
+				"Engine",
+				"CoreUObject"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
+		},
+		{
+			"Name": "ModelingToolsEditorMode",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
+			"Name": "PhotonFusion",
+			"Enabled": true,
+			"Optional": true
+		}
+	],
+	"TargetPlatforms": [
+		"Windows"
+	]
+}

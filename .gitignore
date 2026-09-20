@@ -1,0 +1,29 @@
+# Unreal Engine generated
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Photon Fusion SDK is licensed per-developer and downloaded from the Photon
+# Dashboard - it is deliberately NOT committed. See docs/PHOTON_SETUP.md.
+Plugins/PhotonFusion/
+
+# Unreal asset trash
+Content/Collections/
+Content/Developers/
+Content/**/*.uasset.tmp
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

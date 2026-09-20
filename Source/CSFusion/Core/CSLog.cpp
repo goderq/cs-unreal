@@ -1,0 +1,10 @@
+// Copyright (c) 2026 CS-Fusion. All Rights Reserved.
+
+#include "Core/CSLog.h"
+
+DEFINE_LOG_CATEGORY(LogCS);
+DEFINE_LOG_CATEGORY(LogCSNet);
+DEFINE_LOG_CATEGORY(LogCSAuth);
+DEFINE_LOG_CATEGORY(LogCSCombat);
+DEFINE_LOG_CATEGORY(LogCSInventory);
+DEFINE_LOG_CATEGORY(LogCSAI);
