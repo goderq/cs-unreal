@@ -22,13 +22,13 @@
 
 #include "CoreMinimal.h"
 #include "Core/CSCoreTypes.h"
-#include "GameFramework/GameModeBase.h"
+#include "GameFramework/GameMode.h"
 #include "CSGameMode.generated.h"
 
 class ACSGameState;
 
 UCLASS()
-class CSFUSION_API ACSGameMode : public AGameModeBase
+class CSFUSION_API ACSGameMode : public AGameMode
 {
 	GENERATED_BODY()
 

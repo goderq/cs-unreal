@@ -2,9 +2,8 @@
 
 #include "Multiplayer/CSGameInstance.h"
 
-#if CS_WITH_FUSION
+// Required from UE 5.8: generated .gen.cpp files are no longer auto-scanned.
 #include UE_INLINE_GENERATED_CPP_BY_NAME(CSGameInstance.fusion)
-#endif
 
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
@@ -49,20 +48,23 @@ void UCSGameInstance::BroadcastAnnouncement(const FString& Message)
 		return;
 	}
 
-#if CS_WITH_FUSION
+	// Fusion requires FString RPC parameters to be non-const references, so the
+	// const& public API is copied into a local before it goes on the wire.
+	FString Payload = Message;
+
+	// Runtime, not compile-time, fallback: with no room joined there is nobody
+	// to send to, so deliver straight to the receive handler. Single-process
+	// testing then exercises exactly the same handler as networked play.
 	if (UCSAuthority::IsSessionActive(this))
 	{
-		RpcAnnouncement(Message);
+		RpcAnnouncement(Payload);
 		return;
 	}
-#endif
 
-	// Offline / no session: deliver straight to the receive handler so that
-	// single-process testing behaves identically.
-	RpcAnnouncement_Receive(Message);
+	RpcAnnouncement_Receive(Payload);
 }
 
-void UCSGameInstance::RpcAnnouncement_Receive(const FString& Message)
+void UCSGameInstance::RpcAnnouncement_Receive(FString& Message)
 {
 	UE_LOG(LogCSNet, Log, TEXT("[Announcement] %s"), *Message);
 	OnAnnouncement.Broadcast(Message);

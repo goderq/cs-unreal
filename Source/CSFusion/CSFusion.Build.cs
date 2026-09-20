@@ -11,40 +11,54 @@ public class CSFusion : ModuleRules
 		CppStandard = CppStandardVersion.Cpp20;
 
 		// ------------------------------------------------------------------
-		// Photon Fusion 3 (Unreal SDK) detection.
+		// Photon Fusion 3 (Unreal SDK) is a hard dependency.
 		//
-		// The Fusion SDK is distributed from the Photon Dashboard as a 7z that
-		// is unpacked into <Project>/Plugins/PhotonFusion. It cannot be
-		// redistributed inside this repository, so the gameplay module is
-		// written to build BOTH with and without it:
+		// An earlier revision tried to make the SDK optional by guarding every
+		// Fusion declaration with #if CS_WITH_FUSION. That does not work, and
+		// fails silently, which is worse than failing loudly:
 		//
-		//   CS_WITH_FUSION = 1 -> networking runs through Photon Fusion 3.
-		//   CS_WITH_FUSION = 0 -> the project still compiles and runs
-		//                         standalone/offline so gameplay can be worked
-		//                         on before the SDK is installed. Every Fusion
-		//                         RPC falls back to a direct local call.
+		//   UnrealHeaderTool only understands a fixed set of preprocessor
+		//   conditions (CPP, !CPP, 0, 1, WITH_EDITOR, WITH_EDITORONLY_DATA,
+		//   WITH_ENGINE, WITH_COREUOBJECT, WITH_HOT_RELOAD, WITH_VERSE_VM,
+		//   WITH_VERSE_BPVM, WITH_TESTS). Anything else is classified
+		//   UhtCompilerDirective.Unrecognized, and
+		//   UhtHeaderFileParser.IncludeCurrentCompilerDirective() then skips
+		//   the whole block. A UPROPERTY inside it is never registered with
+		//   the reflection system (so the GC can collect it), a UFUNCTION is
+		//   never registered (so AddDynamic fails at runtime), and a
+		//   SEND_FUSIONRPC is never seen by PhotonFusionUbtPlugin (so the send
+		//   function is declared but never defined -> link error).
 		//
-		// See docs/PHOTON_SETUP.md for the installation steps.
+		// So: the SDK is required, CS_WITH_FUSION is always 1, and no reflected
+		// declaration is ever wrapped in a project-specific #if.
+		//
+		// Offline play is still supported, but as a RUNTIME path: with no room
+		// joined, UCSAuthority::IsGameAuthority() returns true and every
+		// Request* wrapper calls its _Receive handler directly instead of
+		// sending an RPC. See docs/ARCHITECTURE.md.
+		//
+		// The SDK cannot be committed (Photon licence), so a fresh clone must
+		// install it first - see docs/PHOTON_SETUP.md.
 		// ------------------------------------------------------------------
 		string ProjectRoot = Path.GetFullPath(Path.Combine(ModuleDirectory, "..", ".."));
 		string FusionUPlugin = Path.Combine(ProjectRoot, "Plugins", "PhotonFusion", "PhotonFusion.uplugin");
-		bool bHasPhotonFusion = File.Exists(FusionUPlugin);
 
-		if (bHasPhotonFusion)
+		if (!File.Exists(FusionUPlugin))
 		{
-			// PhotonFusion.Build.cs re-exports Core, Engine, DeveloperSettings
-			// and PhysicsCore, so those do not have to be repeated here.
-			PublicDependencyModuleNames.Add("PhotonFusion");
-			PublicDefinitions.Add("CS_WITH_FUSION=1");
-			System.Console.WriteLine("[CSFusion] Photon Fusion 3 SDK found -> CS_WITH_FUSION=1");
+			throw new BuildException(
+				"\n================================================================\n" +
+				"Photon Fusion 3 SDK not found.\n\n" +
+				"Expected: " + FusionUPlugin + "\n\n" +
+				"Download 'Fusion Unreal 5.8 SDK 3.0' from the Photon Dashboard\n" +
+				"and unpack the PhotonFusion folder into <Project>/Plugins/.\n" +
+				"Full instructions: docs/PHOTON_SETUP.md\n" +
+				"================================================================\n");
 		}
-		else
-		{
-			PublicDefinitions.Add("CS_WITH_FUSION=0");
-			System.Console.WriteLine(
-				"[CSFusion] Photon Fusion 3 SDK NOT found at " + FusionUPlugin +
-				" -> building in OFFLINE mode (CS_WITH_FUSION=0). See docs/PHOTON_SETUP.md.");
-		}
+
+		// PhotonFusion.Build.cs re-exports Core, Engine, DeveloperSettings and
+		// PhysicsCore, so those do not have to be repeated here.
+		PublicDependencyModuleNames.Add("PhotonFusion");
+		PublicDefinitions.Add("CS_WITH_FUSION=1");
 
 		PublicDependencyModuleNames.AddRange(new string[]
 		{

@@ -33,11 +33,8 @@ class UCSInputConfig;
 class UInputComponent;
 class USkeletalMeshComponent;
 class USpringArmComponent;
-struct FInputActionValue;
-
-#if CS_WITH_FUSION
 class UFusionActorComponent;
-#endif
+struct FInputActionValue;
 
 UCLASS(Config = Game)
 class CSFUSION_API ACSCharacter : public ACharacter
@@ -95,13 +92,19 @@ protected:
 	/** Recompute Stance from the movement component (owning client only). */
 	void UpdateStance();
 
-#if CS_WITH_FUSION
+	/**
+	 * Bound to UFusionActorComponent::OnObjectReady / OnOwnerChanged, both of
+	 * type FFusionObjectStatusChange (no parameters).
+	 *
+	 * These must stay plain, unguarded UFUNCTIONs. UHT skips unrecognised #if
+	 * blocks entirely, and an unregistered UFUNCTION cannot be bound with
+	 * AddDynamic - it would compile and then fail at runtime.
+	 */
 	UFUNCTION()
 	void HandleFusionObjectReady();
 
 	UFUNCTION()
 	void HandleFusionOwnerChanged();
-#endif
 
 	// --- Components --------------------------------------------------------
 
@@ -111,10 +114,9 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USkeletalMeshComponent> FirstPersonMesh;
 
-#if CS_WITH_FUSION
+	/** Bridge to UFusionClient. Unguarded so UHT keeps it GC-tracked. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UFusionActorComponent> FusionActor;
-#endif
 
 	// --- Tuning ------------------------------------------------------------
 

@@ -61,13 +61,11 @@ ACSCharacter::ACSCharacter(const FObjectInitializer& ObjectInitializer)
 	Body->SetRelativeLocation(FVector(0.f, 0.f, -88.f));
 	Body->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
 
-#if CS_WITH_FUSION
 	// Fusion adopts an actor only when it has BOTH a UFusionActorComponent and
 	// bReplicates. PlayerAttached means: owned by the controlling client, and
 	// destroyed automatically when that player leaves the room.
 	FusionActor = CreateDefaultSubobject<UFusionActorComponent>(TEXT("FusionActor"));
 	FusionActor->Ownership = EFusionObjectOwnerFlags::PlayerAttached;
-#endif
 }
 
 UCSCharacterMovementComponent* ACSCharacter::GetCSMovement() const
@@ -79,7 +77,6 @@ void ACSCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-#if CS_WITH_FUSION
 	if (FusionActor)
 	{
 		// Bind to OnObjectReady rather than trusting BeginPlay: before the
@@ -88,15 +85,11 @@ void ACSCharacter::BeginPlay()
 		FusionActor->OnObjectReady.AddDynamic(this, &ACSCharacter::HandleFusionObjectReady);
 		FusionActor->OnOwnerChanged.AddDynamic(this, &ACSCharacter::HandleFusionOwnerChanged);
 	}
-#else
-	bNetworkReady = true;
-#endif
 
 	RefreshMeshVisibility();
 	ApplyInputMappings();
 }
 
-#if CS_WITH_FUSION
 void ACSCharacter::HandleFusionObjectReady()
 {
 	bNetworkReady = true;
@@ -110,7 +103,6 @@ void ACSCharacter::HandleFusionOwnerChanged()
 {
 	RefreshMeshVisibility();
 }
-#endif
 
 void ACSCharacter::PossessedBy(AController* NewController)
 {

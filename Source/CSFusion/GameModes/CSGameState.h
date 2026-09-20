@@ -9,18 +9,22 @@
 //
 // Fusion also patches its own network time into AGameStateBase, so
 // GetServerWorldTimeSeconds() is room-synchronised without extra work.
+//
+// Derived from AGameState (not AGameStateBase) to pair with ACSGameMode:
+// AGameMode replicates MatchState through it, and Stage 4 disconnect loot
+// needs AGameMode::InactivePlayerArray, which AGameModeBase does not have.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Core/CSCoreTypes.h"
-#include "GameFramework/GameStateBase.h"
+#include "GameFramework/GameState.h"
 #include "CSGameState.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSMatchPhaseChanged, ECSMatchPhase, NewPhase);
 
 UCLASS()
-class CSFUSION_API ACSGameState : public AGameStateBase
+class CSFUSION_API ACSGameState : public AGameState
 {
 	GENERATED_BODY()
 

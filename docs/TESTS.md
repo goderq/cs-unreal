@@ -23,7 +23,8 @@
 | 1.11 | Глобальный RPC | Сообщения «Warmup started» / «Round started» появляются в логе **обоих** клиентов, но отправляет их только авторитет |
 | 1.12 | Master migration | Закрыть окно-авторитет → во втором окне в логе `local player is NOW the authority`, фазы матча продолжают идти |
 | 1.13 | Выход | `LeaveMatch()` возвращает состояние в `Connected`, персонаж удаляется у остальных (PlayerAttached) |
-| 1.14 | Offline-сборка | Временно переименовать `Plugins/PhotonFusion` → пересобрать → проект запускается, `CSNetInfo` показывает `backend=Offline`, `authority=YES` |
+| 1.14 | Offline-путь | Запустить PIE с 1 игроком и не входить в комнату: `CSNetInfo` показывает `backend=Offline`, `authority=YES`, фазы матча идут, announcement'ы попадают в лог через прямой вызов `_Receive` |
+| 1.15 | SDK обязателен | Временно переименовать `Plugins/PhotonFusion` → сборка падает с понятным `BuildException` и ссылкой на `docs/PHOTON_SETUP.md`, а не молча собирается в сломанном виде |
 
 ## Этап 2 — бой (план)
 

@@ -93,6 +93,28 @@ Fusion Unreal 3 **переиспользует разметку Unreal как с
 | `APlayerState` принадлежит **самому игроку** (PlayerAttached) | HP / броня / инвентарь **нельзя** хранить на PlayerState |
 | `HasAuthority()` до Fusion-handshake возвращает `true` у всех | читать роль только после `OnObjectReady`, а лучше через `UCSAuthority::CanWrite()` |
 | SDK в статусе **Preview** | версионно-зависимый код изолирован в `CSFusionCompat.h` и `CSSessionSubsystem::StartRoomOperation` |
+| `FString` в RPC — только **неконстантная ссылка** | `const FString&` и передача по значению отклоняются `FusionPropertyParser`; публичный API берёт `const&` и копирует в локальную переменную |
+| Проектный `#if` вокруг рефлексируемых объявлений | UHT пропускает блок целиком, см. §6 |
+
+### Правила написания Fusion RPC
+
+Проверено на исходниках SDK, а не на документации:
+
+1. **Таргет — голый токен-спецификатор**, не выражение:
+   `SEND_FUSIONRPC(TargetMasterClient)`, а не
+   `SEND_FUSIONRPC(EFusionRPCTarget::SendToMasterClient)` и не `#define`-алиас.
+   `FusionMacros.h` определяет макрос как `;`, а токен читает UBT-плагин прямо
+   из текста до препроцессора (`FusionUhtFunctionSpecifiers.cs`).
+2. **`FString` — только `FString&`.** Ни `const FString&`, ни по значению
+   (`FusionPropertyParser.cs:437,447`).
+3. **Тело send-функции не писать** — его генерирует плагин. Писать нужно
+   только `<Name>_Receive`.
+4. **Порядок включений в заголовке:** `"MyClass.fusion.h"` строго **до**
+   `"MyClass.generated.h"`.
+5. **В .cpp обязателен** (с UE 5.8) `#include UE_INLINE_GENERATED_CPP_BY_NAME(MyClass.fusion)`.
+6. **`FUSION_BODY();`** — сразу после `GENERATED_BODY()`.
+7. **RPC не переигрываются late-joiner'ам** — всё, что должно пережить вход,
+   держать в реплицируемых свойствах.
 
 ---
 
@@ -165,17 +187,45 @@ offline. Это же позволяет тестировать геймплей 
 
 ---
 
-## 6. Offline-режим
+## 6. Offline-режим — и почему он рантаймовый, а не через `#if`
 
-`CSFusion.Build.cs` проверяет наличие `Plugins/PhotonFusion/PhotonFusion.uplugin`:
+Первая версия делала SDK опциональным: все объявления Fusion стояли под
+`#if CS_WITH_FUSION`, и без плагина проект собирался в offline-режиме.
+**Это не работает, и ломается молча.**
 
-- найден → `CS_WITH_FUSION=1`, сеть через Photon;
-- не найден → `CS_WITH_FUSION=0`, `FUSION_BODY` и `SEND_FUSIONRPC` становятся
-  пустыми макросами, `IsGameAuthority()` всегда `true`, каждый RPC вызывает
-  свой `_Receive` напрямую.
+UnrealHeaderTool понимает только фиксированный набор условий препроцессора:
+`CPP`, `!CPP`, `0`, `1`, `WITH_EDITOR`, `WITH_EDITORONLY_DATA`, `WITH_ENGINE`,
+`WITH_COREUOBJECT`, `WITH_HOT_RELOAD`, `WITH_VERSE_VM`, `WITH_VERSE_BPVM`,
+`WITH_TESTS`. Любое другое условие получает флаг
+`UhtCompilerDirective.Unrecognized`, после чего
+`UhtHeaderFileParser.IncludeCurrentCompilerDirective()` **пропускает весь блок**:
 
-Смысл: можно писать и проверять геймплей, не имея SDK, и не иметь двух версий
-игрового кода.
+```csharp
+return !GetCurrentCompositeCompilerDirective().HasAnyFlags(
+    UhtCompilerDirective.CPPBlock | UhtCompilerDirective.ZeroBlock |
+    UhtCompilerDirective.Unrecognized);
+```
+
+Последствия для кода, спрятанного под `#if CS_WITH_FUSION`:
+
+| Что внутри | Что происходит |
+|---|---|
+| `UPROPERTY` | не регистрируется в рефлексии → GC может собрать объект |
+| `UFUNCTION` | не регистрируется → `AddDynamic` падает **в рантайме**, не при сборке |
+| `SEND_FUSIONRPC` | не виден UBT-плагину → функция объявлена, но тела нет → ошибка линковки |
+
+Первые два случая компилируются молча и ломаются позже — худший вид бага.
+
+**Как сейчас.** SDK — жёсткая зависимость. `CSFusion.Build.cs` бросает
+`BuildException` с инструкцией, если плагина нет. `CS_WITH_FUSION` всегда `1`.
+Ни одно рефлексируемое объявление не завёрнуто в проектный `#if`.
+В `.cpp` такие директивы легальны (UHT их не парсит), но нужды в них нет.
+
+**Offline-игра при этом сохранилась — как рантаймовый путь.** Если комната не
+подключена, `IsSessionActive()` возвращает `false`, `IsGameAuthority()`
+возвращает `true`, и обёртка `RequestX()` вызывает свой `_Receive` напрямую
+вместо отправки RPC. Один и тот же обработчик работает и в сети, и в одиночном
+PIE — что и требовалось для тестирования.
 
 ---
 

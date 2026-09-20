@@ -158,24 +158,43 @@ network time.
 | Требование | Статус на этой машине |
 |---|---|
 | Unreal Engine 5.8 | ✅ `C:\Program Files\Epic Games\UE_5.8` (5.8.2) |
-| Visual Studio 2019+ / Rider | ❌ **не установлено — нужно поставить** |
+| Visual Studio 2019+ / Rider | ✅ VS 2022 Community, MSVC 14.44.35207 |
+| Windows SDK | ✅ 10.0.22621.0 и 10.0.26100.0 |
 | Windows 10/11 | ✅ Windows 11 Pro |
-| C++17 и выше | ✅ проект собирается под C++20 |
+| C++17 и выше | ✅ модуль собирается под C++20 |
 | Fusion 3 AppId | ✅ выдан |
-| Fusion Unreal SDK | ❌ нужно скачать (шаг 3) |
+| Fusion Unreal SDK | ✅ 3.0.0-Preview-1498, EngineVersion 5.8.0 |
 
-### Установка компилятора
+### Установка компилятора (для чистой машины)
 
-Без MSVC ни движок, ни плагин не соберутся. Поставить **Visual Studio 2022
-Community** (или Build Tools) с компонентами:
+Без MSVC ни движок, ни плагин не соберутся. **Visual Studio 2022 Community**
+(или Build Tools) с компонентами:
 
 - Workload: **Game development with C++**
 - Workload: **Desktop development with C++**
 - Individual: **MSVC v143 x64/x86 build tools**
 - Individual: **Windows 11 SDK (10.0.22621 или новее)**
-- Individual: **.NET 8 SDK**
 
 Ссылка: <https://visualstudio.microsoft.com/downloads/>
+
+Из командной строки (запускать **от администратора**, иначе установщик вернёт
+код 5007; путь обязательно в кавычках, иначе код 87):
+
+```bash
+"C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify --installPath "C:\Program Files\Microsoft Visual Studio\2022\Community" --add Microsoft.VisualStudio.Workload.NativeGame --add Microsoft.VisualStudio.Workload.NativeDesktop --add Microsoft.VisualStudio.Component.Windows11SDK.22621 --includeRecommended --passive --norestart
+```
+
+### Настройки таргетов
+
+`CSFusion.Target.cs` и `CSFusionEditor.Target.cs` используют
+`DefaultBuildSettings = BuildSettingsVersion.Latest` и
+`IncludeOrderVersion = EngineIncludeOrderVersion.Latest`. Это не косметика:
+бинарный движок из лаунчера собран с `Latest`, и любое понижение
+`BuildSettingsVersion` меняет `CppCompileWarningSettings`, после чего UBT
+отказывается собирать таргет с ошибкой
+«modifies the values of properties … has build products in common with
+UnrealEditor». По той же причине `CppStandard` задан на уровне модуля
+(`CSFusion.Build.cs`), а не таргета.
 
 ---
 
