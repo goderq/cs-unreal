@@ -7,6 +7,8 @@
 
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Multiplayer/CSSessionSubsystem.h"
 
 void UCSGameInstance::Init()
@@ -15,6 +17,65 @@ void UCSGameInstance::Init()
 
 	UE_LOG(LogCS, Log, TEXT("CSGameInstance initialised. Fusion backend: %s"),
 		UCSSessionSubsystem::IsFusionAvailable() ? TEXT("ENABLED") : TEXT("DISABLED (offline)"));
+}
+
+void UCSGameInstance::OnStart()
+{
+	Super::OnStart();
+
+	// Runs once the initial map is loaded, which is the earliest point where
+	// joining a room makes sense.
+	AutoConnectFromCommandLine();
+}
+
+void UCSGameInstance::AutoConnectFromCommandLine()
+{
+	const TCHAR* CmdLine = FCommandLine::Get();
+
+	if (FParse::Param(CmdLine, TEXT("noautoconnect")))
+	{
+		UE_LOG(LogCSNet, Log, TEXT("Auto-connect disabled by -noautoconnect; staying offline."));
+		return;
+	}
+
+	UCSSessionSubsystem* Session = GetSessionSubsystem();
+	if (!Session)
+	{
+		UE_LOG(LogCSNet, Error, TEXT("Auto-connect: session subsystem unavailable."));
+		return;
+	}
+
+	if (Session->IsInRoom())
+	{
+		return;
+	}
+
+	FCSSessionRequest Request;
+
+	Request.RoomName = TEXT("cs-alpha");
+	FParse::Value(CmdLine, TEXT("room="), Request.RoomName);
+
+	Request.MaxPlayers = 8;
+	FParse::Value(CmdLine, TEXT("maxplayers="), Request.MaxPlayers);
+
+	FString Region;
+	if (FParse::Value(CmdLine, TEXT("region="), Region) && !Region.IsEmpty())
+	{
+		Request.Region = Region;
+		Request.bSelectRegion = true;
+	}
+
+	// InitialWorld is deliberately left unset: every client already booted into
+	// the default map, and setting it would make the room reload that map.
+	Request.EmptyTtlSeconds = 0;
+	Request.bVisible = true;
+
+	UE_LOG(LogCSNet, Log,
+		TEXT("Auto-connect: joining room '%s' (max %d, region '%s'). Pass -noautoconnect to skip."),
+		*Request.RoomName, Request.MaxPlayers,
+		Request.bSelectRegion ? *Request.Region : TEXT("best"));
+
+	Session->HostOrJoin(Request);
 }
 
 void UCSGameInstance::Shutdown()

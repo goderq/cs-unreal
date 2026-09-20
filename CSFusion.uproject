@@ -28,8 +28,14 @@
 		},
 		{
 			"Name": "PhotonFusion",
+			"Enabled": true
+		},
+		{
+			"Name": "PythonScriptPlugin",
 			"Enabled": true,
-			"Optional": true
+			"TargetAllowList": [
+				"Editor"
+			]
 		}
 	],
 	"TargetPlatforms": [
