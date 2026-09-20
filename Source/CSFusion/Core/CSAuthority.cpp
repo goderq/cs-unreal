@@ -103,7 +103,8 @@ bool UCSAuthority::CanWrite(const AActor* Actor)
 			// CanModify() is the authoritative answer while a session runs.
 			// AActor::HasAuthority() agrees once the object handshake is done,
 			// but reads true on every peer before that, so prefer CanModify.
-			return Fusion->CanModify(const_cast<AActor*>(Actor));
+			// It is a static taking const UObject*, not an instance method.
+			return UFusionOnlineSubsystem::CanModify(Actor);
 		}
 	}
 #endif
@@ -148,7 +149,8 @@ int32 UCSAuthority::GetRttMs(const UObject* WorldContextObject)
 #if CS_WITH_FUSION
 	if (UFusionOnlineSubsystem* Fusion = GetFusion(WorldContextObject))
 	{
-		return Fusion->GetRtt();
+		// UFusionOnlineSubsystem::GetRtt() returns a double.
+		return FMath::RoundToInt32(Fusion->GetRtt());
 	}
 #endif
 	return 0;
@@ -156,6 +158,18 @@ int32 UCSAuthority::GetRttMs(const UObject* WorldContextObject)
 
 double UCSAuthority::GetNetworkTimeSeconds(const UObject* WorldContextObject)
 {
+#if CS_WITH_FUSION
+	// Fusion's own room clock. Every authority-side timing check must use this
+	// so that all peers agree on "when" regardless of local frame time.
+	if (UFusionOnlineSubsystem* Fusion = GetFusion(WorldContextObject))
+	{
+		if (Fusion->IsInRoom())
+		{
+			return Fusion->NetworkTime();
+		}
+	}
+#endif
+
 	const UWorld* World = GEngine
 		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull)
 		: nullptr;

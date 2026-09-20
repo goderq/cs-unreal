@@ -78,7 +78,8 @@ int32 UCSSessionSubsystem::GetRttMs() const
 #if CS_WITH_FUSION
 	if (UFusionOnlineSubsystem* Fusion = GetFusion())
 	{
-		return Fusion->GetRtt();
+		// GetRtt() is a double in the SDK.
+		return FMath::RoundToInt32(Fusion->GetRtt());
 	}
 #endif
 	return 0;

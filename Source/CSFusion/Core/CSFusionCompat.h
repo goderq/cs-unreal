@@ -30,26 +30,36 @@
 #if CS_WITH_FUSION
 
 	#include "FusionMacros.h"
+	#include "FusionHelpers.h"
 	#include "FusionOnlineSubsystem.h"
 	#include "FusionActorComponent.h"
 
 	/**
-	 * RPC target tokens.
+	 * RPC TARGETS - read this before writing a SEND_FUSIONRPC.
 	 *
-	 * The Fusion 3 preview docs spell these two ways: the Blueprint-facing
-	 * names (TargetMasterClient, ...) and the C++ enum (EFusionRPCTarget::
-	 * SendToMasterClient, ...). SEND_FUSIONRPC is a *sentinel* keyword parsed
-	 * textually by the UBT plugin, so the exact token matters. These aliases
-	 * keep every call site in the project on one spelling - if the SDK you
-	 * unpacked uses the other one, change it here only.
+	 * Write ONE of these four bare tokens, and nothing else:
 	 *
-	 * Verify against Plugins/PhotonFusion/Source/PhotonFusion/Public/FusionMacros.h
-	 * after installing the SDK.
+	 *     SEND_FUSIONRPC(TargetMasterClient)    -> the current Master Client
+	 *     SEND_FUSIONRPC(TargetObjectOwner)     -> the resolved owner of the actor
+	 *     SEND_FUSIONRPC(TargetAllClients)      -> everyone, including the caller
+	 *     SEND_FUSIONRPC(TargetEveryoneElse)    -> everyone except the caller
+	 *
+	 * These are NOT C++ expressions. FusionMacros.h defines SEND_FUSIONRPC(...)
+	 * as `;`, so the compiler never sees the argument at all. The token is
+	 * consumed by PhotonFusionUbtPlugin, which registers each name as a UHT
+	 * *function specifier* (FusionUhtFunctionSpecifiers.cs) and reads it
+	 * straight out of the source text before the preprocessor runs.
+	 *
+	 * Consequences:
+	 *   - A #define alias will NOT work. UHT would see the alias name and fail
+	 *     to match any specifier.
+	 *   - EFusionRPCTarget::SendToMasterClient will NOT work here either. That
+	 *     enum is what the generator EMITS into the .fusion.gen.cpp; it is not
+	 *     the input spelling.
+	 *
+	 * The docs show both spellings in different places. The source is the
+	 * authority, and the source says: bare specifier tokens.
 	 */
-	#define CS_RPC_TO_MASTER        EFusionRPCTarget::SendToMasterClient
-	#define CS_RPC_TO_OWNER         EFusionRPCTarget::SendToObjectOwner
-	#define CS_RPC_TO_ALL           EFusionRPCTarget::SendToAllClients
-	#define CS_RPC_TO_EVERYONE_ELSE EFusionRPCTarget::SendToEveryoneElse
 
 	#define CS_FUSION_INLINE_GENERATED_CPP(ClassName) \
 		UE_INLINE_GENERATED_CPP_BY_NAME(ClassName.fusion)
@@ -63,11 +73,6 @@
 	#ifndef SEND_FUSIONRPC
 		#define SEND_FUSIONRPC(...)
 	#endif
-
-	#define CS_RPC_TO_MASTER        0
-	#define CS_RPC_TO_OWNER         0
-	#define CS_RPC_TO_ALL           0
-	#define CS_RPC_TO_EVERYONE_ELSE 0
 
 	// Expands to a harmless self-include-free token in offline builds.
 	#define CS_FUSION_INLINE_GENERATED_CPP(ClassName) "Core/CSFusionCompatNoop.h"
