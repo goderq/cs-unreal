@@ -143,6 +143,7 @@ bool UCSSessionSubsystem::StartRoomOperation(const FCSSessionRequest& Request, b
 	PendingRequest = Request;
 	LastError.Reset();
 	bJoinByNameIssued = false;
+	bPendingJoinOnly = !bAllowCreate;
 
 	FFusionConnectOptions ConnectOptions;
 	ConnectOptions.Region = Request.Region;
@@ -265,13 +266,20 @@ void UCSSessionSubsystem::PollSession()
 
 	const ECSSessionState NewState = TranslateStatus(Fusion->Status());
 
-	// Deferred second half of JoinByName: we are connected, now join the room.
-	if (NewState == ECSSessionState::Connected
+	// Deferred second half of JoinByName only.
+	//
+	// HostOrJoin and QuickMatch must NOT reach here: ConnectAndJoinRoom already
+	// chains its own JoinOrCreateRoom, and issuing a plain join-only JoinRoom
+	// alongside it fails with "Game does not exist" because neither call ends
+	// up creating the room.
+	if (bPendingJoinOnly
+		&& NewState == ECSSessionState::Connected
 		&& bOperationInFlight
 		&& !bJoinByNameIssued
 		&& !PendingRequest.RoomName.IsEmpty())
 	{
 		bJoinByNameIssued = true;
+		UE_LOG(LogCSNet, Log, TEXT("Connected; issuing join-only for room '%s'."), *PendingRequest.RoomName);
 		Fusion->JoinRoom(PendingRequest.RoomName, GetGameInstance());
 	}
 

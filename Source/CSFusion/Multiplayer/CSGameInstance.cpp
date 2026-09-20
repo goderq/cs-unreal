@@ -65,8 +65,13 @@ void UCSGameInstance::AutoConnectFromCommandLine()
 		Request.bSelectRegion = true;
 	}
 
-	// InitialWorld is deliberately left unset: every client already booted into
-	// the default map, and setting it would make the room reload that map.
+	// InitialWorld has to be set: FusionMatchmakingHelpers::CreatePhotonRoomOptions
+	// only writes the room's MAP_DATA custom property when it is non-null, and
+	// that property is how Fusion attaches a map to a room. Leaving it unset
+	// creates a room with no map bound to it.
+	Request.InitialWorld = TSoftObjectPtr<UWorld>(
+		FSoftObjectPath(TEXT("/Game/Maps/Lvl_Warehouse.Lvl_Warehouse")));
+
 	Request.EmptyTtlSeconds = 0;
 	Request.bVisible = true;
 

@@ -176,6 +176,18 @@ private:
 	/** Guards against re-entrant room operations. */
 	bool bOperationInFlight = false;
 
+	/**
+	 * True only for JoinByName, which is the one flow that has to issue its
+	 * room operation itself after the connection completes.
+	 *
+	 * HostOrJoin and QuickMatch go through ConnectAndJoinRoom, which already
+	 * chains its own JoinOrCreateRoom internally. Without this gate the poller
+	 * fired a second, join-only JoinRoom for them, which races the SDK's
+	 * JoinOrCreateRoom and fails with "Game does not exist" (32758) because
+	 * nothing creates the room.
+	 */
+	bool bPendingJoinOnly = false;
+
 	/** Join-by-name is a two-step flow; this stops the second step re-firing. */
 	bool bJoinByNameIssued = false;
 };
