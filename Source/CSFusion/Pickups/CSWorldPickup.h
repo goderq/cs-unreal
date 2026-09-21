@@ -128,5 +128,10 @@ protected:
 
 	/** Local cosmetic spin/bob. */
 	float VisualTime = 0.f;
+
+	/** v1.0 weapon model presentation: spin angle, lying pose and centring offset. */
+	float SpinYaw = 0.f;
+	FQuat ModelLie = FQuat::Identity;
+	FVector ModelCentre = FVector::ZeroVector;
 	FVector MeshBaseOffset = FVector(0.f, 0.f, 20.f);
 };

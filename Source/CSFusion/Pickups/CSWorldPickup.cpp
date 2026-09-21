@@ -12,6 +12,8 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
+#include "Weapons/CSWeaponDefinition.h"
+#include "Weapons/CSWeaponPresentation.h"
 #include "UObject/ConstructorHelpers.h"
 
 ACSWorldPickup::ACSWorldPickup()
@@ -194,7 +196,11 @@ void ACSWorldPickup::Tick(float DeltaSeconds)
 	VisualTime += DeltaSeconds;
 	if (Mesh)
 	{
-		Mesh->AddLocalRotation(FRotator(0.f, 90.f * DeltaSeconds, 0.f));
+		// Spin about the world vertical. A weapon model lies on its side
+		// (ModelLie) and is centred by ModelCentre, both kept while it turns.
+		SpinYaw = FMath::Fmod(SpinYaw + 90.f * DeltaSeconds, 360.f);
+		const FQuat Spin(FRotator(0.f, SpinYaw, 0.f));
+		Mesh->SetRelativeRotation(Spin * ModelLie);
 
 		constexpr float ArcSeconds = 0.45f;
 		const double Age = UCSAuthority::GetNetworkTimeSeconds(this) - SpawnNetworkTime;
@@ -208,7 +214,7 @@ void ACSWorldPickup::Tick(float DeltaSeconds)
 			Offset = FMath::Lerp(FromLocal, FVector::ZeroVector, Alpha) + FVector(0.f, 0.f, Hop);
 		}
 
-		Mesh->SetRelativeLocation(Offset);
+		Mesh->SetRelativeLocation(Offset + Spin.RotateVector(ModelCentre));
 	}
 
 	// Dropped items expire so a long match cannot accumulate loot forever.
@@ -232,6 +238,21 @@ void ACSWorldPickup::ApplyVisuals()
 	if (!Item || !Mesh)
 	{
 		return;
+	}
+
+	// v1.0: weapons on the ground show the same model as in the hands.
+	if (Item->IsWeapon())
+	{
+		const FCSWeaponModel* Model = UCSWeaponPresentationSettings::Find(Item->Weapon.LoadSynchronous());
+		if (UStaticMesh* ModelMesh = Model ? Model->Mesh.LoadSynchronous() : nullptr)
+		{
+			Mesh->SetStaticMesh(ModelMesh);
+			// Centre the model on the pickup: offset by its bounds centre.
+			ModelLie = FQuat(Model->PickupRotation);
+			ModelCentre = -ModelLie.RotateVector(ModelMesh->GetBounds().Origin * Model->Scale);
+			Mesh->SetRelativeScale3D(FVector(Model->Scale));
+			return;
+		}
 	}
 
 	UStaticMesh* WorldMesh = Item->WorldMesh.LoadSynchronous();

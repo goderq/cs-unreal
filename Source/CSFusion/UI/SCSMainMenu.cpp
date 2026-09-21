@@ -29,7 +29,7 @@ namespace
 {
 	/** Photon Cloud region codes offered in the menu. Empty = best ping. */
 	const TCHAR* GRegionCodes[] = { TEXT(""), TEXT("eu"), TEXT("us"), TEXT("usw"), TEXT("ru"), TEXT("asia"), TEXT("jp"), TEXT("kr"), TEXT("sa"), TEXT("au") };
-	const TCHAR* GRegionNames[] = { TEXT("Best ping"), TEXT("Europe"), TEXT("USA East"), TEXT("USA West"), TEXT("Russia"), TEXT("Asia"), TEXT("Japan"), TEXT("Korea"), TEXT("South America"), TEXT("Australia") };
+	const TCHAR* GRegionNames[] = { TEXT("Default (Europe)"), TEXT("Europe"), TEXT("USA East"), TEXT("USA West"), TEXT("Russia"), TEXT("Asia"), TEXT("Japan"), TEXT("Korea"), TEXT("South America"), TEXT("Australia") };
 
 	constexpr int32 GMinPlayers = 2;
 	constexpr int32 GMaxPlayers = 16;

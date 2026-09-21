@@ -37,6 +37,7 @@
 #include "Settings/CSSettingsSubsystem.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
+#include "Weapons/CSWeaponPresentation.h"
 #include "Animation/CSAnimInstance.h"
 #include "Audio/CSAudio.h"
 #include "Audio/CSAudioSettings.h"
@@ -123,6 +124,24 @@ ACSCharacter::ACSCharacter(const FObjectInitializer& ObjectInitializer)
 	ThirdPersonWeapon = MakeWeaponMesh(TEXT("ThirdPersonWeapon"), Body);
 	ThirdPersonWeapon->SetOwnerNoSee(true);
 	ThirdPersonWeapon->bCastHiddenShadow = true;
+
+	auto MakeWeaponModel = [this](const TCHAR* Name, USkeletalMeshComponent* Parent) -> UStaticMeshComponent*
+	{
+		UStaticMeshComponent* Model = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+		Model->SetupAttachment(Parent, WeaponSocket);
+		Model->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Model->SetGenerateOverlapEvents(false);
+		return Model;
+	};
+	// First person: the model hangs off the camera and both hands reach for it
+	// by IK (ACSCharacter::UpdateFirstPersonView); third person: in the hand.
+	FirstPersonWeaponModel = MakeWeaponModel(TEXT("FirstPersonWeaponModel"), FirstPersonMesh);
+	FirstPersonWeaponModel->SetupAttachment(FirstPersonCamera);
+	FirstPersonWeaponModel->SetOnlyOwnerSee(true);
+	FirstPersonWeaponModel->CastShadow = false;
+	ThirdPersonWeaponModel = MakeWeaponModel(TEXT("ThirdPersonWeaponModel"), Body);
+	ThirdPersonWeaponModel->SetOwnerNoSee(true);
+	ThirdPersonWeaponModel->bCastHiddenShadow = true;
 
 	WeaponComponent = CreateDefaultSubobject<UCSWeaponComponent>(TEXT("WeaponComponent"));
 
@@ -331,6 +350,8 @@ void ACSCharacter::Tick(float DeltaSeconds)
 	BindCombatEvents();
 	UpdateWeaponPresentation();
 	UpdateFootsteps(DeltaSeconds);
+	UpdateFirstPersonView(DeltaSeconds);
+	UpdateRemoteSmoothing(DeltaSeconds);
 }
 
 void ACSCharacter::UpdateStance()
@@ -466,7 +487,8 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 
 	if (Verdict != ECSFireRejection::Accepted)
 	{
-		if (UCSCombatSettings::Get()->bLogRejections)
+		// Post-match refusals are expected (bots keep pulling the trigger), not suspicious.
+		if (UCSCombatSettings::Get()->bLogRejections && Verdict != ECSFireRejection::MatchOver)
 		{
 			UE_LOG(LogCSAuth, Warning, TEXT("Fire from player %d rejected: %s"),
 				ShooterId, *UEnum::GetValueAsString(Verdict));
@@ -496,6 +518,9 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 		{
 			FirstImpact = Shot.ImpactPoint;
 		}
+		UE_LOG(LogCSCombat, Verbose, TEXT("Shot by %d from %s dir %s -> impact %s, victim %d"),
+			ShooterId, *AuthoritativeOrigin.ToCompactString(), *PelletDir.ToCompactString(),
+			*Shot.ImpactPoint.ToCompactString(), Shot.VictimPlayerId);
 
 		if (Shot.VictimPlayerId != 0 && Shot.VictimPlayerId != ShooterId)
 		{
@@ -611,10 +636,13 @@ void ACSCharacter::UpdateFocusedPickup()
 
 	if (Best)
 	{
+		// Walls only: another player standing over the item (typically the
+		// victim respawning, whose collision is back on before its new
+		// position has arrived) must not hide it.
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(CSPickupSight), false, this);
 		FHitResult Hit;
-		const bool bBlocked = GetWorld()->LineTraceSingleByChannel(
-			Hit, Eye, Best->GetActorLocation(), ECC_Visibility, Params);
+		const bool bBlocked = GetWorld()->LineTraceSingleByObjectType(
+			Hit, Eye, Best->GetActorLocation(), FCollisionObjectQueryParams(ECC_WorldStatic), Params);
 		if (!bBlocked)
 		{
 			FocusedPickup = Best;
@@ -919,6 +947,16 @@ void ACSCharacter::SyncWithDirector()
 		LastRespawnCounter = Record.RespawnCounter;
 	}
 
+	// A copy controlled elsewhere still follows the counter. Otherwise, when
+	// control arrives here later - bots handed to a new host after a master
+	// migration - every respawn that happened meanwhile looked like a fresh
+	// one: all bots were teleported onto the same spawn point, stuck inside
+	// each other, blind and frozen (v1.0 fix, found by the nethost scenario).
+	if (!IsLocallyControlled())
+	{
+		LastRespawnCounter = Record.RespawnCounter;
+	}
+
 	// Only the owning client can move its own pawn, so only it acts on the
 	// authority's respawn decision.
 	if (IsLocallyControlled() && Record.RespawnCounter != LastRespawnCounter)
@@ -968,6 +1006,10 @@ void ACSCharacter::ApplyAliveState(bool bNewAlive)
 		// Hide the gun while the body falls; the real one dropped as loot anyway.
 		ThirdPersonWeapon->SetVisibility(bNewAlive);
 	}
+	if (ThirdPersonWeaponModel)
+	{
+		ThirdPersonWeaponModel->SetVisibility(bNewAlive);
+	}
 	bHasLastHitFrom = bNewAlive ? false : bHasLastHitFrom;
 
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
@@ -996,13 +1038,17 @@ void ACSCharacter::HandleRespawn(int32 SpawnPointIndex)
 		// The authority cannot move this pawn - it does not own it - so the
 		// owning client performs the teleport itself once the authority has
 		// flipped the record to alive.
-		SetActorLocationAndRotation(Start->GetActorLocation(), Start->GetActorRotation());
+		// Only the start's yaw: a pitched or rolled PlayerStart would otherwise
+		// respawn the player staring at the sky.
+		const FRotator Facing(0.f, Start->GetActorRotation().Yaw, 0.f);
+		SetActorLocationAndRotation(Start->GetActorLocation(), Facing);
 		if (AController* C = GetController())
 		{
-			C->SetControlRotation(Start->GetActorRotation());
+			C->SetControlRotation(Facing);
 		}
 
-		UE_LOG(LogCSCombat, Log, TEXT("%s respawned at %s"), *GetName(), *Start->GetName());
+		UE_LOG(LogCSCombat, Log, TEXT("%s respawned at %s (start rotation %s)"), *GetName(), *Start->GetName(),
+			*Start->GetActorRotation().ToCompactString());
 	}
 }
 
@@ -1152,6 +1198,13 @@ void ACSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(InputConfig->IA_PauseMenu, ETriggerEvent::Started, this, &ACSCharacter::Input_PauseMenu);
 		++Bound;
 	}
+	if (InputConfig->IA_Scoreboard)
+	{
+		// Hold to show: Started on press, Completed on release.
+		Input->BindAction(InputConfig->IA_Scoreboard, ETriggerEvent::Started, this, &ACSCharacter::Input_ScoreboardStart);
+		Input->BindAction(InputConfig->IA_Scoreboard, ETriggerEvent::Completed, this, &ACSCharacter::Input_ScoreboardStop);
+		++Bound;
+	}
 
 	UE_LOG(LogCS, Log, TEXT("%s: bound %d input actions."), *GetName(), Bound);
 
@@ -1183,7 +1236,15 @@ void ACSCharacter::Input_Look(const FInputActionValue& Value)
 	{
 		Scale *= Settings->GetPreferences().MouseSensitivity;
 		PitchSign = Settings->GetPreferences().bInvertY ? 1.f : -1.f;
+		// Zoomed in: turn proportionally slower, so the same mouse movement
+		// moves the crosshair the same distance across the screen.
+		const float BaseFov = Settings->GetPreferences().FieldOfView;
+		if (FirstPersonCamera && BaseFov > 1.f)
+		{
+			Scale *= FMath::Clamp(FirstPersonCamera->FieldOfView / BaseFov, 0.1f, 1.f);
+		}
 	}
+	AddLookSway(Axis);
 	AddControllerYawInput(Axis.X * Scale);
 	AddControllerPitchInput(PitchSign * Axis.Y * Scale);
 }
@@ -1305,6 +1366,22 @@ void ACSCharacter::Input_ToggleInventory(const FInputActionValue& /*Value*/)
 	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
 	{
 		PC->ToggleInventoryScreen();
+	}
+}
+
+void ACSCharacter::Input_ScoreboardStart(const FInputActionValue& /*Value*/)
+{
+	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
+	{
+		PC->SetScoreboardHeld(true);
+	}
+}
+
+void ACSCharacter::Input_ScoreboardStop(const FInputActionValue& /*Value*/)
+{
+	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
+	{
+		PC->SetScoreboardHeld(false);
 	}
 }
 

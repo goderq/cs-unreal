@@ -27,6 +27,9 @@ void ACSPlayerController::CSTestBots()
 
 	BotTestStart.Reset();
 	BotTestMoved.Reset();
+	BotTestLastPos.Reset();
+	BotTestStill.Reset();
+	BotTestMaxStill = 0.f;
 	BotTestMaxItems.Reset();
 	BotTestHits = 0;
 	BotTestKills = 0;
@@ -68,6 +71,19 @@ void ACSPlayerController::CSTestBots()
 				continue;
 			}
 			BotTestMoved.FindOrAdd(Id) = FMath::Max(BotTestMoved.FindRef(Id), FVector::Dist2D(*Start, It->GetActorLocation()));
+
+			// v1.0: a live bot that has not moved for 30 s is stuck. The total
+			// distance above cannot see that once a bot has roamed once (the
+			// frozen bots after a host migration had).
+			{
+				FCSPlayerCombatRecord StuckRecord;
+				const bool bAliveNow = D && D->GetRecord(Id, StuckRecord) && StuckRecord.bAlive;
+				const FVector* Last = BotTestLastPos.Find(Id);
+				float& Still = BotTestStill.FindOrAdd(Id);
+				Still = (bAliveNow && Last && FVector::Dist2D(*Last, It->GetActorLocation()) < 50.f) ? Still + 5.f : 0.f;
+				BotTestLastPos.Add(Id, It->GetActorLocation());
+				BotTestMaxStill = FMath::Max(BotTestMaxStill, Still);
+			}
 
 			int32 Items = 0;
 			if (const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Id))
@@ -118,9 +134,11 @@ void ACSPlayerController::CSTestBots()
 				}
 			}
 			const int32 Bots = BotTestStart.Num();
-			const bool bOk = Bots > 0 && Moved == Bots && BotTestHits > 0 && BotTestKills > 0 && Looted > 0;
-			UE_LOG(LogCS, Log, TEXT("BOT TEST RESULT: %d bot(s), %d roamed > 8 m, %d hit(s), %d kill(s), %d looted, %d death(s)/respawn(s) -> %s"),
-				Bots, Moved, BotTestHits, BotTestKills, Looted, Deaths, bOk ? TEXT("BOTS OK") : TEXT("BOTS BROKEN"));
+			const bool bStuck = BotTestMaxStill >= 30.f;
+			const bool bOk = Bots > 0 && Moved == Bots && BotTestHits > 0 && BotTestKills > 0 && Looted > 0 && !bStuck;
+			UE_LOG(LogCS, Log, TEXT("BOT TEST RESULT: %d bot(s), %d roamed > 8 m, %d hit(s), %d kill(s), %d looted, %d death(s)/respawn(s), longest standstill %.0f s -> %s"),
+				Bots, Moved, BotTestHits, BotTestKills, Looted, Deaths, BotTestMaxStill,
+				bOk ? TEXT("BOTS OK") : TEXT("BOTS BROKEN"));
 			TestScreenshot(TEXT("bots_end"));
 		}
 	}, 5.f, true);

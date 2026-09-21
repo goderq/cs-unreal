@@ -37,6 +37,14 @@ void ACSGameMode::BeginPlay()
 
 	CachePlayerStarts();
 
+	// Test hook: -roundtime=N shortens the round so the end-of-round flow
+	// (banner, scoreboard, score reset) can be exercised in an automated run.
+	float RoundOverride = 0.f;
+	if (FParse::Value(FCommandLine::Get(), TEXT("roundtime="), RoundOverride) && RoundOverride > 0.f)
+	{
+		RoundSeconds = FMath::Max(10.f, RoundOverride);
+	}
+
 	UE_LOG(LogCS, Log,
 		TEXT("CSGameMode BeginPlay. Authority: %s. PlayerStarts found: %d"),
 		UCSAuthority::IsGameAuthority(this) ? TEXT("YES") : TEXT("no"),
@@ -203,13 +211,12 @@ void ACSGameMode::UpdateMatchFlow()
 	case ECSMatchPhase::WaitingForPlayers:
 		if (PlayerCount >= MinPlayersToStart)
 		{
+			// Phase changes need no announcement RPC: MatchPhase is replicated
+			// and every HUD shows its own banner when it sees the change. (The
+			// old GameInstance RPC fired before Fusion had registered the
+			// GameInstance and was dropped: "Missing Function Descriptor".)
 			GS->SetPhaseEndTime(Now + WarmupSeconds);
 			GS->SetMatchPhase(ECSMatchPhase::Warmup);
-
-			if (UCSGameInstance* GI = GetGameInstance<UCSGameInstance>())
-			{
-				GI->BroadcastAnnouncement(TEXT("Warmup started."));
-			}
 		}
 		break;
 
@@ -219,9 +226,10 @@ void ACSGameMode::UpdateMatchFlow()
 			GS->SetPhaseEndTime(Now + RoundSeconds);
 			GS->SetMatchPhase(ECSMatchPhase::InProgress);
 
-			if (UCSGameInstance* GI = GetGameInstance<UCSGameInstance>())
+			// Kills during warmup do not count.
+			if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
 			{
-				GI->BroadcastAnnouncement(TEXT("Round started. Good luck."));
+				Director->ResetScores();
 			}
 		}
 		break;
@@ -231,11 +239,7 @@ void ACSGameMode::UpdateMatchFlow()
 		{
 			GS->SetPhaseEndTime(Now + PostMatchSeconds);
 			GS->SetMatchPhase(ECSMatchPhase::PostMatch);
-
-			if (UCSGameInstance* GI = GetGameInstance<UCSGameInstance>())
-			{
-				GI->BroadcastAnnouncement(TEXT("Round over."));
-			}
+			UE_LOG(LogCS, Log, TEXT("Round over."));
 		}
 		break;
 

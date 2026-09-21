@@ -198,6 +198,9 @@ public:
 
 	// --- Authority-only writes ---------------------------------------------
 
+	/** New round: every player's kills and deaths back to zero. */
+	void ResetScores();
+
 	/** Creates or resets a record. Safe to call repeatedly. */
 	void EnsurePlayer(int32 PlayerId);
 

@@ -38,11 +38,21 @@ public:
 	/** Seconds since the last hit marker, or a large number. */
 	double GetSecondsSinceHitMarker() const;
 
+	// --- Round flow (v1.0), read by the -cstestround self-test ---
+	const FString& GetBannerTitle() const { return BannerTitle; }
+	const FString& GetBannerSubtitle() const { return BannerSubtitle; }
+	bool WasScoreboardDrawn() const { return bScoreboardDrawn; }
+	int32 GetScoreboardRowCount() const { return ScoreboardRows; }
+
+	/** Records with a player, best first: most kills, then fewest deaths, then id. */
+	static TArray<struct FCSPlayerCombatRecord> SortedScores(const ACSMatchDirector* Director);
+
 protected:
 	void BindToDirector();
 	void HandleCombatEvent(const FCSCombatEvent& Event);
 
 	void DrawCrosshair();
+	void DrawScope();
 	void DrawHitMarker();
 	void DrawDamageIndicators();
 	void DrawVitals();
@@ -54,6 +64,20 @@ protected:
 	void DrawQuickSlots();
 	void DrawFpsCounter();
 	double SmoothedFrameMs = 0.0;
+
+	/** Phase banner and scoreboard, drawn last so they sit on top. */
+	void DrawRoundOverlays();
+	bool ShouldShowScoreboard() const;
+	void UpdatePhaseBanner();
+	void DrawPhaseBanner();
+	void DrawScoreboard();
+
+	uint8 LastSeenPhase = 0xFF;
+	double BannerTime = -1000.0;
+	FString BannerTitle;
+	FString BannerSubtitle;
+	bool bScoreboardDrawn = false;
+	int32 ScoreboardRows = 0;
 
 	/** Text with a soft shadow. X/Y and Scale are in 1080p units. */
 	void DrawLabel(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale = 1.f,

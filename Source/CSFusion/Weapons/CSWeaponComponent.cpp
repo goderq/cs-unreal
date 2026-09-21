@@ -10,6 +10,7 @@
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "Engine/World.h"
+#include "GameModes/CSGameState.h"
 #include "Weapons/CSWeaponDefinition.h"
 
 UCSWeaponComponent::UCSWeaponComponent()
@@ -123,6 +124,16 @@ void UCSWeaponComponent::TryFireOnce()
 	if (LocalLastFireTime > 0.0 && (Now - LocalLastFireTime) < Weapon->GetFireInterval())
 	{
 		return;
+	}
+
+	// Mirrors the authority's MatchOver refusal so there is no muzzle flash for
+	// a shot that cannot count.
+	if (const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>())
+	{
+		if (GS->GetMatchPhase() == ECSMatchPhase::PostMatch)
+		{
+			return;
+		}
 	}
 
 	const int32 LocalId = OwnerCharacter->GetOwningPlayerId();

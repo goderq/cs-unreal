@@ -212,11 +212,18 @@ void UCSSessionSubsystem::Connect(const FCSSessionRequest& Request)
 		return;
 	}
 
+	// v1.0: no request ever uses "best ping" any more. Two machines - even two
+	// clients on the same PC - can measure different best regions (seen in
+	// testing: asia vs eu), and a room name is only unique within a region, so
+	// friends joining "the same" room ended up alone in two different ones.
+	// Without an explicit choice everyone goes to DefaultRegion.
+	const FString Region = (Request.bSelectRegion && !Request.Region.IsEmpty()) ? Request.Region : DefaultRegion;
 	FFusionConnectOptions ConnectOptions;
-	ConnectOptions.Region = Request.Region;
-	ConnectOptions.RegionSelectionMode = Request.bSelectRegion && !Request.Region.IsEmpty()
-		? EFusionRegionSelectionMode::Select
-		: EFusionRegionSelectionMode::Best;
+	ConnectOptions.Region = Region;
+	ConnectOptions.RegionSelectionMode = Region.IsEmpty()
+		? EFusionRegionSelectionMode::Best
+		: EFusionRegionSelectionMode::Select;
+	UE_LOG(LogCSNet, Log, TEXT("Connecting to Photon region '%s'."), Region.IsEmpty() ? TEXT("best") : *Region);
 
 	Fusion->ConnectToPhoton(ConnectOptions, GetGameInstance());
 #endif
@@ -366,7 +373,7 @@ void UCSSessionSubsystem::StartBrowsing(const FString& Region)
 		Request.bSelectRegion = !Region.IsEmpty();
 		PendingRequest = Request;
 		UE_LOG(LogCSNet, Log, TEXT("Browser: connecting to Photon (region '%s')."),
-			Region.IsEmpty() ? TEXT("best") : *Region);
+			Region.IsEmpty() ? TEXT("default") : *Region);
 		Connect(Request);
 	}
 #endif

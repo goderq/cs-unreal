@@ -23,6 +23,7 @@
 #include "FX/CSEffects.h"
 #include "Inventory/CSPlayerInventory.h"
 #include "Weapons/CSWeaponDefinition.h"
+#include "Weapons/CSWeaponPresentation.h"
 
 UCSAnimInstance* ACSCharacter::GetBodyAnim() const
 {
@@ -55,7 +56,7 @@ void ACSCharacter::SetupCharacterMeshes()
 	}
 
 	// Arms view: hide the head (it would fill the camera) and the legs.
-	static const FName HiddenBones[] = { FName(TEXT("neck_01")), FName(TEXT("thigh_l")), FName(TEXT("thigh_r")) };
+	static const FName HiddenBones[] = { FName(TEXT("head")), FName(TEXT("thigh_l")), FName(TEXT("thigh_r")) };
 	for (const FName& Bone : HiddenBones)
 	{
 		FirstPersonMesh->HideBoneByName(Bone, PBO_None);
@@ -73,6 +74,24 @@ void ACSCharacter::SetupCharacterMeshes()
 
 FTransform ACSCharacter::GetMuzzleTransform(bool bFirstPersonView) const
 {
+	const UStaticMeshComponent* ModelComp = bFirstPersonView ? FirstPersonWeaponModel.Get() : ThirdPersonWeaponModel.Get();
+	if (const FCSWeaponModel* Model = GetDisplayedModel())
+	{
+		if (ModelComp && ModelComp->GetStaticMesh())
+		{
+			const FTransform C = ModelComp->GetComponentTransform();
+			FTransform T(C.GetUnitAxis(EAxis::X).ToOrientationQuat(), C.TransformPosition(Model->Muzzle));
+			if (bFirstPersonView)
+			{
+				FVector Origin;
+				FVector Direction;
+				GetAimRay(Origin, Direction);
+				T.SetRotation(Direction.ToOrientationQuat());
+			}
+			return T;
+		}
+	}
+
 	const USkeletalMeshComponent* Weapon = bFirstPersonView ? FirstPersonWeapon.Get() : ThirdPersonWeapon.Get();
 	const UCSWeaponDefinition* Def = DisplayedWeapon.Get();
 	const FName Socket = Def ? Def->MuzzleSocket : FName(TEXT("Muzzle"));
@@ -113,21 +132,43 @@ void ACSCharacter::UpdateWeaponPresentation()
 		DisplayedWeapon = Weapon;
 		bShownReloading = false;
 
-		USkeletalMesh* FPMesh = Weapon ? Weapon->FirstPersonMesh.LoadSynchronous() : nullptr;
-		USkeletalMesh* TPMesh = Weapon ? Weapon->ThirdPersonMesh.LoadSynchronous() : nullptr;
-		if (!TPMesh)
+		// v1.0: a static model placed in the hand frame (see
+		// CSWeaponPresentation.h) when the weapon has one; otherwise the data
+		// asset's skeletal mesh, as before.
+		const FCSWeaponModel* Model = UCSWeaponPresentationSettings::Find(Weapon);
+		UStaticMesh* ModelMesh = Model ? Model->Mesh.LoadSynchronous() : nullptr;
+		if (ModelMesh)
 		{
-			TPMesh = FPMesh;
+			// Third person: in the hand. First person: placed by
+			// UpdateFirstPersonView every frame.
+			FirstPersonWeaponModel->SetStaticMesh(ModelMesh);
+			ThirdPersonWeaponModel->SetStaticMesh(ModelMesh);
+			ThirdPersonWeaponModel->SetRelativeTransform(Model->GetMeshInHand());
+			FirstPersonWeapon->SetSkeletalMesh(nullptr);
+			ThirdPersonWeapon->SetSkeletalMesh(nullptr);
 		}
-		if (!FPMesh)
+		else
 		{
-			FPMesh = TPMesh;
+			FirstPersonWeaponModel->SetStaticMesh(nullptr);
+			ThirdPersonWeaponModel->SetStaticMesh(nullptr);
+
+			USkeletalMesh* FPMesh = Weapon ? Weapon->FirstPersonMesh.LoadSynchronous() : nullptr;
+			USkeletalMesh* TPMesh = Weapon ? Weapon->ThirdPersonMesh.LoadSynchronous() : nullptr;
+			if (!TPMesh)
+			{
+				TPMesh = FPMesh;
+			}
+			if (!FPMesh)
+			{
+				FPMesh = TPMesh;
+			}
+			const float Scale = Weapon ? Weapon->MeshScale : 1.f;
+			FirstPersonWeapon->SetSkeletalMesh(FPMesh);
+			ThirdPersonWeapon->SetSkeletalMesh(TPMesh);
+			FirstPersonWeapon->SetRelativeScale3D(FVector(Scale));
+			ThirdPersonWeapon->SetRelativeScale3D(FVector(Scale));
 		}
-		const float Scale = Weapon ? Weapon->MeshScale : 1.f;
-		FirstPersonWeapon->SetSkeletalMesh(FPMesh);
-		ThirdPersonWeapon->SetSkeletalMesh(TPMesh);
-		FirstPersonWeapon->SetRelativeScale3D(FVector(Scale));
-		ThirdPersonWeapon->SetRelativeScale3D(FVector(Scale));
+		UpdateHandTargets();
 
 		const ECSWeaponStance NewStance = Weapon ? Weapon->Stance : ECSWeaponStance::Pistol;
 		for (UCSAnimInstance* Anim : { GetBodyAnim(), GetArmsAnim() })
@@ -141,6 +182,8 @@ void ACSCharacter::UpdateWeaponPresentation()
 		{
 			CSAudio::PlayAt(this, Weapon->EquipSound, GetActorLocation(), IsLocalPlayerView() ? 0.8f : 0.6f);
 		}
+		ViewEquipTime = bFirstTime ? -1.f : 0.f;
+		ViewReloadTime = -1.f;
 	}
 
 	// Pickup: the replicated inventory grew.
@@ -176,6 +219,8 @@ void ACSCharacter::UpdateWeaponPresentation()
 				Anim->PlayReload(Duration);
 			}
 		}
+		ViewReloadTime = 0.f;
+		ViewReloadDuration = FMath::Max(0.3f, Duration);
 		if (Weapon)
 		{
 			CSAudio::PlayAt(this, Weapon->ReloadSound, GetActorLocation(), IsLocalPlayerView() ? 0.9f : 0.7f);
@@ -245,6 +290,11 @@ void ACSCharacter::PlayShotPresentation(const FVector& TracerEnd, bool bLocalPre
 		{
 			Anim->PlayFire();
 		}
+	}
+
+	if (bFirstPersonView)
+	{
+		FireKick = 1.f; // procedural kick in UpdateFirstPersonView
 	}
 
 	const FTransform Muzzle = GetMuzzleTransform(bFirstPersonView);

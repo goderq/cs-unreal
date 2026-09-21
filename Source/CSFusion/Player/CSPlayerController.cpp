@@ -150,6 +150,14 @@ void ACSPlayerController::ArmSelfTest()
 			}
 		}, LeaveAfter, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestweapons")))
+	{
+		GetWorldTimerManager().SetTimer(TestWeaponsTimer, this, &ACSPlayerController::CSTestWeapons, 8.f, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestround")))
+	{
+		GetWorldTimerManager().SetTimer(TestRoundTimer, this, &ACSPlayerController::CSTestRound, 10.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestperf")))
 	{
 		// Warm-up (shader/PSO compile, bots spawning) before sampling.
@@ -213,6 +221,61 @@ void ACSPlayerController::PressKey(const FKey& Key)
 	InputKey(FInputKeyEventArgs(Viewport, Device, Key, IE_Released, 0.f, false, FPlatformTime::Cycles64()));
 }
 
+bool ACSPlayerController::TestRetryUntil(bool bReady, FTimerHandle& Timer, void (ACSPlayerController::*Fn)(), const TCHAR* What)
+{
+	if (bReady)
+	{
+		TestWaitTries = 0;
+		return false;
+	}
+	if (++TestWaitTries > 20)
+	{
+		UE_LOG(LogCS, Warning, TEXT("SELF-TEST: gave up waiting for %s after 40 s."), What);
+		TestWaitTries = 0;
+		return false;
+	}
+	UE_LOG(LogCS, Log, TEXT("SELF-TEST: waiting for %s..."), What);
+	GetWorldTimerManager().SetTimer(Timer, this, Fn, 2.f, false);
+	return true;
+}
+
+void ACSPlayerController::TestMoveTo(const FVector& Dest, TFunction<void()> OnArrived)
+{
+	// Hops of 400 cm every 0.5 s: 800 cm/s, under the guard's speed limit
+	// (~987 cm/s over a second) and each hop under its 600 cm teleport
+	// threshold. Hops rather than a smooth walk so the pawn spends almost no
+	// time inside crates on the straight line, and arrives quickly.
+	constexpr float Speed = 800.f;
+	constexpr float Rate = 0.5f;
+	TestMoveDest = Dest;
+	TestMoveDone = MoveTemp(OnArrived);
+	GetWorldTimerManager().SetTimer(TestMoveTimer, [this, Speed, Rate]()
+	{
+		APawn* Self = GetPawn();
+		if (!Self)
+		{
+			GetWorldTimerManager().ClearTimer(TestMoveTimer);
+			return;
+		}
+		const FVector Here = Self->GetActorLocation();
+		const FVector Goal(TestMoveDest.X, TestMoveDest.Y, Here.Z);
+		const FVector ToGoal = Goal - Here;
+		const float Step = Speed * Rate;
+		if (ToGoal.Size2D() <= Step)
+		{
+			Self->SetActorLocation(Goal);
+			GetWorldTimerManager().ClearTimer(TestMoveTimer);
+			TFunction<void()> Done = MoveTemp(TestMoveDone);
+			if (Done)
+			{
+				Done();
+			}
+			return;
+		}
+		Self->SetActorLocation(Here + ToGoal.GetSafeNormal2D() * Step);
+	}, Rate, true);
+}
+
 void ACSPlayerController::CSTestLoot()
 {
 	// Full Stage 3 loop through real input: walk up to a weapon, E to pick it
@@ -252,11 +315,17 @@ void ACSPlayerController::CSTestLoot()
 	UE_LOG(LogCS, Log, TEXT("LOOT TEST: target %s (item %d) at %.0f cm; world has %d pickups"),
 		*Target->GetPromptName().ToString(), TestLootItemIndex, BestDist, ACSWorldPickup::CountAlive(this));
 
-	// Stand next to it and look at it (the owning client may move its own pawn).
+	// Walk up to it and look at it (the owning client may move its own pawn).
 	const FVector Pos = Target->GetActorLocation();
-	Self->SetActorLocation(FVector(Pos.X - 120.f, Pos.Y, Self->GetActorLocation().Z));
+	TestMoveTo(FVector(Pos.X - 120.f, Pos.Y, 0.f), [this, Me, Pos]()
+	{
+	ACSCharacter* Walker = Cast<ACSCharacter>(GetPawn());
+	if (!Walker)
+	{
+		return;
+	}
 	FVector Eye, Unused;
-	Self->GetAimRay(Eye, Unused);
+	Walker->GetAimRay(Eye, Unused);
 	SetControlRotation((Pos - Eye).Rotation());
 
 	GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me]()
@@ -309,6 +378,7 @@ void ACSPlayerController::CSTestLoot()
 			}, 0.6f, false);
 		}, 0.8f, false);
 	}, 0.3f, false);
+	}); // TestMoveTo
 }
 
 void ACSPlayerController::CSTestContest()
@@ -343,16 +413,23 @@ void ACSPlayerController::CSTestContest()
 	// Approach from opposite sides depending on player id so pawns do not overlap.
 	const FVector Pos = Target->GetActorLocation();
 	const float Side = (Self->GetOwningPlayerId() % 2 == 0) ? 1.f : -1.f;
-	Self->SetActorLocation(FVector(Pos.X + 110.f * Side, Pos.Y, Self->GetActorLocation().Z));
+	TestMoveTo(FVector(Pos.X + 110.f * Side, Pos.Y, 0.f), [this, Pos]()
+	{
+	ACSCharacter* Walker = Cast<ACSCharacter>(GetPawn());
+	if (!Walker)
+	{
+		return;
+	}
 	FVector Eye, Unused;
-	Self->GetAimRay(Eye, Unused);
+	Walker->GetAimRay(Eye, Unused);
 	SetControlRotation((Pos - Eye).Rotation());
 
 	// Everyone presses at the same FIXED instant of the shared room clock.
-	// Clients join at different times, so "N seconds after I arrived" would
-	// not be simultaneous - an absolute network time is.
+	// Clients join and arrive at different times, so "N seconds after I
+	// arrived" would not be simultaneous - an absolute network time is. 40 s
+	// leaves room for both to walk over (they no longer teleport).
 	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
-	const double PressAt = FMath::Max(24.0, FMath::CeilToDouble((Now + 1.0) / 4.0) * 4.0);
+	const double PressAt = FMath::Max(40.0, FMath::CeilToDouble((Now + 1.0) / 4.0) * 4.0);
 	const float Delay = static_cast<float>(PressAt - Now);
 
 	UE_LOG(LogCS, Log, TEXT("CONTEST TEST: pressing E at network time %.2f (in %.2fs)"), PressAt, Delay);
@@ -379,6 +456,7 @@ void ACSPlayerController::CSTestContest()
 				Me ? Me->GetOwningPlayerId() : 0, Have > 0 ? TEXT("WON") : TEXT("LOST"), Have, StillOnGround);
 		}, 1.5f, false);
 	}, FMath::Max(0.05f, Delay), false);
+	}); // TestMoveTo
 }
 
 void ACSPlayerController::CSTestShoot()
@@ -402,6 +480,10 @@ void ACSPlayerController::CSTestShoot()
 		}
 	}
 
+	if (TestRetryUntil(Target != nullptr, TestShootTimer, &ACSPlayerController::CSTestShoot, TEXT("the other player")))
+	{
+		return;
+	}
 	if (!Target)
 	{
 		UE_LOG(LogCS, Warning, TEXT("SHOOT TEST: no other player found -> REMOTE PAWN MISSING"));
@@ -412,6 +494,27 @@ void ACSPlayerController::CSTestShoot()
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	TestShootVictimHpBefore = Director ? Director->GetHealth(TestShootVictimId) : -1.f;
 
+	// Spawn points can put a crate between the two players. Then walk up to
+	// 2.5 m from the target first (legally, see TestMoveTo) and start over.
+	{
+		FVector Eye0;
+		FVector Fwd0;
+		Self->GetAimRay(Eye0, Fwd0);
+		FHitResult Hit;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(CSTestShootSight), false, Self);
+		const bool bBlocked = GetWorld()->LineTraceSingleByChannel(Hit, Eye0, Target->GetActorLocation(), ECC_Visibility, Params)
+			&& Hit.GetActor() != Target;
+		static int32 Approaches = 0;
+		if (bBlocked && Approaches++ < 2)
+		{
+			const FVector To = Target->GetActorLocation();
+			const FVector Back = (Self->GetActorLocation() - To).GetSafeNormal2D();
+			UE_LOG(LogCS, Log, TEXT("SHOOT TEST: no line of sight (blocked by %s), moving closer."), *GetNameSafe(Hit.GetActor()));
+			TestMoveTo(To + Back * 250.f, [this]() { CSTestShoot(); });
+			return;
+		}
+	}
+
 	FVector Origin;
 	FVector Unused;
 	Self->GetAimRay(Origin, Unused);
@@ -421,7 +524,15 @@ void ACSPlayerController::CSTestShoot()
 	UE_LOG(LogCS, Log, TEXT("SHOOT TEST: aiming at player %d (%.0f cm away), hp before %.0f"),
 		TestShootVictimId, FVector::Dist(Origin, Target->GetActorLocation()), TestShootVictimHpBefore);
 
-	// Let the new rotation propagate a frame before pulling the trigger.
+	// Aim down sights now, so the result does not depend on the hip-fire
+	// spread cone: one hip shot at 6 m misses the capsule a fair share of the
+	// time. Then let rotation and aim state settle before pulling the trigger.
+	{
+		const FInputDeviceId Device = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
+		FViewport* Viewport = (GetLocalPlayer() && GetLocalPlayer()->ViewportClient)
+			? GetLocalPlayer()->ViewportClient->Viewport : nullptr;
+		InputKey(FInputKeyEventArgs(Viewport, Device, EKeys::RightMouseButton, IE_Pressed, 1.f, false, FPlatformTime::Cycles64()));
+	}
 	GetWorldTimerManager().SetTimer(TestShootTimer, [this]()
 	{
 		const FInputDeviceId Device = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
@@ -432,6 +543,10 @@ void ACSPlayerController::CSTestShoot()
 
 		GetWorldTimerManager().SetTimer(TestShootTimer, [this]()
 		{
+			const FInputDeviceId Device2 = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
+			FViewport* Viewport2 = (GetLocalPlayer() && GetLocalPlayer()->ViewportClient)
+				? GetLocalPlayer()->ViewportClient->Viewport : nullptr;
+			InputKey(FInputKeyEventArgs(Viewport2, Device2, EKeys::RightMouseButton, IE_Released, 0.f, false, FPlatformTime::Cycles64()));
 			const ACSMatchDirector* D = ACSMatchDirector::Get(this);
 			const float After = D ? D->GetHealth(TestShootVictimId) : -1.f;
 			UE_LOG(LogCS, Log, TEXT("SHOOT TEST RESULT: victim %d hp %.0f -> %.0f -> %s"),

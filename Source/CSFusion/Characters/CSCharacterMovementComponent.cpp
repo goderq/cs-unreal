@@ -2,7 +2,9 @@
 
 #include "Characters/CSCharacterMovementComponent.h"
 
+#include "Characters/CSCharacter.h"
 #include "GameFramework/Character.h"
+#include "Weapons/CSWeaponComponent.h"
 
 UCSCharacterMovementComponent::UCSCharacterMovementComponent()
 {
@@ -21,6 +23,11 @@ UCSCharacterMovementComponent::UCSCharacterMovementComponent()
 
 	// Crouch half-height tuned to the default 88-unit capsule.
 	SetCrouchedHalfHeight(60.f);
+
+	// Remote players are smoothed by ACSCharacter::UpdateRemoteSmoothing, which
+	// owns the body mesh offset; the engine's own smoothing would write the
+	// same offset and the two would fight.
+	NetworkSmoothingMode = ENetworkSmoothingMode::Disabled;
 }
 
 bool UCSCharacterMovementComponent::IsSprinting() const
@@ -53,6 +60,15 @@ float UCSCharacterMovementComponent::GetMaxSpeed() const
 		if (IsCrouching())
 		{
 			return CrouchSpeed;
+		}
+		// v1.0: aiming down sights walks slower and never sprints. The pawn is
+		// client-owned, so this is the owner's own prediction; slower than
+		// normal is always inside the cheat guard's limits.
+		const ACSCharacter* CSOwner = Cast<ACSCharacter>(GetOwner());
+		const UCSWeaponComponent* Weapon = CSOwner ? CSOwner->GetWeaponComponent() : nullptr;
+		if (Weapon && Weapon->IsAiming())
+		{
+			return WalkSpeed * 0.6f;
 		}
 		if (IsSprinting())
 		{

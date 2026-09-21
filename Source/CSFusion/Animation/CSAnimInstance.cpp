@@ -5,6 +5,9 @@
 #include "Animation/AnimSequence.h"
 #include "Animation/CSAnimationSettings.h"
 #include "AnimationRuntime.h"
+#include "BonePose.h"
+#include "Characters/CSCharacter.h"
+#include "TwoBoneIK.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 
@@ -233,14 +236,30 @@ void UCSAnimInstance::AdvanceGameThread(float Dt)
 	bool bFalling = false;
 	if (Character)
 	{
-		FVector Velocity = Character->GetVelocity();
+		// Remote players report the smoothed velocity (see ACSCharacter::
+		// UpdateRemoteSmoothing); the raw replicated one arrives in steps.
+		const ACSCharacter* CSChar = Cast<ACSCharacter>(Character);
+		FVector Velocity = CSChar ? CSChar->GetAnimationVelocity() : Character->GetVelocity();
 		Velocity.Z = 0.f;
-		GroundSpeed = Velocity.Size();
-		if (GroundSpeed > 5.f)
+		const float RawSpeed = Velocity.Size();
+		// Speed and direction glide instead of snapping, so a network hiccup or
+		// a quick strafe change never pops the legs between clips.
+		GroundSpeed = FMath::FInterpTo(GroundSpeed, RawSpeed, Dt, 10.f);
+		if (RawSpeed > 5.f)
 		{
 			const FVector Local = Character->GetActorRotation().UnrotateVector(Velocity);
 			// Atan2(y, x): 0 = forward, +90 = right in UE's left-handed frame.
-			DirectionDeg = FMath::Fmod(FMath::RadiansToDegrees(FMath::Atan2(Local.Y, Local.X)) + 360.f, 360.f);
+			const float Target = FMath::Fmod(FMath::RadiansToDegrees(FMath::Atan2(Local.Y, Local.X)) + 360.f, 360.f);
+			if (GroundSpeed < 30.f)
+			{
+				DirectionDeg = Target; // starting from standstill: no sweep through other directions
+			}
+			else
+			{
+				const float Diff = FMath::FindDeltaAngleDegrees(DirectionDeg, Target);
+				const float Step = FMath::Clamp(Diff, -540.f * Dt, 540.f * Dt);
+				DirectionDeg = FMath::Fmod(DirectionDeg + Step + 360.f, 360.f);
+			}
 		}
 		AimPitch = FRotator::NormalizeAxis(Character->GetBaseAimRotation().Pitch);
 		if (const UCharacterMovementComponent* Move = Character->GetCharacterMovement())
@@ -262,6 +281,9 @@ void UCSAnimInstance::AdvanceGameThread(float Dt)
 	IdleTime += Dt;
 
 	FallAlpha = FMath::FInterpConstantTo(FallAlpha, bFalling ? 1.f : 0.f, Dt, 6.f);
+
+	const bool bWantIK = bLeftHandIK && UpperTime < 0.f && DeathTime < 0.f;
+	LeftHandIKAlpha = FMath::FInterpConstantTo(LeftHandIKAlpha, bWantIK ? 1.f : 0.f, Dt, 5.f);
 	FallTime = bFalling ? FallTime + Dt : 0.f;
 
 	if (FireTime >= 0.f)
@@ -361,6 +383,13 @@ void FCSAnimInstanceProxy::PreUpdate(UAnimInstance* InAnimInstance, float DeltaS
 	S.HitTime = I->HitTime;
 	S.DeathTime = I->DeathTime;
 	S.DeathAlpha = I->DeathAlpha;
+	S.LeftHandIKAlpha = I->LeftHandIKAlpha;
+	S.LeftHandTargetInHandR = I->LeftHandTargetInHandR;
+	S.bTwoHandIK = I->bTwoHandIK && I->DeathTime < 0.f;
+	S.GripSocketLocal = I->GripSocketLocal;
+	S.GripFrameCS = I->GripFrameCS;
+	S.SupportCS = I->SupportCS;
+	S.LeftGripOffset = I->LeftGripOffset;
 }
 
 void FCSAnimInstanceProxy::SampleDirectional(const UAnimSequence* const Clips[8], FPoseContext& Out) const
@@ -485,5 +514,131 @@ bool FCSAnimInstanceProxy::Evaluate(FPoseContext& Output)
 		ApplyAdditive(Output, S.HitReact, S.HitTime, 1.f, Self);
 	}
 
+	// 7. Left hand onto the weapon (v1.0). The weapon is rigid on hand_r, so
+	// the target is a fixed point in hand_r space; the Mannequin clips were
+	// made for Epic's weapons and put the hand where their forend was, which
+	// matches no other model.
+	if (S.bTwoHandIK)
+	{
+		SolveTwoHandIK(Output);
+	}
+	else if (S.LeftHandIKAlpha > 0.f)
+	{
+		SolveLeftHandIK(Output);
+	}
+
 	return true;
+}
+
+void FCSAnimInstanceProxy::SolveTwoHandIK(FPoseContext& Output) const
+{
+	const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+	auto Index = [&Bones](const TCHAR* Name) -> FCompactPoseBoneIndex
+	{
+		const int32 PoseIndex = Bones.GetPoseBoneIndexForBoneName(FName(Name));
+		return PoseIndex == INDEX_NONE ? FCompactPoseBoneIndex(INDEX_NONE)
+			: Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(PoseIndex));
+	};
+	const FCompactPoseBoneIndex Chain[2][3] = {
+		{ Index(TEXT("upperarm_r")), Index(TEXT("lowerarm_r")), Index(TEXT("hand_r")) },
+		{ Index(TEXT("upperarm_l")), Index(TEXT("lowerarm_l")), Index(TEXT("hand_l")) },
+	};
+	for (const auto& Arm : Chain)
+	{
+		for (const FCompactPoseBoneIndex& Bone : Arm)
+		{
+			if (Bone == INDEX_NONE)
+			{
+				return;
+			}
+		}
+	}
+
+	FCSPose<FCompactPose> CSPose;
+	CSPose.InitPose(Output.Pose);
+
+	// Where the clip holds its (Epic) weapon: the HandGrip_R socket frame.
+	const FTransform HandRAnim = CSPose.GetComponentSpaceTransform(Chain[0][2]);
+	const FTransform SocketAnim = Snapshot.GripSocketLocal * HandRAnim;
+
+	// Right hand: its socket onto the model's grip frame.
+	const FTransform HandRTarget = Snapshot.GripSocketLocal.Inverse() * Snapshot.GripFrameCS;
+	// Left hand: the clip's hold relative to its weapon, carried over to the
+	// model, then moved onto the model's support point.
+	FTransform HandLTarget = CSPose.GetComponentSpaceTransform(Chain[1][2]).GetRelativeTransform(SocketAnim)
+		* Snapshot.GripFrameCS;
+	// The palm (HandGrip_L), not the wrist, onto the support point.
+	HandLTarget.SetLocation(Snapshot.SupportCS - HandLTarget.GetRotation().RotateVector(Snapshot.LeftGripOffset));
+
+	TArray<FBoneTransform> Solved;
+	const FTransform* Targets[2] = { &HandRTarget, &HandLTarget };
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		FTransform RootT = CSPose.GetComponentSpaceTransform(Chain[Side][0]);
+		FTransform JointT = CSPose.GetComponentSpaceTransform(Chain[Side][1]);
+		FTransform EndT = CSPose.GetComponentSpaceTransform(Chain[Side][2]);
+
+		// Elbows hang down and a little out, as when holding a rifle.
+		const FVector Mid = (RootT.GetLocation() + EndT.GetLocation()) * 0.5f;
+		const FVector Bend = (JointT.GetLocation() - Mid).GetSafeNormal() * 0.5f + FVector(0.f, 0.f, -1.f);
+		const FVector Pole = JointT.GetLocation() + Bend.GetSafeNormal() * 40.f;
+
+		AnimationCore::SolveTwoBoneIK(RootT, JointT, EndT, Pole, Targets[Side]->GetLocation(),
+			/*bAllowStretching*/ false, 1.0, 1.0);
+		EndT.SetRotation(Targets[Side]->GetRotation());
+
+		Solved.Add(FBoneTransform(Chain[Side][0], RootT));
+		Solved.Add(FBoneTransform(Chain[Side][1], JointT));
+		Solved.Add(FBoneTransform(Chain[Side][2], EndT));
+	}
+	// SafeSetCSBoneTransforms wants parents before children.
+	Solved.Sort([](const FBoneTransform& A, const FBoneTransform& B) { return A.BoneIndex < B.BoneIndex; });
+	CSPose.SafeSetCSBoneTransforms(Solved);
+	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
+}
+
+void FCSAnimInstanceProxy::SolveLeftHandIK(FPoseContext& Output) const
+{
+	const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+	auto Index = [&Bones](const TCHAR* Name) -> FCompactPoseBoneIndex
+	{
+		const int32 PoseIndex = Bones.GetPoseBoneIndexForBoneName(FName(Name));
+		return PoseIndex == INDEX_NONE ? FCompactPoseBoneIndex(INDEX_NONE)
+			: Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(PoseIndex));
+	};
+	const FCompactPoseBoneIndex Upper = Index(TEXT("upperarm_l"));
+	const FCompactPoseBoneIndex Lower = Index(TEXT("lowerarm_l"));
+	const FCompactPoseBoneIndex Hand = Index(TEXT("hand_l"));
+	const FCompactPoseBoneIndex HandR = Index(TEXT("hand_r"));
+	if (Upper == INDEX_NONE || Lower == INDEX_NONE || Hand == INDEX_NONE || HandR == INDEX_NONE)
+	{
+		return;
+	}
+
+	FCSPose<FCompactPose> CSPose;
+	CSPose.InitPose(Output.Pose);
+	FTransform RootT = CSPose.GetComponentSpaceTransform(Upper);
+	FTransform JointT = CSPose.GetComponentSpaceTransform(Lower);
+	FTransform EndT = CSPose.GetComponentSpaceTransform(Hand);
+	const FTransform HandRT = CSPose.GetComponentSpaceTransform(HandR);
+
+	// The palm (HandGrip_L), not the wrist, onto the support point.
+	const FVector Palm = HandRT.TransformPosition(Snapshot.LeftHandTargetInHandR)
+		- EndT.GetRotation().RotateVector(Snapshot.LeftGripOffset);
+	const FVector Target = FMath::Lerp(EndT.GetLocation(), Palm, Snapshot.LeftHandIKAlpha);
+
+	// Pole: the elbow bends the way the clip bends it, biased downwards - a
+	// forend further out than the clip's would otherwise swing it up and out.
+	const FVector Mid = (RootT.GetLocation() + EndT.GetLocation()) * 0.5f;
+	const FVector Bend = (JointT.GetLocation() - Mid).GetSafeNormal() * 0.5f + FVector(0.f, 0.f, -1.f);
+	const FVector Pole = JointT.GetLocation() + Bend.GetSafeNormal() * 40.f;
+
+	AnimationCore::SolveTwoBoneIK(RootT, JointT, EndT, Pole, Target, /*bAllowStretching*/ false, 1.0, 1.0);
+
+	TArray<FBoneTransform> Solved;
+	Solved.Add(FBoneTransform(Upper, RootT));
+	Solved.Add(FBoneTransform(Lower, JointT));
+	Solved.Add(FBoneTransform(Hand, EndT));
+	CSPose.SafeSetCSBoneTransforms(Solved);
+	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
 }

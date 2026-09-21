@@ -29,6 +29,29 @@ python Scripts/copy_epic_content.py "C:/Program Files/Epic Games/UE_5.8"
 В релизных архивах (упакованная игра) этот контент есть в скомпилированном
 виде, как разрешает EULA.
 
+### Модели оружия: Quaternius «Ultimate Gun Pack» (v1.0)
+
+| Что | Путь в проекте | Откуда | В git |
+|---|---|---|---|
+| 6 разных моделей оружия: пистолет `Pistol_1`, AK-47 `AssaultRifle_5`, M4 `AssaultRifle2_1`, SMG `SubmachineGun_1`, дробовик `Shotgun_2`, снайперская винтовка `SniperRifle_4`, плюс запасные модели пака | `SourceArt/Weapons/Quaternius/*.fbx` → `Content/Weapons/Quaternius` | [quaternius.com/packs/ultimategun.html](https://quaternius.com/packs/ultimategun.html), официальная ссылка на Google Диск, `License.txt` лежит рядом с FBX | да |
+| Материалы оружия: мастер-материал и 13 цветов (дерево, металл, чёрный полимер, стекло прицела…) | `Content/Weapons/Materials` | `Scripts/import_weapons.py`: свой PBR-материал вместо импортированного Phong, цвета по превью пака | да |
+
+**Лицензия:** [CC0 1.0 (public domain)](https://creativecommons.org/publicdomain/zero/1.0/).
+Можно использовать, изменять и распространять без ограничений и без
+атрибуции, в том числе в репозитории. Автор просит поддержать его на
+[Patreon](https://www.patreon.com/quaternius), но это не условие лицензии.
+
+Импорт и подготовка:
+
+```bash
+UnrealEditor-Cmd.exe CSFusion.uproject -run=pythonscript -script=Scripts/import_weapons.py
+UnrealEditor-Cmd.exe CSFusion.uproject -run=pythonscript -script=Scripts/render_weapon_profiles.py
+```
+
+Второй скрипт рисует виды сбоку с координатной сеткой
+(`Saved/WeaponProfiles/*.png`). По ним сняты точки хвата, цевья, прицела и
+дула в `Config/DefaultGame.ini` → `[/Script/CSFusion.CSWeaponPresentationSettings]`.
+
 ### Собственные ассеты проекта
 
 | Что | Путь | Как сделано | В git |
@@ -52,19 +75,22 @@ python Scripts/copy_epic_content.py "C:/Program Files/Epic Games/UE_5.8"
 
 Честно о том, где сейчас заглушки, и какие есть легальные бесплатные замены.
 Скачивание сторонних паков проект не выполняет сам: файлы нужно проверить и
-принять их лицензию, а это решение владельца проекта.
+принять их лицензию, а это решение владельца проекта (пак Quaternius скачан
+с его разрешения).
 
 | Что сейчас | Проблема | Замена (лицензия) |
 |---|---|---|
-| AK-47, M4, SMG, снайперская винтовка — один меш винтовки Epic разного масштаба; дробовик — меш гранатомёта | мало разнообразия оружия | [Quaternius — Ultimate Guns / Gun Pack](https://quaternius.com) (CC0) · [Kenney — Blaster Kit](https://kenney.nl/assets/blaster-kit) (CC0) · оружие из [Lyra Starter Game на Fab](https://www.fab.com) (Fab Standard License, только UE) |
+| Оружие — low-poly модели Quaternius без текстур (v1.0: у каждого своя модель) | стилизованный вид | оружие из [Lyra Starter Game на Fab](https://www.fab.com) (Fab Standard License, только UE) · любые модели с точками хвата в `DefaultGame.ini` |
 | Патроны, броня, аптечка — окрашенные скруглённые кубы | не читаются как предметы | [Quaternius — Survival / Ultimate Items](https://quaternius.com) (CC0) · [Kenney — Survival Kit](https://kenney.nl/assets/survival-kit) (CC0) |
 | Иконки в инвентаре — цветные плашки с сокращением названия | нет картинок | [Kenney — Game Icons](https://kenney.nl/assets/game-icons) (CC0) · [game-icons.net](https://game-icons.net) (CC BY 3.0, нужна атрибуция) |
 | Синтезированные звуки | звучат упрощённо | [Sonniss GDC Game Audio Bundle](https://sonniss.com/gameaudiogdc) (royalty-free, коммерческое использование разрешено) · [Freesound, фильтр CC0](https://freesound.org) |
-| Анимации от 3-го лица, показанные от 1-го лица с ослабленным весом | нет отдельных FP-анимаций | FP-анимации из [Lyra](https://www.fab.com) (Fab Standard License, только UE) · [Mixamo](https://www.mixamo.com) (бесплатно, royalty-free в играх; исходники не распространять) |
+| От 1-го лица: анимации Manny для плеч и локтей, кисти ставит IK на оружие, перезарядка и смена оружия процедурные (v1.0) | нет отдельных FP-анимаций | FP-анимации из [Lyra](https://www.fab.com) (Fab Standard License, только UE) · [Mixamo](https://www.mixamo.com) (бесплатно, royalty-free в играх; исходники не распространять) |
 | Эффекты из базовых форм | просто, без частиц | Niagara-эффекты из бесплатных паков Fab (Fab Standard License) |
 | Карта из серых блоков | прототип | текстуры и HDRI [Poly Haven](https://polyhaven.com) (CC0) |
 
-Чтобы заменить ассет, достаточно поменять ссылку: оружие —
+Чтобы заменить ассет, достаточно поменять ссылку: модель оружия и точки
+хвата — `DefaultGame.ini` → `CSWeaponPresentationSettings`, баллистика и
+звуки оружия —
 `DA_Weapon_*` (меши, звуки, стойка, масштаб), предметы — `DA_Item_*`
 (`WorldMesh`), анимации — Project Settings → CS Animation, игровые звуки —
 Project Settings → CS Audio. Код менять не нужно.

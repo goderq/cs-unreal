@@ -94,7 +94,8 @@ enum class ECSFireRejection : uint8
 	Reloading			UMETA(DisplayName = "Reloading"),
 	OriginTooFar		UMETA(DisplayName = "Fire Origin Too Far From Pawn"),
 	BadDirection		UMETA(DisplayName = "Malformed Aim Direction"),
-	NoWeapon			UMETA(DisplayName = "No Weapon Definition")
+	NoWeapon			UMETA(DisplayName = "No Weapon Definition"),
+	MatchOver			UMETA(DisplayName = "Round Over (post-match)")
 };
 
 /**

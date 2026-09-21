@@ -22,6 +22,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# "-Only a,b" arrives as one string when the script is started with -File.
+$Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 $Root = Split-Path -Parent $PSScriptRoot
 $Project = Join-Path $Root "CSFusion.uproject"
 $Editor = Join-Path $EngineDir "Binaries\Win64\UnrealEditor.exe"
@@ -40,7 +42,9 @@ $Suites = @(
     @{ Name = "doubledrop"; Flags = "-cstestdoubledrop";       Done = "DOUBLE DROP TEST RESULT";       Timeout = 60 },
     @{ Name = "ui";         Flags = "-cstestui";               Done = "UI TEST RESULT: combat HUD";    Timeout = 80 },
     @{ Name = "bots";       Flags = "-bots=4 -cstestbots";     Done = "BOT TEST RESULT";               Timeout = 150 },
-    @{ Name = "cheat";      Flags = "-cstestcheat";            Done = "suspension lifted";             Timeout = 90 },
+    @{ Name = "weapons";    Flags = "-cstestweapons";          Done = "WEAPON TEST: done";             Timeout = 150 },
+    @{ Name = "round";     Flags = "-roundtime=20 -bots=2 -cstestround"; Done = "SCORES RESET|ROUND FLOW BROKEN"; Timeout = 120 },
+    @{ Name = "cheat";     Flags = "-cstestcheat";            Done = "suspension lifted";             Timeout = 90 },
     @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT";              Timeout = 120 }
 )
 
@@ -52,12 +56,13 @@ function Add-Result([string]$Suite, [bool]$Ok, [string]$Detail) {
     Write-Host ("  {0,-12} {1}  {2}" -f $Suite, $(if ($Ok) { "PASS" } else { "FAIL" }), $Detail) -ForegroundColor $color
 }
 
-function Start-Client([string]$ClientArgs, [string]$LogName) {
+# $StartMap = "" starts on the project's default map (the main menu).
+function Start-Client([string]$ClientArgs, [string]$LogName, [string]$StartMap = $Map) {
     $logArg = "-LOG=$LogName"
     if ($Packaged) {
-        return Start-Process -FilePath $GameExe -ArgumentList "$Map -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
+        return Start-Process -FilePath $GameExe -ArgumentList "$StartMap -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
     }
-    return Start-Process -FilePath $Editor -ArgumentList "`"$Project`" $Map -game -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
+    return Start-Process -FilePath $Editor -ArgumentList "`"$Project`" $StartMap -game -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
 }
 
 function Stop-Client($Proc) {
@@ -68,7 +73,7 @@ function Wait-ForLine([string]$LogPath, [string]$Pattern, [int]$TimeoutSec) {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 2
-        if ((Test-Path $LogPath) -and (Select-String -Path $LogPath -Pattern $Pattern -Quiet)) {
+        if ((Test-Path $LogPath) -and (Select-String -Path $LogPath -Pattern $Pattern -CaseSensitive -Quiet)) {
             Start-Sleep -Seconds 1   # let the rest of the frame's lines flush
             return $true
         }
@@ -139,27 +144,103 @@ foreach ($s in $Suites) {
     Test-CleanLog $s.Name $logPath
 }
 
-# --- 3. Two-client anti-cheat (Photon room) -----------------------------------
-if ($Network -and (Test-Selected "netcheat")) {
-    Write-Host "`n[netcheat] master + cheating client in a Photon room"
-    $room = "cstest$(Get-Random -Maximum 999999)"
-    $logA = Join-Path $LogDir "cstest_netcheat_A.log"
-    $logB = Join-Path $LogDir "cstest_netcheat_B.log"
-    foreach ($p in @($logA, $logB)) { if (Test-Path $p) { Remove-Item $p -Force } }
+# --- 3. Two-client scenarios (Photon room) -------------------------------------
+# A starts first and becomes the Master Client; B joins after DelayB seconds.
+#   Done      : "A:regex" / "B:regex" - the line that ends the scenario
+#   KillB     : "B:regex" - when it appears, B's process is killed (a crash,
+#               not a clean leave), and the scenario continues on A
+#   Expect    : extra "A:regex|label" / "B:regex|label" lines that must exist
+#   Menu      : both clients start on the main menu instead of the map
+# {ROOM} in the flags is replaced with a fresh room name.
+$NetScenarios = @(
+    @{ Name = "netshoot"; A = "-room={ROOM} -cstestinput -cstestshoot -LogCmds=`"LogCSCombat Verbose`""; B = "-room={ROOM} -cstestinput -cstestshoot";
+       DelayB = 5; Done = "B:SHOOT TEST RESULT"; Timeout = 90;
+       Expect = @("A:SHOOT TEST RESULT|master: shot at the other player", "B:NOW the authority|__absent__") },
+    @{ Name = "netcontest"; A = "-room={ROOM} -cstestcontest"; B = "-room={ROOM} -cstestcontest";
+       DelayB = 3; Done = "A:CONTEST TEST RESULT"; Timeout = 90;
+       Expect = @("A:CONTEST TEST RESULT: player \d+ WON|B:CONTEST TEST RESULT: player \d+ WON|exactly one player won the contested pickup") },
+    @{ Name = "netdeath"; A = "-room={ROOM} -cstestkill -LogCmds=`"LogCSCombat Verbose`""; B = "-room={ROOM} -cstestgrab";
+       DelayB = 3; Done = "A:RESPAWN RESULT"; Timeout = 120; Expect = @() },
+    @{ Name = "netleave"; A = "-room={ROOM} -cstestwatchleave"; B = "-room={ROOM} -cstestgrab";
+       DelayB = 3; KillB = "B:GRAB TEST RESULT"; Done = "A:LEAVE CLAIM RESULT|LEAVE TEST RESULT: player \d+ never left"; Timeout = 150; Expect = @() },
+    @{ Name = "nethost"; A = "-room={ROOM} -bots=2 -cstestleave=45"; B = "-room={ROOM} -cstestkill -cstestkillbot -cstestbots";
+       DelayB = 3; Done = "B:BOT TEST RESULT"; Timeout = 150;
+       Expect = @("B:now controlled by this peer|B took over the bots after the host left", "B:NOW the authority|B became the Master Client") },
+    @{ Name = "netmenu"; A = "-cstestmenu=create:{ROOM} -cstestui"; B = "-cstestmenu=browsejoin:{ROOM}"; Menu = $true;
+       DelayB = 15; Done = "B:-> ECSSessionState::InRoom|BROWSER BROKEN"; Timeout = 120;
+       Expect = @("B:-> ECSSessionState::InRoom|B joined A's room from the browser") },
+    @{ Name = "netcheat"; A = "-room={ROOM}"; B = "-room={ROOM} -cstestcheat";
+       DelayB = 20; Done = "B:suspension lifted"; Timeout = 120;
+       Expect = @("A:Cheat guard: player \d+ SUSPENDED|master suspended the cheating client") }
+)
 
-    $a = Start-Client "-room=$room" "cstest_netcheat_A.log"
-    Start-Sleep -Seconds 20
-    $b = Start-Client "-room=$room -WinX=980 -cstestcheat" "cstest_netcheat_B.log"
-    $done = Wait-ForLine $logB "suspension lifted" 120
-    Stop-Client $b
-    Stop-Client $a
+function Resolve-Side([string]$Spec, [string]$LogA, [string]$LogB) {
+    $side, $rest = $Spec -split ':', 2
+    return @{ Log = $(if ($side -eq "A") { $LogA } else { $LogB }); Pattern = $rest }
+}
 
-    foreach ($line in (Get-ResultLines $logB)) { Add-Result "netcheat" ($line -notmatch $FailPattern) $line }
-    $suspended = (Test-Path $logA) -and (Select-String -Path $logA -Pattern "Cheat guard: player \d+ SUSPENDED" -Quiet)
-    Add-Result "netcheat" $suspended "master log shows the suspension"
-    Test-CleanLog "netcheat" $logA
-    Test-CleanLog "netcheat" $logB
-    if (-not $done) { Add-Result "netcheat" $false "timed out waiting for the client's results" }
+if ($Network) {
+    foreach ($n in $NetScenarios) {
+        if (-not (Test-Selected $n.Name) -and -not (Test-Selected "network")) { continue }
+        Write-Host "`n[$($n.Name)] A: $($n.A)   B: $($n.B)"
+        $room = "cstest$(Get-Random -Maximum 999999)"
+        $logA = Join-Path $LogDir "cstest_$($n.Name)_A.log"
+        $logB = Join-Path $LogDir "cstest_$($n.Name)_B.log"
+        foreach ($p in @($logA, $logB)) { if (Test-Path $p) { Remove-Item $p -Force } }
+        $startMap = if ($n.Menu) { "" } else { $Map }
+
+        $a = Start-Client ($n.A -replace '\{ROOM\}', $room) (Split-Path $logA -Leaf) $startMap
+        # B must not start before A is in the room: otherwise B can create it
+        # first and become the Master Client, which inverts every scenario.
+        if (-not (Wait-ForLine $logA "-> ECSSessionState::InRoom" 90)) {
+            Add-Result $n.Name $false "A never reached the room"
+        }
+        Start-Sleep -Seconds $n.DelayB
+        $b = Start-Client ("-WinX=980 " + ($n.B -replace '\{ROOM\}', $room)) (Split-Path $logB -Leaf) $startMap
+
+        $deadline = (Get-Date).AddSeconds($n.Timeout)
+        if ($n.KillB) {
+            $k = Resolve-Side $n.KillB $logA $logB
+            $killed = Wait-ForLine $k.Log $k.Pattern $n.Timeout
+            Stop-Client $b
+            if (-not $killed) { Add-Result $n.Name $false "never reached the point to kill B ('$($k.Pattern)')" }
+        }
+        $d = Resolve-Side $n.Done $logA $logB
+        $remaining = [int][math]::Max(5, ($deadline - (Get-Date)).TotalSeconds)
+        $done = Wait-ForLine $d.Log $d.Pattern $remaining
+        Stop-Client $b
+        Stop-Client $a
+        Start-Sleep -Seconds 2
+
+        foreach ($side in @(@{ Tag = "A"; Log = $logA }, @{ Tag = "B"; Log = $logB })) {
+            foreach ($line in (Get-ResultLines $side.Log)) { Add-Result $n.Name ($line -notmatch $FailPattern) "$($side.Tag): $line" }
+        }
+        foreach ($e in $n.Expect) {
+            $parts = $e -split '\|'
+            $label = $parts[-1]
+            if ($label -eq "__absent__") {
+                # "X:regex|__absent__": the line must NOT be there.
+                $r = Resolve-Side $parts[0] $logA $logB
+                $present = (Test-Path $r.Log) -and (Select-String -Path $r.Log -Pattern $r.Pattern -CaseSensitive -Quiet)
+                Add-Result $n.Name (-not $present) "not in $(Split-Path $r.Log -Leaf): '$($r.Pattern)'"
+                continue
+            }
+            if ($parts.Count -eq 3) {
+                # "A:x|B:x|label": exactly one of the two lines exists.
+                $r1 = Resolve-Side $parts[0] $logA $logB
+                $r2 = Resolve-Side $parts[1] $logA $logB
+                $hits = @($r1, $r2 | Where-Object { (Test-Path $_.Log) -and (Select-String -Path $_.Log -Pattern $_.Pattern -CaseSensitive -Quiet) }).Count
+                Add-Result $n.Name ($hits -eq 1) "$label ($hits of 2)"
+                continue
+            }
+            $r = Resolve-Side $parts[0] $logA $logB
+            $found = (Test-Path $r.Log) -and (Select-String -Path $r.Log -Pattern $r.Pattern -CaseSensitive -Quiet)
+            Add-Result $n.Name $found $label
+        }
+        Test-CleanLog $n.Name $logA
+        Test-CleanLog $n.Name $logB
+        if (-not $done) { Add-Result $n.Name $false "timed out waiting for '$($d.Pattern)'" }
+    }
 }
 
 # --- Summary -------------------------------------------------------------------

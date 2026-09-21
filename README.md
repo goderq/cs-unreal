@@ -3,7 +3,7 @@
 Соревновательный multiplayer FPS на **Unreal Engine 5.8.2** + **Photon Fusion 3
 (Unreal SDK)**. Логика на C++, Blueprint только там, где он реально удобнее.
 
-> **Статус: v0.8.0-beta — все 8 этапов ТЗ выполнены и проверены двумя клиентами.**
+> **Статус: v1.0.0 — все 8 этапов ТЗ и полировка до релиза, проверено двумя клиентами.**
 
 ## Как играть (готовая сборка)
 
@@ -24,6 +24,7 @@
 | `1` | стартовый пистолет |
 | `2`–`7` | слоты инвентаря (аптечка и броня используются) |
 | `Tab` | экран инвентаря |
+| `Q` (держать) | таблица счёта: убийства и смерти всех игроков и ботов |
 | `Esc` | меню: продолжить, настройки, выйти из матча |
 
 Клавиши, чувствительность, FOV, графику, громкость и счётчик FPS можно поменять в SETTINGS;
@@ -32,6 +33,12 @@
 ---
 
 ## Что сделано по этапам
+
+- **v1.0 (полировка)** — раунды с баннерами фаз (WARMUP, ROUND STARTED, ROUND OVER с победителем),
+  таблица счёта по `Q` и автоматически в конце раунда, сброс счёта в новом раунде, стрельба
+  запрещена после конца раунда. Исправлено: офлайн-тренировка стояла в «WAITING FOR PLAYERS»
+  без раундов; игрок над лутом мешал его подобрать; взгляд после респауна мог смотреть в небо.
+  Все сетевые сценарии прошлых этапов собраны в `run_tests.ps1 -Network`.
 
 - **Этап 8** — анти-чит на стороне авторитета: speed hack, телепорт и флуд запросов
   дают страйки, после трёх игрок блокируется на 10 с. Оптимизация анимации
@@ -105,10 +112,10 @@ git clone https://github.com/goderq/cs-unreal.git "cs unreal"
 ```powershell
 # все тесты (модульные + самотесты в игре), сводка PASS/FAIL, код выхода 0 = всё прошло
 powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1
-# то же на упакованной Development-сборке, плюс анти-чит на двух клиентах по сети
+# то же на упакованной Development-сборке, плюс 7 сценариев на двух клиентах по сети
 powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1 -Packaged -Network
-# релиз: Build\Shipping\Windows + Build\dist\CSFusion-v0.8.0-Win64.zip
-powershell -ExecutionPolicy Bypass -File Scripts\package_release.ps1 -Version 0.8.0
+# релиз: Build\Shipping\Windows + Build\dist\CSFusion-v1.0.0-Win64.zip
+powershell -ExecutionPolicy Bypass -File Scripts\package_release.ps1 -Version 1.0.0
 ```
 
 ## Документация

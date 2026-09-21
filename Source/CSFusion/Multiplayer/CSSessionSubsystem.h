@@ -92,7 +92,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCSSessionLeft);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSMasterClientChanged, bool, bIsLocalPlayerMaster);
 DECLARE_MULTICAST_DELEGATE(FCSRoomListChanged);
 
-UCLASS()
+UCLASS(Config = Game)
 class CSFUSION_API UCSSessionSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
@@ -101,6 +101,14 @@ public:
 	// --- UGameInstanceSubsystem -------------------------------------------
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
+
+	/**
+	 * Region used when the player picked none (Config/DefaultGame.ini). Never
+	 * "best ping": two machines can measure different best regions, which
+	 * split friends joining the same room name into two rooms.
+	 */
+	UPROPERTY(Config)
+	FString DefaultRegion = TEXT("eu");
 
 	// --- Commands ----------------------------------------------------------
 

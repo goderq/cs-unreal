@@ -67,6 +67,17 @@ struct FCSAnimSnapshot
 	float HitTime = -1.f;
 	float DeathTime = -1.f;
 	float DeathAlpha = 0.f;
+
+	/** Left hand IK onto the weapon (v1.0): target in hand_r bone space, cm. */
+	float LeftHandIKAlpha = 0.f;
+	FVector LeftHandTargetInHandR = FVector::ZeroVector;
+
+	/** First person (v1.0): both hands onto a weapon placed by the camera. */
+	bool bTwoHandIK = false;
+	FTransform GripSocketLocal = FTransform::Identity;	// HandGrip_R relative to hand_r
+	FTransform GripFrameCS = FTransform::Identity;		// where HandGrip_R must be, component space
+	FVector SupportCS = FVector::ZeroVector;			// left hand target, component space
+	FVector LeftGripOffset = FVector::ZeroVector;		// HandGrip_L in hand_l space: the palm, not the wrist, goes to the target
 };
 
 struct FCSAnimInstanceProxy : public FAnimInstanceProxy
@@ -79,6 +90,8 @@ struct FCSAnimInstanceProxy : public FAnimInstanceProxy
 
 private:
 	void SampleDirectional(const UAnimSequence* const Clips[8], FPoseContext& Out) const;
+	void SolveLeftHandIK(FPoseContext& Output) const;
+	void SolveTwoHandIK(FPoseContext& Output) const;
 
 	FCSAnimSnapshot Snapshot;
 };
@@ -101,6 +114,34 @@ public:
 	void PlayDryFire();
 	void CancelUpperBody();
 	void PlayHitReact(bool bFromFront);
+
+	/**
+	 * v1.0: the left hand reaches for this point (hand_r bone space, cm) by
+	 * two-bone IK - the forend of the weapon the right hand holds. Blends out
+	 * during reload / equip (the clip moves the hand) and on death.
+	 */
+	void SetLeftHandTarget(bool bEnable, const FVector& TargetInHandR)
+	{
+		bLeftHandIK = bEnable;
+		LeftHandTargetInHandR = TargetInHandR;
+	}
+
+	/** HandGrip_L socket offset in hand_l space (the palm), set once per mesh. */
+	void SetLeftGripOffset(const FVector& Offset) { LeftGripOffset = Offset; }
+
+	/**
+	 * v1.0 first person: the weapon is placed by the camera and BOTH hands
+	 * reach for it - the right hand so that its HandGrip_R socket lands on
+	 * GripFrameCS, the left hand on SupportCS (component space). The clip still
+	 * drives shoulders and elbows, and the grip look of each hand.
+	 */
+	void SetFirstPersonHands(bool bEnable, const FTransform& SocketLocal, const FTransform& GripCS, const FVector& SupportPointCS)
+	{
+		bTwoHandIK = bEnable;
+		GripSocketLocal = SocketLocal;
+		GripFrameCS = GripCS;
+		SupportCS = SupportPointCS;
+	}
 
 	/** Direction: 0 front, 1 back, 2 left, 3 right. */
 	void PlayDeath(int32 Direction);
@@ -162,4 +203,14 @@ private:
 	float HitTime = -1.f;
 	float DeathTime = -1.f;
 	float DeathAlpha = 0.f;
+
+	bool bLeftHandIK = false;
+	FVector LeftHandTargetInHandR = FVector::ZeroVector;
+	float LeftHandIKAlpha = 0.f;
+
+	bool bTwoHandIK = false;
+	FTransform GripSocketLocal = FTransform::Identity;
+	FTransform GripFrameCS = FTransform::Identity;
+	FVector SupportCS = FVector::ZeroVector;
+	FVector LeftGripOffset = FVector::ZeroVector;
 };

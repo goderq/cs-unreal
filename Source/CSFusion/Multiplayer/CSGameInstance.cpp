@@ -85,7 +85,7 @@ void UCSGameInstance::AutoConnectFromCommandLine()
 	UE_LOG(LogCSNet, Log,
 		TEXT("Auto-connect: joining room '%s' (max %d, region '%s'). Pass -noautoconnect to skip."),
 		*Request.RoomName, Request.MaxPlayers,
-		Request.bSelectRegion ? *Request.Region : TEXT("best"));
+		Request.bSelectRegion ? *Request.Region : TEXT("default"));
 
 	Session->HostOrJoin(Request);
 }

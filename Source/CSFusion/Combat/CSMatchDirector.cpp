@@ -10,6 +10,7 @@
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "EngineUtils.h"
+#include "GameModes/CSGameState.h"
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
@@ -406,6 +407,14 @@ ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const FCSLoadout
 	if (!Record.bAlive)
 	{
 		return ECSFireRejection::ShooterDead;
+	}
+
+	// The scoreboard is final once the round is over: no shooting until the
+	// next warmup.
+	const ACSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ACSGameState>() : nullptr;
+	if (GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch)
+	{
+		return ECSFireRejection::MatchOver;
 	}
 
 	// A malformed direction would let a client aim with a zero or denormalised
@@ -936,4 +945,20 @@ bool ACSMatchDirector::GuardRequest(int32 PlayerId, ECSRequestKind Kind)
 		UE_LOG(LogCSAuth, Verbose, TEXT("Request %d from player %d dropped by the cheat guard."), static_cast<int32>(Kind), PlayerId);
 	}
 	return bAllowed;
+}
+
+void ACSMatchDirector::ResetScores()
+{
+	CS_AUTHORITY_ONLY(this);
+
+	for (FCSPlayerCombatRecord& Record : Records)
+	{
+		if (Record.PlayerId != 0 && (Record.Kills != 0 || Record.Deaths != 0))
+		{
+			Record.Kills = 0;
+			Record.Deaths = 0;
+			OnRecordsChanged.Broadcast(Record.PlayerId);
+		}
+	}
+	UE_LOG(LogCSAuth, Log, TEXT("Scores reset for the new round."));
 }

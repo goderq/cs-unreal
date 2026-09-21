@@ -24,6 +24,7 @@ TArray<FCSRebindableBinding> UCSInputConfig::GetRebindableBindings() const
 		{ TEXT("Interact"),        LOCTEXT("Interact", "Pick up / interact"), Key_Interact },
 		{ TEXT("Drop"),            LOCTEXT("Drop", "Drop weapon"),            Key_Drop },
 		{ TEXT("ToggleInventory"), LOCTEXT("Inventory", "Inventory"),         Key_ToggleInventory },
+		{ TEXT("Scoreboard"),      LOCTEXT("Scoreboard", "Scoreboard (hold)"), Key_Scoreboard },
 	};
 }
 
@@ -89,7 +90,7 @@ UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer,
 	Map(IA_Interact,        Resolve(TEXT("Interact"), Key_Interact),           {});
 	Map(IA_ToggleInventory, Resolve(TEXT("ToggleInventory"), Key_ToggleInventory), {});
 	Map(IA_PauseMenu,       Key_PauseMenu,                                     {});
-	Map(IA_Scoreboard,      Key_Scoreboard,                                    {});
+	Map(IA_Scoreboard,      Resolve(TEXT("Scoreboard"), Key_Scoreboard),       {});
 	Map(IA_Drop,            Resolve(TEXT("Drop"), Key_Drop),                   {});
 
 	// Every number key drives the same action; a Scalar modifier turns the

@@ -84,6 +84,7 @@ public class CSFusion : ModuleRules
 			"GameplayTasks",
 			"RenderCore", // Stage 8 perf test: game/render thread times
 			"RHI",
+			"AnimationCore", // v1.0: two-bone IK for the left hand
 		});
 
 		PublicIncludePaths.Add(ModuleDirectory);

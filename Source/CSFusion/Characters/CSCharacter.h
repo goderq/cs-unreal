@@ -202,6 +202,8 @@ protected:
 	void Input_Drop(const FInputActionValue& Value);
 	void Input_ToggleInventory(const FInputActionValue& Value);
 	void Input_PauseMenu(const FInputActionValue& Value);
+	void Input_ScoreboardStart(const FInputActionValue& Value);
+	void Input_ScoreboardStop(const FInputActionValue& Value);
 
 	/** Local: choose the pickup nearest the crosshair within reach and in sight. */
 	void UpdateFocusedPickup();
@@ -254,6 +256,18 @@ protected:
 	/** Weapon in the third-person hands. Everyone except the owner (shadow for the owner). */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USkeletalMeshComponent> ThirdPersonWeapon;
+
+	/**
+	 * v1.0 static weapon models (UCSWeaponPresentationSettings), in the same
+	 * hand sockets. Used instead of the skeletal pair above whenever the
+	 * equipped weapon has a model entry - which all shipped weapons do.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UStaticMeshComponent> FirstPersonWeaponModel;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UStaticMeshComponent> ThirdPersonWeaponModel;
+
 	/** Bridge to UFusionClient. Unguarded so UHT keeps it GC-tracked. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UFusionActorComponent> FusionActor;
@@ -403,7 +417,38 @@ public:
 	/** Weapon mesh currently shown in the local view (tests read this). */
 	const UCSWeaponDefinition* GetDisplayedWeapon() const { return DisplayedWeapon.Get(); }
 
+	/** Velocity the animation uses: smoothed for remote players, real for the local one. */
+	FVector GetAnimationVelocity() const;
+
+	/** 0 = hip, 1 = fully aimed down sights. Local view only. */
+	float GetAimAlpha() const { return AimAlpha; }
+
+	/** Aimed through a scope: the HUD draws the scope, the model is hidden. */
+	bool IsScopedView() const { return bScopedView; }
+
+	/** The static model entry of the displayed weapon, if it has one. */
+	const struct FCSWeaponModel* GetDisplayedModel() const;
+
+	/** First-person weapon model component (tests and HUD read its transform). */
+	UStaticMeshComponent* GetFirstPersonWeaponModel() const { return FirstPersonWeaponModel; }
+
 private:
+	/**
+	 * First-person view, every frame for the local player: aim-down-sights
+	 * blend (arms move so the sight lands on the screen centre, FOV zooms),
+	 * hip framing, walk bob, look sway and fire kick.
+	 */
+	void UpdateFirstPersonView(float DeltaSeconds);
+
+	/**
+	 * Remote players: the replicated transform arrives in steps. The body mesh
+	 * follows a smoothed, velocity-predicted position and yaw instead, so
+	 * other players move fluidly. The capsule (what bullets hit) is untouched.
+	 */
+	void UpdateRemoteSmoothing(float DeltaSeconds);
+
+	/** Left-hand IK target for both anim instances, from the displayed model. */
+	void UpdateHandTargets();
 	/** Sets Manny/Quinn and the C++ anim instance on both meshes. */
 	void SetupCharacterMeshes();
 
@@ -432,4 +477,29 @@ private:
 	bool bHasLastHitFrom = false;
 	TWeakObjectPtr<ACSMatchDirector> BoundDirector;
 	FDelegateHandle CombatEventHandle;
+
+	// --- v1.0 first-person view state ---
+	float AimAlpha = 0.f;
+	bool bScopedView = false;
+	/** Procedural first-person equip / reload motion: seconds since start, < 0 = idle. */
+	float ViewEquipTime = -1.f;
+	float ViewReloadTime = -1.f;
+	float ViewReloadDuration = 1.f;
+	float BobPhase = 0.f;
+	FVector2D LookSway = FVector2D::ZeroVector;
+	FVector2D LookSwayNow = FVector2D::ZeroVector;
+	float FireKick = 0.f;
+
+	// --- v1.0 remote smoothing state ---
+	FVector SmoothedLocation = FVector::ZeroVector;
+	FVector SmoothedVelocity = FVector::ZeroVector;
+	FVector LastReplicatedLocation = FVector::ZeroVector;
+	float SmoothedYaw = 0.f;
+	bool bSmoothingInit = false;
+	FVector BodyMeshBaseLocation = FVector::ZeroVector;
+	FRotator BodyMeshBaseRotation = FRotator::ZeroRotator;
+
+public:
+	/** Look input this frame (sway), fed by Input_Look. */
+	void AddLookSway(const FVector2D& Delta) { LookSway += Delta; }
 };

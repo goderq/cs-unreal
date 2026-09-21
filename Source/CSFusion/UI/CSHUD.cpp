@@ -8,6 +8,7 @@
 #include "Combat/CSMatchDirector.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSCombatSettings.h"
+#include "Core/CSLog.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
@@ -18,6 +19,7 @@
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
 #include "Pickups/CSWorldPickup.h"
+#include "Player/CSPlayerController.h"
 #include "Settings/CSSettingsSubsystem.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
@@ -199,13 +201,19 @@ void ACSHUD::DrawHUD()
 	{
 		const FString Waiting = (!Pawn || !Director) ? TEXT("Waiting for match state...") : TEXT("Joining match...");
 		DrawLabel(Waiting, W * 0.5f, 600.f, GText, 1.2f, false, 0.5f);
+		DrawRoundOverlays();
 		return;
 	}
 
+	// The scoreboard takes the centre of the screen; the death overlay would
+	// show through it.
 	if (!Record.bAlive)
 	{
-		const double NetNow = UCSAuthority::GetNetworkTimeSeconds(this);
-		DrawDeathOverlay(static_cast<float>(FMath::Max(0.0, Record.RespawnAtNetworkTime - NetNow)));
+		if (!ShouldShowScoreboard())
+		{
+			const double NetNow = UCSAuthority::GetNetworkTimeSeconds(this);
+			DrawDeathOverlay(static_cast<float>(FMath::Max(0.0, Record.RespawnAtNetworkTime - NetNow)));
+		}
 	}
 	else
 	{
@@ -218,6 +226,188 @@ void ACSHUD::DrawHUD()
 	DrawVitals();
 	DrawAmmo();
 	DrawQuickSlots();
+	DrawRoundOverlays();
+}
+
+// ---------------------------------------------------------------------------
+// Round flow: phase banner and scoreboard (v1.0)
+// ---------------------------------------------------------------------------
+
+TArray<FCSPlayerCombatRecord> ACSHUD::SortedScores(const ACSMatchDirector* Director)
+{
+	TArray<FCSPlayerCombatRecord> Out;
+	if (!Director)
+	{
+		return Out;
+	}
+	for (const FCSPlayerCombatRecord& R : Director->GetAllRecords())
+	{
+		if (R.PlayerId != 0)
+		{
+			Out.Add(R);
+		}
+	}
+	Out.Sort([](const FCSPlayerCombatRecord& A, const FCSPlayerCombatRecord& B)
+	{
+		if (A.Kills != B.Kills) { return A.Kills > B.Kills; }
+		if (A.Deaths != B.Deaths) { return A.Deaths < B.Deaths; }
+		return A.PlayerId < B.PlayerId;
+	});
+	return Out;
+}
+
+bool ACSHUD::ShouldShowScoreboard() const
+{
+	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
+	const ACSPlayerController* PC = Cast<ACSPlayerController>(GetOwningPlayerController());
+	const bool bPostMatch = GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch;
+	const bool bMenuOpen = PC && (PC->IsPauseMenuOpen() || PC->IsInventoryOpen());
+	return !bMenuOpen && (bPostMatch || (PC && PC->IsScoreboardHeld()));
+}
+
+void ACSHUD::DrawRoundOverlays()
+{
+	UpdatePhaseBanner();
+	DrawPhaseBanner();
+
+	bScoreboardDrawn = ShouldShowScoreboard();
+	if (bScoreboardDrawn)
+	{
+		DrawScoreboard();
+	}
+}
+
+void ACSHUD::UpdatePhaseBanner()
+{
+	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
+	if (!GS)
+	{
+		return;
+	}
+	const uint8 Phase = static_cast<uint8>(GS->GetMatchPhase());
+	if (Phase == LastSeenPhase)
+	{
+		return;
+	}
+	// The first phase seen after joining is the state of an ongoing match, not
+	// a change - no banner for it.
+	const bool bFirstSight = LastSeenPhase == 0xFF;
+	LastSeenPhase = Phase;
+	if (bFirstSight)
+	{
+		return;
+	}
+
+	switch (GS->GetMatchPhase())
+	{
+	case ECSMatchPhase::Warmup:
+		BannerTitle = TEXT("WARMUP");
+		BannerSubtitle = TEXT("Kills during warmup do not count");
+		break;
+	case ECSMatchPhase::InProgress:
+		BannerTitle = TEXT("ROUND STARTED");
+		BannerSubtitle = TEXT("Good luck");
+		break;
+	case ECSMatchPhase::PostMatch:
+	{
+		BannerTitle = TEXT("ROUND OVER");
+		const TArray<FCSPlayerCombatRecord> Scores = SortedScores(ACSMatchDirector::Get(this));
+		if (Scores.Num() == 0 || Scores[0].Kills == 0)
+		{
+			BannerSubtitle = TEXT("No kills this round");
+		}
+		else if (Scores.Num() > 1 && Scores[1].Kills == Scores[0].Kills && Scores[1].Deaths == Scores[0].Deaths)
+		{
+			BannerSubtitle = FString::Printf(TEXT("Draw at %d kills"), Scores[0].Kills);
+		}
+		else
+		{
+			const bool bMe = Scores[0].PlayerId == GetLocalPlayerId();
+			BannerSubtitle = FString::Printf(TEXT("%s %s with %d kills"), *PlayerLabel(Scores[0].PlayerId),
+				bMe ? TEXT("win") : TEXT("wins"), Scores[0].Kills);
+		}
+		break;
+	}
+	default:
+		return;
+	}
+	BannerTime = GetWorld()->GetRealTimeSeconds();
+	UE_LOG(LogCS, Log, TEXT("HUD banner: %s - %s"), *BannerTitle, *BannerSubtitle);
+}
+
+void ACSHUD::DrawPhaseBanner()
+{
+	constexpr double Hold = 2.6;
+	constexpr double Fade = 0.6;
+	const double Age = GetWorld()->GetRealTimeSeconds() - BannerTime;
+	if (Age < 0.0 || Age > Hold + Fade)
+	{
+		return;
+	}
+	const float Alpha = Age <= Hold ? 1.f : static_cast<float>(1.0 - (Age - Hold) / Fade);
+	const float W = Canvas->ClipX / S;
+	DrawBox(FLinearColor(0.f, 0.f, 0.f, 0.55f * Alpha), 0.f, 250.f, W, 110.f);
+	DrawBox(FLinearColor(GAccent.R, GAccent.G, GAccent.B, 0.9f * Alpha), 0.f, 250.f, W, 3.f);
+	DrawLabel(BannerTitle, W * 0.5f, 262.f, FLinearColor(GText.R, GText.G, GText.B, Alpha), 1.6f, true, 0.5f);
+	DrawLabel(BannerSubtitle, W * 0.5f, 318.f, FLinearColor(GTextDim.R, GTextDim.G, GTextDim.B, Alpha), 1.f, false, 0.5f);
+}
+
+void ACSHUD::DrawScoreboard()
+{
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
+	const TArray<FCSPlayerCombatRecord> Scores = SortedScores(Director);
+	ScoreboardRows = Scores.Num();
+
+	const float W = Canvas->ClipX / S;
+	constexpr float PanelW = 620.f;
+	constexpr float RowH = 34.f;
+	const float X = W * 0.5f - PanelW * 0.5f;
+	const float Y = 380.f;
+	const float H = 96.f + RowH * FMath::Max(1, Scores.Num()) + 16.f;
+
+	DrawBox(FLinearColor(0.02f, 0.03f, 0.04f, 0.88f), X, Y, PanelW, H);
+	DrawBox(GAccent, X, Y, PanelW, 3.f);
+
+	FString Title = TEXT("SCOREBOARD");
+	if (GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch)
+	{
+		const int32 Next = FMath::Max(0, FMath::CeilToInt(GS->GetPhaseTimeRemaining()));
+		Title = FString::Printf(TEXT("ROUND OVER  -  NEXT ROUND IN %d"), Next);
+	}
+	DrawLabel(Title, X + 24.f, Y + 14.f, GText, 1.1f, true);
+
+	const float ColK = X + PanelW - 170.f;
+	const float ColD = X + PanelW - 100.f;
+	const float ColState = X + PanelW - 40.f;
+	DrawLabel(TEXT("PLAYER"), X + 24.f, Y + 64.f, GTextDim, 0.8f);
+	DrawLabel(TEXT("K"), ColK, Y + 64.f, GTextDim, 0.8f, false, 0.5f);
+	DrawLabel(TEXT("D"), ColD, Y + 64.f, GTextDim, 0.8f, false, 0.5f);
+
+	const int32 Me = GetLocalPlayerId();
+	float RowY = Y + 92.f;
+	if (Scores.Num() == 0)
+	{
+		DrawLabel(TEXT("No players yet"), X + 24.f, RowY + 4.f, GTextDim, 0.9f);
+	}
+	for (int32 i = 0; i < Scores.Num(); ++i)
+	{
+		const FCSPlayerCombatRecord& R = Scores[i];
+		const bool bMine = R.PlayerId == Me;
+		if (bMine)
+		{
+			DrawBox(FLinearColor(GAccent.R, GAccent.G, GAccent.B, 0.18f), X + 8.f, RowY, PanelW - 16.f, RowH - 4.f);
+		}
+		const FLinearColor Color = bMine ? GAccent : (R.bAlive ? GText : GTextDim);
+		DrawLabel(FString::Printf(TEXT("%d.  %s"), i + 1, *PlayerLabel(R.PlayerId)), X + 24.f, RowY + 4.f, Color, 0.95f);
+		DrawLabel(FString::FromInt(R.Kills), ColK, RowY + 4.f, Color, 0.95f, false, 0.5f);
+		DrawLabel(FString::FromInt(R.Deaths), ColD, RowY + 4.f, Color, 0.95f, false, 0.5f);
+		if (!R.bAlive)
+		{
+			DrawLabel(TEXT("DEAD"), ColState, RowY + 7.f, GDanger, 0.7f, false, 0.5f);
+		}
+		RowY += RowH;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +429,38 @@ void ACSHUD::DrawFpsCounter()
 	DrawLabel(FString::Printf(TEXT("%d FPS  %.1f ms"), FMath::RoundToInt(Fps), SmoothedFrameMs), 16.f, 12.f, Color, 0.8f);
 }
 
+void ACSHUD::DrawScope()
+{
+	// Black mask with a round window, drawn as horizontal strips, plus a thin
+	// reticle. The weapon model is hidden while this is up (ACSCharacter).
+	const float W = Canvas->ClipX;
+	const float H = Canvas->ClipY;
+	const float CX = W * 0.5f;
+	const float CY = H * 0.5f;
+	const float R = H * 0.47f;
+	const FLinearColor Black(0.f, 0.f, 0.f, 1.f);
+	const int32 Strip = FMath::Max(1, FMath::RoundToInt(H / 360.f));
+	for (int32 Y = 0; Y < H; Y += Strip)
+	{
+		const float Dy = (Y + Strip * 0.5f) - CY;
+		if (FMath::Abs(Dy) >= R)
+		{
+			DrawRect(Black, 0.f, Y, W, Strip);
+			continue;
+		}
+		const float Half = FMath::Sqrt(R * R - Dy * Dy);
+		DrawRect(Black, 0.f, Y, CX - Half, Strip);
+		DrawRect(Black, CX + Half, Y, W - (CX + Half), Strip);
+	}
+	const FLinearColor Reticle(0.02f, 0.02f, 0.02f, 0.9f);
+	const float T = FMath::Max(1.f, 1.5f * S);
+	DrawLine(CX - R, CY, CX - 6.f * S, CY, Reticle, T);
+	DrawLine(CX + 6.f * S, CY, CX + R, CY, Reticle, T);
+	DrawLine(CX, CY + 6.f * S, CX, CY + R, Reticle, T);
+	DrawLine(CX, CY - R * 0.6f, CX, CY - 6.f * S, Reticle, T * 0.6f);
+	DrawRect(FLinearColor(0.9f, 0.1f, 0.1f, 0.9f), CX - T, CY - T, T * 2.f, T * 2.f);
+}
+
 void ACSHUD::DrawCrosshair()
 {
 	const float CX = Canvas->ClipX * 0.5f;
@@ -246,22 +468,36 @@ void ACSHUD::DrawCrosshair()
 
 	// Open the crosshair with the current spread so bloom is visible.
 	float Gap = CrosshairGap;
+	float Alpha = 1.f;
 	if (const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn()))
 	{
+		if (Pawn->IsScopedView())
+		{
+			DrawScope();
+			return;
+		}
+		// Aiming down sights: the weapon's own sights are the crosshair.
+		Alpha = FMath::Clamp(1.f - Pawn->GetAimAlpha() * 2.5f, 0.f, 1.f);
+		if (Alpha <= 0.f)
+		{
+			return;
+		}
 		if (const UCSWeaponComponent* Weapon = Pawn->GetWeaponComponent())
 		{
 			Gap += Weapon->GetCurrentSpreadDegrees() * 6.f;
 		}
 	}
+	const FLinearColor Col(CrosshairColor.R, CrosshairColor.G, CrosshairColor.B,
+		CrosshairColor.A * Alpha);
 
 	const float G = Gap * S;
 	const float L = CrosshairLength * S;
 	const float T = FMath::Max(1.f, 2.f * S);
-	DrawLine(CX - G - L, CY, CX - G, CY, CrosshairColor, T);
-	DrawLine(CX + G, CY, CX + G + L, CY, CrosshairColor, T);
-	DrawLine(CX, CY - G - L, CX, CY - G, CrosshairColor, T);
-	DrawLine(CX, CY + G, CX, CY + G + L, CrosshairColor, T);
-	DrawRect(CrosshairColor, CX - T * 0.5f, CY - T * 0.5f, T, T);
+	DrawLine(CX - G - L, CY, CX - G, CY, Col, T);
+	DrawLine(CX + G, CY, CX + G + L, CY, Col, T);
+	DrawLine(CX, CY - G - L, CX, CY - G, Col, T);
+	DrawLine(CX, CY + G, CX, CY + G + L, Col, T);
+	DrawRect(Col, CX - T * 0.5f, CY - T * 0.5f, T, T);
 }
 
 void ACSHUD::DrawHitMarker()
@@ -454,8 +690,14 @@ void ACSHUD::DrawMatchInfo()
 
 	DrawBox(GPanel, W * 0.5f - 110.f, 18.f, 220.f, 70.f);
 	DrawLabel(Timer, W * 0.5f, 18.f, GText, 1.3f, true, 0.5f);
-	DrawLabel(FString::Printf(TEXT("%s  -  %d PLAYERS"), *Phase, UCSAuthority::GetRoomPlayerCount(this)),
-		W * 0.5f, 60.f, GTextDim, 0.8f, false, 0.5f);
+	const int32 Players = UCSAuthority::GetRoomPlayerCount(this);
+	const int32 Bots = ACSBotManager::CountBots(this);
+	FString Who = FString::Printf(TEXT("%d %s"), Players, Players == 1 ? TEXT("PLAYER") : TEXT("PLAYERS"));
+	if (Bots > 0)
+	{
+		Who += FString::Printf(TEXT(" + %d %s"), Bots, Bots == 1 ? TEXT("BOT") : TEXT("BOTS"));
+	}
+	DrawLabel(FString::Printf(TEXT("%s  -  %s"), *Phase, *Who), W * 0.5f, 60.f, GTextDim, 0.8f, false, 0.5f);
 }
 
 void ACSHUD::DrawKillFeed()

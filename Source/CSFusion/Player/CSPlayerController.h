@@ -68,6 +68,10 @@ public:
 	bool IsInventoryOpen() const { return bInventoryOpen; }
 	bool IsPauseMenuOpen() const { return bPauseOpen; }
 
+	/** Scoreboard key held (the HUD also shows it by itself after a round). */
+	void SetScoreboardHeld(bool bHeld) { bScoreboardHeld = bHeld; }
+	bool IsScoreboardHeld() const { return bScoreboardHeld; }
+
 	virtual void PlayerTick(float DeltaTime) override;
 
 protected:
@@ -115,6 +119,23 @@ protected:
 	FDelegateHandle TestPerfTickHandle;
 	TArray<float> PerfFrameMs;
 
+	/** v1.0 round-flow self-test, enabled with -cstestround (use -roundtime=20). */
+	UFUNCTION(Exec)
+	void CSTestRound();
+	FTimerHandle TestRoundTimer;
+	bool RoundTestSawPostMatch = false;
+	float RoundTestElapsed = 0.f;
+	int32 RoundTestKillsAtEnd = 0;
+
+	/** v1.0 weapon presentation self-test, enabled with -cstestweapons. */
+	UFUNCTION(Exec)
+	void CSTestWeapons();
+	void WeaponTestNext();
+	FTimerHandle TestWeaponsTimer;
+	TArray<int32> WeaponTestSlots;
+	int32 WeaponTestIndex = -1;
+	float WeaponTestGap = -1.f;
+
 	/** Stage 7 bot self-test, enabled with -cstestbots (use with -bots=N). */
 	UFUNCTION(Exec)
 	void CSTestBots();
@@ -122,6 +143,9 @@ protected:
 	TMap<int32, FVector> BotTestStart;
 	TMap<int32, float> BotTestMoved;
 	TMap<int32, int32> BotTestMaxItems;
+	TMap<int32, FVector> BotTestLastPos;
+	TMap<int32, float> BotTestStill;
+	float BotTestMaxStill = 0.f;
 	int32 BotTestHits = 0;
 	int32 BotTestKills = 0;
 	float BotTestElapsed = 0.f;
@@ -135,6 +159,24 @@ protected:
 	FTimerHandle TestWalkTimer;
 	float TestWalkTime = 0.f;
 	FVector TestWalkDir = FVector::ZeroVector;
+
+	/**
+	 * Self-tests: walk the pawn to Dest at a legal speed, then call OnArrived.
+	 * Tests used to teleport, which the Stage 8 cheat guard (rightly) punishes.
+	 */
+	void TestMoveTo(const FVector& Dest, TFunction<void()> OnArrived);
+
+	/**
+	 * Self-tests that need the other client: if not bReady, re-run Fn in 2 s
+	 * (up to 20 times) and return true so the caller returns. B joins only after
+	 * A is in the room, so A's timed tests can fire before B exists.
+	 */
+	bool TestRetryUntil(bool bReady, FTimerHandle& Timer, void (ACSPlayerController::*Fn)(), const TCHAR* What);
+	int32 TestWaitTries = 0;
+	int32 WalkPressRetries = 0;
+	FTimerHandle TestMoveTimer;
+	FVector TestMoveDest = FVector::ZeroVector;
+	TFunction<void()> TestMoveDone;
 
 	/** Writes a screenshot to Saved/CSTest/<Name>.png (used by the UI tests). */
 	void TestScreenshot(const FString& Name);
@@ -151,6 +193,7 @@ protected:
 	TSharedPtr<SWidget> InventoryHost;
 	bool bPauseOpen = false;
 	bool bInventoryOpen = false;
+	bool bScoreboardHeld = false;
 
 	// --- Stage 4 self-tests (CSPlayerControllerLootTests.cpp) ---
 	UFUNCTION(Exec) void CSTestGrab();
@@ -159,13 +202,15 @@ protected:
 	UFUNCTION(Exec) void CSTestDoubleDrop();
 	void TestKillStep();
 	void TestKillVerifyLoot();
-	void TestWalkUpAndPress(class ACSWorldPickup* Pickup);
+	/** Walks to the pickup, presses E, and calls AfterPress one second later. */
+	void TestWalkUpAndPress(class ACSWorldPickup* Pickup, TFunction<void()> AfterPress = nullptr);
 	FTimerHandle TestKillTimer;
 	FTimerHandle Stage4ArmTimers[4];
 	FTimerHandle TestStepTimer;
 	TWeakObjectPtr<class ACSCharacter> TestVictim;
 	int32 TestVictimId = 0;
 	int32 TestVictimItemsBefore = 0;
+	int32 TestVictimRespawnsAtDeath = 0;
 	int32 TestShotsFired = 0;
 	int32 TestClaimAmmo = 0;
 

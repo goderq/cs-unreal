@@ -198,9 +198,13 @@ int32 UCSAuthority::GetLocalPlayerId(const UObject* WorldContextObject)
 int32 UCSAuthority::GetRoomPlayerCount(const UObject* WorldContextObject)
 {
 #if CS_WITH_FUSION
-	if (UFusionOnlineSubsystem* Fusion = GetFusion(WorldContextObject))
+	// Offline (practice, tests) Fusion is loaded but not in a room and reports
+	// zero players - which kept the match in WaitingForPlayers forever. The
+	// local player always counts.
+	UFusionOnlineSubsystem* Fusion = GetFusion(WorldContextObject);
+	if (Fusion && Fusion->IsInRoom())
 	{
-		return Fusion->PlayerCount();
+		return FMath::Max(1, Fusion->PlayerCount());
 	}
 #endif
 	return 1;

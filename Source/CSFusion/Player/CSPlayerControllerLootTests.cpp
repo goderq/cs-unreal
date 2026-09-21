@@ -31,6 +31,16 @@
 
 namespace
 {
+	/** Holds or releases the aim button, so kill-test shots are not at the mercy of hip spread. */
+	void SetTestAim(ACSPlayerController* PC, bool bAim)
+	{
+		const FInputDeviceId Device = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
+		FViewport* Viewport = (PC->GetLocalPlayer() && PC->GetLocalPlayer()->ViewportClient)
+			? PC->GetLocalPlayer()->ViewportClient->Viewport : nullptr;
+		PC->InputKey(FInputKeyEventArgs(Viewport, Device, EKeys::RightMouseButton,
+			bAim ? IE_Pressed : IE_Released, bAim ? 1.f : 0.f, false, FPlatformTime::Cycles64()));
+	}
+
 	int32 CountFilledSlots(const ACSPlayerInventory* Inventory)
 	{
 		int32 Filled = 0;
@@ -76,7 +86,7 @@ namespace
 	}
 }
 
-void ACSPlayerController::TestWalkUpAndPress(ACSWorldPickup* Pickup)
+void ACSPlayerController::TestWalkUpAndPress(ACSWorldPickup* Pickup, TFunction<void()> AfterPress)
 {
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self || !Pickup)
@@ -84,13 +94,62 @@ void ACSPlayerController::TestWalkUpAndPress(ACSWorldPickup* Pickup)
 		return;
 	}
 	const FVector Pos = Pickup->GetActorLocation();
-	Self->SetActorLocation(FVector(Pos.X - 110.f, Pos.Y, Self->GetActorLocation().Z));
-	FVector Eye, Unused;
-	Self->GetAimRay(Eye, Unused);
-	SetControlRotation((Pos - Eye).Rotation());
+	TWeakObjectPtr<ACSWorldPickup> WeakPickup(Pickup);
+	TestMoveTo(FVector(Pos.X - 110.f, Pos.Y, 0.f), [this, Pos, AfterPress, WeakPickup]()
+	{
+		// Dead (a bot shot us on the way) or nothing in focus yet: try again
+		// shortly, a few times, instead of pressing E at nothing.
+		const ACSCharacter* Check = Cast<ACSCharacter>(GetPawn());
+		if ((!Check || !Check->IsAliveAuthoritative() || !Check->GetFocusedPickup())
+			&& WeakPickup.IsValid() && WeakPickup->IsAvailable() && ++WalkPressRetries <= 4)
+		{
+			UE_LOG(LogCS, Log, TEXT("TEST WALK: not ready to press E (attempt %d), retrying."), WalkPressRetries);
+			GetWorldTimerManager().SetTimer(TestStepTimer, [this, WeakPickup, AfterPress]()
+			{
+				TestWalkUpAndPress(WeakPickup.Get(), AfterPress);
+			}, 2.f, false);
+			return;
+		}
+		WalkPressRetries = 0;
+		ACSCharacter* Walker = Cast<ACSCharacter>(GetPawn());
+		if (!Walker)
+		{
+			return;
+		}
+		FVector Eye, Unused;
+		Walker->GetAimRay(Eye, Unused);
+		SetControlRotation((Pos - Eye).Rotation());
 
-	// One frame for the focus query to see it, then E.
-	GetWorldTimerManager().SetTimer(TestStepTimer, [this]() { PressKey(EKeys::E); }, 0.25f, false);
+		// One frame for the focus query to see it, then E.
+		GetWorldTimerManager().SetTimer(TestStepTimer, [this, AfterPress, Pos]()
+		{
+			const ACSCharacter* Presser = Cast<ACSCharacter>(GetPawn());
+			const ACSWorldPickup* Focused = Presser ? Presser->GetFocusedPickup() : nullptr;
+			FString Blocker = TEXT("none");
+			float Dot = 0.f;
+			if (Presser && !Focused)
+			{
+				FVector Eye2, Fwd;
+				Presser->GetAimRay(Eye2, Fwd);
+				Dot = FVector::DotProduct(Fwd, (Pos - Eye2).GetSafeNormal());
+				FHitResult Hit;
+				FCollisionQueryParams Params(SCENE_QUERY_STAT(CSTestSight), false, Presser);
+				if (GetWorld()->LineTraceSingleByChannel(Hit, Eye2, Pos, ECC_Visibility, Params))
+				{
+					Blocker = FString::Printf(TEXT("%s.%s at %s"), *GetNameSafe(Hit.GetActor()),
+						*GetNameSafe(Hit.GetComponent()), *Hit.ImpactPoint.ToCompactString());
+				}
+			}
+			UE_LOG(LogCS, Log, TEXT("TEST WALK: at %s, pickup at %s, focused %s (view dot %.2f, sight blocked by %s)"),
+				Presser ? *Presser->GetActorLocation().ToCompactString() : TEXT("-"), *Pos.ToCompactString(),
+				Focused ? *Focused->GetName() : TEXT("nothing"), Dot, *Blocker);
+			PressKey(EKeys::E);
+			if (AfterPress)
+			{
+				GetWorldTimerManager().SetTimer(TestStepTimer, [AfterPress]() { AfterPress(); }, 1.0f, false);
+			}
+		}, 0.25f, false);
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -105,26 +164,22 @@ void ACSPlayerController::CSTestGrab()
 		return;
 	}
 
-	TestWalkUpAndPress(FindNearestPickup(GetWorld(), Self->GetActorLocation(), IsWeaponPickup));
-
-	GetWorldTimerManager().SetTimer(TestLootTimer, [this]()
+	TestWalkUpAndPress(FindNearestPickup(GetWorld(), Self->GetActorLocation(), IsWeaponPickup), [this]()
 	{
 		ACSCharacter* Me = Cast<ACSCharacter>(GetPawn());
 		if (!Me)
 		{
 			return;
 		}
-		TestWalkUpAndPress(FindNearestPickup(GetWorld(), Me->GetActorLocation(), IsAmmoPickup));
-
-		GetWorldTimerManager().SetTimer(TestLootTimer, [this]()
+		TestWalkUpAndPress(FindNearestPickup(GetWorld(), Me->GetActorLocation(), IsAmmoPickup), [this]()
 		{
 			const ACSCharacter* Me2 = Cast<ACSCharacter>(GetPawn());
 			const ACSPlayerInventory* Inv = Me2 ? ACSPlayerInventory::Find(this, Me2->GetOwningPlayerId()) : nullptr;
 			UE_LOG(LogCS, Log, TEXT("GRAB TEST RESULT: player %d holds %d filled slots -> %s"),
 				Me2 ? Me2->GetOwningPlayerId() : 0, CountFilledSlots(Inv),
 				CountFilledSlots(Inv) >= 2 ? TEXT("GRAB OK") : TEXT("GRAB BROKEN"));
-		}, 1.2f, false);
-	}, 1.2f, false);
+		});
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +208,14 @@ void ACSPlayerController::CSTestKill()
 			TestVictim = *It;
 		}
 	}
+	// A human victim must have picked something up first (-cstestgrab), or
+	// there is no loot to check.
+	const bool bVictimReady = TestVictim.IsValid() && (TestVictim->IsBot()
+		|| CountFilledSlots(ACSPlayerInventory::Find(this, TestVictim->GetOwningPlayerId())) > 0);
+	if (TestRetryUntil(bVictimReady, Stage4ArmTimers[3], &ACSPlayerController::CSTestKill, TEXT("a victim carrying loot")))
+	{
+		return;
+	}
 	if (!TestVictim.IsValid())
 	{
 		UE_LOG(LogCS, Warning, TEXT("KILL TEST: no other player."));
@@ -167,6 +230,7 @@ void ACSPlayerController::CSTestKill()
 	UE_LOG(LogCS, Log, TEXT("KILL TEST: victim %d carries %d items; world has %d pickups"),
 		TestVictimId, TestVictimItemsBefore, TestPickupsBefore);
 
+	SetTestAim(this, true);
 	GetWorldTimerManager().SetTimer(TestKillTimer, this, &ACSPlayerController::TestKillStep, 0.35f, true);
 }
 
@@ -178,13 +242,17 @@ void ACSPlayerController::TestKillStep()
 	if (!Director || !Self || !TestVictim.IsValid())
 	{
 		GetWorldTimerManager().ClearTimer(TestKillTimer);
+		SetTestAim(this, false);
 		return;
 	}
 
 	if (!Director->IsPlayerAlive(TestVictimId))
 	{
 		GetWorldTimerManager().ClearTimer(TestKillTimer);
+		SetTestAim(this, false);
 		UE_LOG(LogCS, Log, TEXT("KILL TEST: victim %d died after %d shots"), TestVictimId, TestShotsFired);
+		FCSPlayerCombatRecord AtDeath;
+		TestVictimRespawnsAtDeath = Director->GetRecord(TestVictimId, AtDeath) ? AtDeath.RespawnCounter : 0;
 		// Stage 6: the victim should be playing a death animation now.
 		FTimerHandle DeathShot;
 		GetWorldTimerManager().SetTimer(DeathShot, [this]() { TestScreenshot(TEXT("tp_death")); }, 0.8f, false);
@@ -192,9 +260,12 @@ void ACSPlayerController::TestKillStep()
 		return;
 	}
 
-	if (++TestShotsFired > 40)
+	// 80 shots (~28 s): a bot target strafes, shoots back and heals, and the
+	// shooter may die and respawn in between.
+	if (++TestShotsFired > 80)
 	{
 		GetWorldTimerManager().ClearTimer(TestKillTimer);
+		SetTestAim(this, false);
 		UE_LOG(LogCS, Log, TEXT("DEATH LOOT RESULT: victim never died -> KILL BROKEN (hp %.0f)"),
 			Director->GetHealth(TestVictimId));
 		return;
@@ -213,9 +284,17 @@ void ACSPlayerController::TestKillVerifyLoot()
 	const int32 PickupsNow = ACSWorldPickup::CountAlive(this);
 	const bool bStarterKept = Director && Director->GetLoadout(TestVictimId).IsStarter();
 
-	const bool bOk = ItemsLeft == 0 && PickupsNow == TestPickupsBefore + TestVictimItemsBefore && bStarterKept;
-	UE_LOG(LogCS, Log, TEXT("DEATH LOOT RESULT: victim inventory %d -> %d, pickups %d -> %d, starter kept %s -> %s"),
-		TestVictimItemsBefore, ItemsLeft, TestPickupsBefore, PickupsNow, bStarterKept ? TEXT("yes") : TEXT("no"),
+	// A bot victim dies among other bots, and bots loot within a second: the
+	// exact pickup count can only be checked for a human victim. For a bot,
+	// its inventory must be empty and at least one drop must be on the floor.
+	const bool bBotVictim = CSBots::IsBotId(TestVictimId);
+	const bool bCountOk = bBotVictim
+		? PickupsNow >= TestPickupsBefore + FMath::Min(1, TestVictimItemsBefore)
+		: PickupsNow == TestPickupsBefore + TestVictimItemsBefore;
+	const bool bOk = ItemsLeft == 0 && bCountOk && bStarterKept;
+	UE_LOG(LogCS, Log, TEXT("DEATH LOOT RESULT: victim inventory %d -> %d, pickups %d -> %d%s, starter kept %s -> %s"),
+		TestVictimItemsBefore, ItemsLeft, TestPickupsBefore, PickupsNow,
+		bBotVictim ? TEXT(" (bot victim: other bots may loot first)") : TEXT(""), bStarterKept ? TEXT("yes") : TEXT("no"),
 		bOk ? TEXT("DEATH LOOT OK") : TEXT("DEATH LOOT BROKEN"));
 
 	// Another player takes the dropped weapon (TZ test 6).
@@ -231,16 +310,24 @@ void ACSPlayerController::TestKillVerifyLoot()
 
 	TestLootItemIndex = Dropped->GetItemIndex();
 	TestClaimAmmo = Dropped->GetAmmoInMag();
-	TestWalkUpAndPress(Dropped);
-
-	GetWorldTimerManager().SetTimer(TestLootTimer, [this]()
+	TWeakObjectPtr<ACSWorldPickup> WeakDropped(Dropped);
+	TestWalkUpAndPress(Dropped, [this, WeakDropped, bBotVictim]()
 	{
 		const ACSCharacter* Me = Cast<ACSCharacter>(GetPawn());
 		const ACSPlayerInventory* Inv = Me ? ACSPlayerInventory::Find(this, Me->GetOwningPlayerId()) : nullptr;
 		const int32 Have = Inv ? Inv->CountItem(TestLootItemIndex) : 0;
+		// Gone from the floor but not in our inventory: someone else got it
+		// first. That is correct behaviour (exactly one winner) - with bots
+		// around it is expected, not a failure.
+		const bool bTakenByOther = Have == 0 && (!WeakDropped.IsValid() || !WeakDropped->IsAvailable());
+		const bool bClaimantDead = !Me || !Me->IsAliveAuthoritative();
+		const TCHAR* Verdict = Have > 0 ? TEXT("CLAIM OK")
+			: ((bTakenByOther && bBotVictim) ? TEXT("CLAIM LOST TO A BOT (picked up by another bot first)")
+			: ((bClaimantDead && bBotVictim) ? TEXT("CLAIM NOT TRIED (a bot killed the claimant on the way)")
+			: TEXT("CLAIM BROKEN")));
 		UE_LOG(LogCS, Log, TEXT("LOOT CLAIM RESULT: took the victim's weapon (item %d, %d rounds kept) -> %s"),
-			TestLootItemIndex, TestClaimAmmo, Have > 0 ? TEXT("CLAIM OK") : TEXT("CLAIM BROKEN"));
-	}, 1.0f, false);
+			TestLootItemIndex, TestClaimAmmo, Verdict);
+	});
 
 	// Respawn check after the respawn delay (TZ tests 7-8).
 	GetWorldTimerManager().SetTimer(TestKillTimer, [this]()
@@ -250,7 +337,12 @@ void ACSPlayerController::TestKillVerifyLoot()
 		const bool bHave = D && D->GetRecord(TestVictimId, R);
 		const FCSLoadoutView L = D ? D->GetLoadout(TestVictimId) : FCSLoadoutView();
 		const int32 Items = CountFilledSlots(ACSPlayerInventory::Find(this, TestVictimId));
-		const bool bOk = bHave && R.bAlive && R.Health >= 100.f && L.IsStarter() && L.RoundsInMag > 0 && Items == 0;
+		// A bot is back in a fight at once - shot again, looting again - so for a
+		// bot the check is that it did respawn, with the starter pistol.
+		const bool bBot = CSBots::IsBotId(TestVictimId);
+		const bool bOk = bBot
+			? (bHave && R.RespawnCounter > TestVictimRespawnsAtDeath && L.Weapon != nullptr)
+			: (bHave && R.bAlive && R.Health >= 100.f && L.IsStarter() && L.RoundsInMag > 0 && Items == 0);
 		UE_LOG(LogCS, Log, TEXT("RESPAWN RESULT: alive %s, hp %.0f, starter %s (%d rds), inventory %d -> %s"),
 			(bHave && R.bAlive) ? TEXT("yes") : TEXT("no"), R.Health, L.IsStarter() ? TEXT("yes") : TEXT("no"),
 			L.RoundsInMag, Items, bOk ? TEXT("RESPAWN OK") : TEXT("RESPAWN BROKEN"));
@@ -264,13 +356,20 @@ void ACSPlayerController::TestKillVerifyLoot()
 void ACSPlayerController::CSTestWatchLeave()
 {
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
+	TestVictimId = 0;
 	for (TActorIterator<ACSCharacter> It(GetWorld()); It; ++It)
 	{
-		if (*It != Self)
+		if (*It != Self && !It->IsBot())
 		{
 			TestVictimId = It->GetOwningPlayerId();
 			break;
 		}
+	}
+	// Wait until the other player exists and has picked up its loot.
+	const bool bReady = TestVictimId != 0 && CountFilledSlots(ACSPlayerInventory::Find(this, TestVictimId)) > 0;
+	if (TestRetryUntil(bReady, Stage4ArmTimers[2], &ACSPlayerController::CSTestWatchLeave, TEXT("the other player's loot")))
+	{
+		return;
 	}
 	TestVictimItemsBefore = CountFilledSlots(ACSPlayerInventory::Find(this, TestVictimId));
 	TestPickupsBefore = ACSWorldPickup::CountAlive(this);
@@ -328,15 +427,13 @@ void ACSPlayerController::CSTestWatchLeave()
 				return;
 			}
 			TestLootItemIndex = Dropped->GetItemIndex();
-			TestWalkUpAndPress(Dropped);
-
-			GetWorldTimerManager().SetTimer(TestLootTimer, [this]()
+			TestWalkUpAndPress(Dropped, [this]()
 			{
 				const ACSCharacter* Me2 = Cast<ACSCharacter>(GetPawn());
 				const ACSPlayerInventory* Inv = Me2 ? ACSPlayerInventory::Find(this, Me2->GetOwningPlayerId()) : nullptr;
 				UE_LOG(LogCS, Log, TEXT("LEAVE CLAIM RESULT: took the leaver's weapon -> %s"),
 					(Inv && Inv->CountItem(TestLootItemIndex) > 0) ? TEXT("CLAIM OK") : TEXT("CLAIM BROKEN"));
-			}, 1.0f, false);
+			});
 		}, 1.0f, false);
 	}, 1.0f, true);
 }

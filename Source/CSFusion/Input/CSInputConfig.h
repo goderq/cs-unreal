@@ -156,7 +156,8 @@ public:
 	FKey Key_PauseMenu = EKeys::Escape;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
-	FKey Key_Scoreboard = EKeys::BackSpace;
+	// Not F1: in non-Shipping builds the engine binds F1 to the wireframe view mode.
+	FKey Key_Scoreboard = EKeys::Q;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	FKey Key_Drop = EKeys::G;
