@@ -67,6 +67,16 @@ public:
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+	// v1.1 movement feel: camera follows crouch smoothly, dips on landing; short jump cooldown.
+	virtual void OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
+	virtual void OnEndCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust) override;
+	virtual void Landed(const FHitResult& Hit) override;
+	virtual bool CanJumpInternal_Implementation() const override;
+
+	/** Network time the pawn last landed; the movement component slows the first steps after. */
+	double GetLastLandedTime() const { return LastLandedTime; }
+	float GetLastLandingImpact() const { return LastLandingImpact; }
+
 	/** Arms rig. Owner-only visibility. */
 	UFUNCTION(BlueprintPure, Category = "CS|Character")
 	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
@@ -169,6 +179,26 @@ public:
 	void RpcRequestDrop(int32 Slot);
 	void RpcRequestDrop_Receive(int32 Slot);
 
+	/** v1.1 grenade: owning client throws the grenade in hand along the view. */
+	void RequestThrowGrenade();
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestThrow(FVector Origin, FVector Direction);
+	void RpcRequestThrow_Receive(FVector Origin, FVector Direction);
+
+	/** Throwing motion on arms and body (cosmetic, every peer). */
+	void PlayThrowPresentation(bool bFromRelease = false);
+
+	/** Camera shake from a nearby blast, 0..1 (local view). */
+	void AddExplosionShake(float Strength) { ExplosionShake = FMath::Max(ExplosionShake, Strength); }
+
+	/** v1.1 shop: owning client asks to buy shop entry ShopIndex. The authority re-checks everything. */
+	void RequestBuy(int32 ShopIndex);
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestBuy(int32 ShopIndex);
+	void RpcRequestBuy_Receive(int32 ShopIndex);
+
 	/** The pickup under the crosshair within reach, for the HUD prompt. Local. */
 	UFUNCTION(BlueprintPure, Category = "CS|Character")
 	class ACSWorldPickup* GetFocusedPickup() const { return FocusedPickup.Get(); }
@@ -204,6 +234,7 @@ protected:
 	void Input_PauseMenu(const FInputActionValue& Value);
 	void Input_ScoreboardStart(const FInputActionValue& Value);
 	void Input_ScoreboardStop(const FInputActionValue& Value);
+	void Input_BuyMenu(const FInputActionValue& Value);
 
 	/** Local: choose the pickup nearest the crosshair within reach and in sight. */
 	void UpdateFocusedPickup();
@@ -280,6 +311,41 @@ protected:
 	/** Eye height above the capsule centre. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Camera")
 	float CameraHeight = 64.f;
+
+	/** Eye height above the (smaller) capsule centre while crouched. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Camera")
+	float CrouchedCameraHeight = 46.f;
+
+	/** Aiming: the grip stays at least this far in front of the eye, cm. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Camera")
+	float MinAdsGripDistance = 22.f;
+
+	// v1.1 camera height state (local view)
+	float CameraZ = 64.f;
+	float LandDip = 0.f;
+	float LandDipVelocity = 0.f;
+	double LastLandedTime = -100.0;
+	float LastLandingImpact = 0.f;
+	void UpdateCameraHeight(float DeltaSeconds);
+	float ExplosionShake = 0.f;
+	FTimerHandle ThrowReleaseTimer;
+	/** First-person throw clock (< 0 idle). */
+	float ViewThrowTime = -1.f;
+
+	/** v1.1: death ragdoll on the body mesh (every peer, cosmetic). */
+	void SetRagdoll(bool bEnable);
+	bool bRagdoll = false;
+
+	/** v1.1: translucent look while spawn-protected. */
+	void UpdateProtectionLook(float DeltaSeconds);
+	float GhostAlpha = 0.f;
+	bool bGhostMaterials = false;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class UMaterialInstanceDynamic>> GhostMaterials;
+	/** Materials each mesh had before the ghost look, per slot. */
+	TMap<TWeakObjectPtr<UMeshComponent>, TArray<TObjectPtr<UMaterialInterface>>> GhostOriginals;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInterface>> GhostKeepAlive;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Camera", meta = (ClampMin = "60.0", ClampMax = "130.0"))
 	float DefaultFieldOfView = 100.f;

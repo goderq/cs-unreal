@@ -4,6 +4,7 @@
 
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
+#include "Core/CSModeSettings.h"
 #include "Net/UnrealNetwork.h"
 
 ACSGameState::ACSGameState()
@@ -30,6 +31,14 @@ void ACSGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ACSGameState, ScoreBravo);
 	DOREPLIFETIME(ACSGameState, BotCount);
 	DOREPLIFETIME(ACSGameState, BotDifficulty);
+	DOREPLIFETIME(ACSGameState, GameModeType);
+	DOREPLIFETIME(ACSGameState, bModeConfigured);
+	DOREPLIFETIME(ACSGameState, RoundNumber);
+	DOREPLIFETIME(ACSGameState, BuyEndNetworkTime);
+	DOREPLIFETIME(ACSGameState, WinnerTeam);
+	DOREPLIFETIME(ACSGameState, WinnerPlayerId);
+	DOREPLIFETIME(ACSGameState, LossStreakAlpha);
+	DOREPLIFETIME(ACSGameState, LossStreakBravo);
 }
 
 void ACSGameState::SetMatchPhase(ECSMatchPhase NewPhase)
@@ -99,4 +108,62 @@ void ACSGameState::SetBotSettings(int32 Count, ECSBotDifficulty Difficulty)
 	BotCount = FMath::Clamp(Count, 0, 8);
 	BotDifficulty = Difficulty;
 	UE_LOG(LogCSAI, Log, TEXT("Match bots: %d, difficulty %s."), BotCount, *UEnum::GetValueAsString(BotDifficulty));
+}
+
+// ---------------------------------------------------------------------------
+// Game mode (v1.1)
+// ---------------------------------------------------------------------------
+
+void ACSGameState::ConfigureMode(ECSGameModeType Mode)
+{
+	CS_AUTHORITY_ONLY(this);
+	GameModeType = Mode;
+	bModeConfigured = true;
+	UE_LOG(LogCS, Log, TEXT("Match mode: %s."), *UCSModeSettings::ModeTag(Mode));
+}
+
+const FCSModeRules& ACSGameState::GetRules() const
+{
+	return UCSModeSettings::Rules(GameModeType);
+}
+
+float ACSGameState::GetBuyTimeRemaining() const
+{
+	if (BuyEndNetworkTime <= 0.0)
+	{
+		return 0.f;
+	}
+	return static_cast<float>(FMath::Max(0.0, BuyEndNetworkTime - UCSAuthority::GetNetworkTimeSeconds(this)));
+}
+
+void ACSGameState::SetRoundNumber(int32 Round)
+{
+	CS_AUTHORITY_ONLY(this);
+	RoundNumber = Round;
+}
+
+void ACSGameState::SetBuyEndNetworkTime(double Time)
+{
+	CS_AUTHORITY_ONLY(this);
+	BuyEndNetworkTime = Time;
+}
+
+void ACSGameState::SetWinner(ECSTeam Team, int32 PlayerId)
+{
+	CS_AUTHORITY_ONLY(this);
+	WinnerTeam = Team;
+	WinnerPlayerId = PlayerId;
+}
+
+void ACSGameState::SetLossStreak(ECSTeam Team, int32 Streak)
+{
+	CS_AUTHORITY_ONLY(this);
+	(Team == ECSTeam::Alpha ? LossStreakAlpha : LossStreakBravo) = FMath::Max(0, Streak);
+}
+
+void ACSGameState::ResetTeamScores()
+{
+	CS_AUTHORITY_ONLY(this);
+	ScoreAlpha = 0;
+	ScoreBravo = 0;
 }

@@ -105,6 +105,8 @@ void UCSAnimInstance::ResolveClips()
 		JogClips.Add(Set.Jog.IsValidIndex(i) ? LoadClip(Set.Jog[i]) : nullptr);
 	}
 	FallClip = LoadClip(Set.FallLoop);
+	JumpStartClip = LoadClip(Set.JumpStart);
+	LandClip = LoadClip(Set.LandRecovery);
 	AimUpClip = LoadClip(Set.AimUp);
 	AimDownClip = LoadClip(Set.AimDown);
 	FireClip = LoadClip(Set.Fire);
@@ -234,6 +236,8 @@ void UCSAnimInstance::AdvanceGameThread(float Dt)
 
 	const ACharacter* Character = Cast<ACharacter>(TryGetPawnOwner());
 	bool bFalling = false;
+	float VerticalSpeed = 0.f;
+	bool bCrouching = false;
 	if (Character)
 	{
 		// Remote players report the smoothed velocity (see ACSCharacter::
@@ -262,6 +266,8 @@ void UCSAnimInstance::AdvanceGameThread(float Dt)
 			}
 		}
 		AimPitch = FRotator::NormalizeAxis(Character->GetBaseAimRotation().Pitch);
+		// Stance is our own replicated property, so remote players crouch too.
+		bCrouching = CSChar ? CSChar->GetStance() == ECSStanceState::Crouching : Character->bIsCrouched;
 		if (const UCharacterMovementComponent* Move = Character->GetCharacterMovement())
 		{
 			bFalling = Move->IsFalling();
@@ -281,6 +287,45 @@ void UCSAnimInstance::AdvanceGameThread(float Dt)
 	IdleTime += Dt;
 
 	FallAlpha = FMath::FInterpConstantTo(FallAlpha, bFalling ? 1.f : 0.f, Dt, 6.f);
+
+	// v1.1 jumps: take-off clip when leaving the ground upwards, a knee bend on
+	// landing that is deeper the longer the fall was.
+	if (bFalling && !bWasFalling && VerticalSpeed > 150.f)
+	{
+		JumpStartTime = 0.f;
+	}
+	if (!bFalling && bWasFalling && FallTime > 0.2f)
+	{
+		LandTime = 0.f;
+		LandWeight = FMath::Clamp(FallTime / 0.8f, 0.35f, 1.f);
+		JumpStartTime = -1.f;
+	}
+	bWasFalling = bFalling;
+	if (JumpStartTime >= 0.f)
+	{
+		JumpStartTime += Dt;
+		if (!JumpStartClip || JumpStartTime > ClipLength(JumpStartClip))
+		{
+			JumpStartTime = -1.f;
+		}
+	}
+	if (LandTime >= 0.f)
+	{
+		LandTime += Dt;
+		if (!LandClip || LandTime > ClipLength(LandClip))
+		{
+			LandTime = -1.f;
+		}
+	}
+	CrouchAlpha = FMath::FInterpTo(CrouchAlpha, bCrouching && !bFirstPerson ? 1.f : 0.f, Dt, 9.f);
+	if (ThrowTime >= 0.f)
+	{
+		ThrowTime += Dt;
+		if (ThrowTime > 0.7f)
+		{
+			ThrowTime = -1.f;
+		}
+	}
 
 	const bool bWantIK = bLeftHandIK && UpperTime < 0.f && DeathTime < 0.f;
 	LeftHandIKAlpha = FMath::FInterpConstantTo(LeftHandIKAlpha, bWantIK ? 1.f : 0.f, Dt, 5.f);
@@ -351,6 +396,13 @@ void FCSAnimInstanceProxy::PreUpdate(UAnimInstance* InAnimInstance, float DeltaS
 	S.Upper = I->ActiveUpperClip;
 	S.HitReact = I->ActiveHitClip;
 	S.Death = I->ActiveDeathClip;
+	S.JumpStart = I->JumpStartClip;
+	S.LandRecovery = I->LandClip;
+	S.JumpStartTime = I->JumpStartTime;
+	S.LandTime = I->LandTime;
+	S.LandWeight = I->LandWeight;
+	S.CrouchAlpha = I->CrouchAlpha;
+	S.ThrowTime = I->bFirstPerson ? -1.f : I->ThrowTime;
 
 	S.IdleTime = I->IdleTime;
 	S.LocoPhase = I->LocoPhase;
@@ -437,11 +489,25 @@ bool FCSAnimInstanceProxy::Evaluate(FPoseContext& Output)
 	if (S.FallAlpha > 0.f && S.Fall)
 	{
 		FPoseContext Fall(Output);
-		SamplePose(S.Fall, S.FallTime, true, Fall);
+		// v1.1: the take-off clip first, then the loop.
+		if (S.JumpStartTime >= 0.f && S.JumpStart)
+		{
+			SamplePose(S.JumpStart, S.JumpStartTime, false, Fall);
+		}
+		else
+		{
+			SamplePose(S.Fall, S.FallTime, true, Fall);
+		}
 		FPoseContext Mixed(Output);
 		Blend(Loco, Fall, 1.f - S.FallAlpha, Mixed);
 		Loco.Pose.CopyBonesFrom(Mixed.Pose);
 		Loco.Curve.CopyFrom(Mixed.Curve);
+	}
+
+	// 2b. Crouch (v1.1), procedural: the Mannequin pack has no crouch clips.
+	if (S.CrouchAlpha > 0.01f)
+	{
+		ApplyCrouch(Loco);
 	}
 
 	// 3. Death replaces everything once blended in.
@@ -512,6 +578,15 @@ bool FCSAnimInstanceProxy::Evaluate(FPoseContext& Output)
 	if (S.HitTime >= 0.f)
 	{
 		ApplyAdditive(Output, S.HitReact, S.HitTime, 1.f, Self);
+	}
+	if (S.LandTime >= 0.f)
+	{
+		ApplyAdditive(Output, S.LandRecovery, S.LandTime, S.LandWeight, Self);
+	}
+
+	if (S.ThrowTime >= 0.f)
+	{
+		ApplyThrow(Output);
 	}
 
 	// 7. Left hand onto the weapon (v1.0). The weapon is rigid on hand_r, so
@@ -640,5 +715,142 @@ void FCSAnimInstanceProxy::SolveLeftHandIK(FPoseContext& Output) const
 	Solved.Add(FBoneTransform(Lower, JointT));
 	Solved.Add(FBoneTransform(Hand, EndT));
 	CSPose.SafeSetCSBoneTransforms(Solved);
+	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
+}
+
+void FCSAnimInstanceProxy::ApplyCrouch(FPoseContext& Output) const
+{
+	const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+	auto Index = [&Bones](const TCHAR* Name) -> FCompactPoseBoneIndex
+	{
+		const int32 PoseIndex = Bones.GetPoseBoneIndexForBoneName(FName(Name));
+		return PoseIndex == INDEX_NONE ? FCompactPoseBoneIndex(INDEX_NONE)
+			: Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(PoseIndex));
+	};
+	const FCompactPoseBoneIndex Pelvis = Index(TEXT("pelvis"));
+	const FCompactPoseBoneIndex Spine = Index(TEXT("spine_01"));
+	const FCompactPoseBoneIndex Legs[2][3] = {
+		{ Index(TEXT("thigh_l")), Index(TEXT("calf_l")), Index(TEXT("foot_l")) },
+		{ Index(TEXT("thigh_r")), Index(TEXT("calf_r")), Index(TEXT("foot_r")) },
+	};
+	if (Pelvis == INDEX_NONE || Spine == INDEX_NONE)
+	{
+		return;
+	}
+	for (const auto& Leg : Legs)
+	{
+		for (const FCompactPoseBoneIndex& Bone : Leg)
+		{
+			if (Bone == INDEX_NONE)
+			{
+				return;
+			}
+		}
+	}
+
+	const float A = Snapshot.CrouchAlpha;
+	// The Mannequin faces +Y in component space; up is +Z, its right is -X.
+	constexpr float Drop = 42.f;
+	constexpr float Back = 8.f;
+	constexpr float LeanDeg = 18.f;
+
+	FCSPose<FCompactPose> CSPose;
+	CSPose.InitPose(Output.Pose);
+
+	// Feet stay where the locomotion put them.
+	const FTransform Feet[2] = { CSPose.GetComponentSpaceTransform(Legs[0][2]), CSPose.GetComponentSpaceTransform(Legs[1][2]) };
+
+	// 1. Pelvis down and a little back; everything above follows.
+	FTransform PelvisT = CSPose.GetComponentSpaceTransform(Pelvis);
+	PelvisT.AddToTranslation(FVector(0.f, -Back * A, -Drop * A));
+	{
+		TArray<FBoneTransform> Moved;
+		Moved.Add(FBoneTransform(Pelvis, PelvisT));
+		CSPose.SafeSetCSBoneTransforms(Moved);
+	}
+
+	// 2. Legs: two-bone IK back onto the planted feet, knees forward.
+	TArray<FBoneTransform> Solved;
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		FTransform RootT = CSPose.GetComponentSpaceTransform(Legs[Side][0]);
+		FTransform JointT = CSPose.GetComponentSpaceTransform(Legs[Side][1]);
+		FTransform EndT = CSPose.GetComponentSpaceTransform(Legs[Side][2]);
+		const FVector Pole = JointT.GetLocation() + FVector(Side == 0 ? 8.f : -8.f, 60.f, 0.f);
+		AnimationCore::SolveTwoBoneIK(RootT, JointT, EndT, Pole, Feet[Side].GetLocation(), /*bAllowStretching*/ false, 1.0, 1.0);
+		EndT.SetRotation(Feet[Side].GetRotation());
+		Solved.Add(FBoneTransform(Legs[Side][0], RootT));
+		Solved.Add(FBoneTransform(Legs[Side][1], JointT));
+		Solved.Add(FBoneTransform(Legs[Side][2], EndT));
+	}
+
+	// 3. Upper body leans into the crouch (about the character's right axis).
+	FTransform SpineT = CSPose.GetComponentSpaceTransform(Spine);
+	const FQuat Lean(FVector(1.f, 0.f, 0.f), FMath::DegreesToRadians(-LeanDeg * A));
+	SpineT.SetRotation(Lean * SpineT.GetRotation());
+	Solved.Add(FBoneTransform(Spine, SpineT));
+
+	Solved.Sort([](const FBoneTransform& X, const FBoneTransform& Y) { return X.BoneIndex < Y.BoneIndex; });
+	CSPose.SafeSetCSBoneTransforms(Solved);
+	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
+}
+
+void FCSAnimInstanceProxy::ApplyThrow(FPoseContext& Output) const
+{
+	const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+	auto Index = [&Bones](const TCHAR* Name) -> FCompactPoseBoneIndex
+	{
+		const int32 PoseIndex = Bones.GetPoseBoneIndexForBoneName(FName(Name));
+		return PoseIndex == INDEX_NONE ? FCompactPoseBoneIndex(INDEX_NONE)
+			: Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(PoseIndex));
+	};
+	const FCompactPoseBoneIndex Spine = Index(TEXT("spine_03"));
+	const FCompactPoseBoneIndex Arm = Index(TEXT("upperarm_r"));
+	if (Spine == INDEX_NONE || Arm == INDEX_NONE)
+	{
+		return;
+	}
+
+	// 0 - 0.22 s wind-up (arm back and up, chest turns away), 0.22 - 0.36 s
+	// release (arm whips forward over the shoulder), then recovery.
+	const float T = Snapshot.ThrowTime;
+	float ArmPitch = 0.f;	// + = arm back / up
+	float ChestYaw = 0.f;
+	if (T < 0.22f)
+	{
+		const float A = FMath::SmoothStep(0.f, 1.f, T / 0.22f);
+		ArmPitch = 110.f * A;
+		ChestYaw = 25.f * A;
+	}
+	else if (T < 0.36f)
+	{
+		const float A = FMath::SmoothStep(0.f, 1.f, (T - 0.22f) / 0.14f);
+		ArmPitch = FMath::Lerp(110.f, -40.f, A);
+		ChestYaw = FMath::Lerp(25.f, -20.f, A);
+	}
+	else
+	{
+		const float A = FMath::SmoothStep(0.f, 1.f, (T - 0.36f) / 0.34f);
+		ArmPitch = FMath::Lerp(-40.f, 0.f, A);
+		ChestYaw = FMath::Lerp(-20.f, 0.f, A);
+	}
+
+	FCSPose<FCompactPose> CSPose;
+	CSPose.InitPose(Output.Pose);
+
+	// Component space: the Mannequin faces +Y, up is +Z, its right is -X.
+	TArray<FBoneTransform> Changed;
+	FTransform SpineT = CSPose.GetComponentSpaceTransform(Spine);
+	SpineT.SetRotation(FQuat(FVector::UpVector, FMath::DegreesToRadians(ChestYaw)) * SpineT.GetRotation());
+	Changed.Add(FBoneTransform(Spine, SpineT));
+	CSPose.SafeSetCSBoneTransforms(Changed);
+
+	Changed.Reset();
+	FTransform ArmT = CSPose.GetComponentSpaceTransform(Arm);
+	// About the shoulder's side axis: positive swings the hand back and up.
+	ArmT.SetRotation(FQuat(FVector(1.f, 0.f, 0.f), FMath::DegreesToRadians(ArmPitch)) * ArmT.GetRotation());
+	Changed.Add(FBoneTransform(Arm, ArmT));
+	CSPose.SafeSetCSBoneTransforms(Changed);
+
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
 }

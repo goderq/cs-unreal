@@ -184,6 +184,11 @@ void ACSCharacter::BeginPlay()
 void ACSCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UnbindCombatEvents();
+	if (UWorld* World = GetWorld())
+	{
+		// The throw release is a lambda on the (game-instance owned) timer manager.
+		World->GetTimerManager().ClearTimer(ThrowReleaseTimer);
+	}
 	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
 	{
 		Settings->OnPreferencesChanged.Remove(PreferencesChangedHandle);
@@ -350,6 +355,8 @@ void ACSCharacter::Tick(float DeltaSeconds)
 	BindCombatEvents();
 	UpdateWeaponPresentation();
 	UpdateFootsteps(DeltaSeconds);
+	UpdateCameraHeight(DeltaSeconds);
+	UpdateProtectionLook(DeltaSeconds);
 	UpdateFirstPersonView(DeltaSeconds);
 	UpdateRemoteSmoothing(DeltaSeconds);
 }
@@ -772,6 +779,7 @@ void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
 
 	switch (Item->ItemType)
 	{
+	case ECSItemType::Grenade:
 	case ECSItemType::Weapon:
 		if (Inventory->GetEquippedSlot() != Slot)
 		{
@@ -796,7 +804,7 @@ void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
 		break;
 
 	default:
-		// Ammo is used by reloading; grenades are thrown in a later stage.
+		// Ammo is used by reloading.
 		break;
 	}
 }
@@ -883,6 +891,90 @@ void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 	UE_LOG(LogCSInventory, Log, TEXT("Player %d dropped item %d x%d"), PlayerId, Removed.ItemIndex, Removed.Count);
 }
 
+void ACSCharacter::RequestThrowGrenade()
+{
+	if (GetWorldTimerManager().IsTimerActive(ThrowReleaseTimer))
+	{
+		return;
+	}
+	// Wind-up now; the grenade leaves the hand at the release point of the
+	// motion, aimed wherever the player looks by then.
+	PlayThrowPresentation();
+	CSAudio::Play2D(this, UCSAudioSettings::Get()->GrenadePin, 0.7f);
+	GetWorldTimerManager().SetTimer(ThrowReleaseTimer, [this]()
+	{
+		FVector Origin;
+		FVector Direction;
+		GetAimRay(Origin, Direction);
+		if (UCSAuthority::IsSessionActive(this))
+		{
+			RpcRequestThrow(Origin, Direction);
+			return;
+		}
+		RpcRequestThrow_Receive(Origin, Direction);
+	}, 0.26f, false);
+}
+
+void ACSCharacter::RpcRequestThrow_Receive(FVector Origin, FVector Direction)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Throw))
+	{
+		return;
+	}
+	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+	{
+		FVector AuthoritativeOrigin;
+		FVector IgnoredDirection;
+		GetAimRay(AuthoritativeOrigin, IgnoredDirection);
+		Director->TryThrowGrenade(GetOwningPlayerId(), Origin, Direction, AuthoritativeOrigin, GetVelocity());
+	}
+}
+
+void ACSCharacter::PlayThrowPresentation(bool bFromRelease)
+{
+	// From the release point when the grenade is already out (seen from elsewhere, bots).
+	const float StartAt = bFromRelease ? 0.2f : 0.f;
+	for (UCSAnimInstance* Anim : { GetBodyAnim(), GetArmsAnim() })
+	{
+		if (Anim)
+		{
+			Anim->PlayThrow(StartAt);
+		}
+	}
+	if (IsLocalPlayerView())
+	{
+		ViewThrowTime = StartAt;
+	}
+}
+
+void ACSCharacter::RequestBuy(int32 ShopIndex)
+{
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcRequestBuy(ShopIndex);
+		return;
+	}
+	RpcRequestBuy_Receive(ShopIndex);
+}
+
+void ACSCharacter::RpcRequestBuy_Receive(int32 ShopIndex)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Buy))
+	{
+		return;
+	}
+	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+	{
+		const ECSBuyResult Result = Director->TryBuy(GetOwningPlayerId(), ShopIndex);
+		if (Result != ECSBuyResult::Ok)
+		{
+			UE_LOG(LogCSInventory, Log, TEXT("Buy %d by player %d refused: %s"), ShopIndex, GetOwningPlayerId(), *UEnum::GetValueAsString(Result));
+		}
+	}
+}
+
 
 
 // ---------------------------------------------------------------------------
@@ -942,9 +1034,16 @@ void ACSCharacter::SyncWithDirector()
 	// First sight of the record is the initial registration, not a respawn:
 	// adopt the counter without teleporting. Treating it as a respawn sent
 	// every player to spawn point 0 at match start, on top of each other.
+	// v1.1: the authority now picks that first spawn properly (team pads, away
+	// from enemies) instead of every record holding index 0, so the owner goes
+	// there once.
 	if (LastRespawnCounter == 0)
 	{
 		LastRespawnCounter = Record.RespawnCounter;
+		if (IsLocallyControlled() && Record.bAlive)
+		{
+			HandleRespawn(Record.RespawnPointIndex);
+		}
 	}
 
 	// A copy controlled elsewhere still follows the counter. Otherwise, when
@@ -997,6 +1096,8 @@ void ACSCharacter::ApplyAliveState(bool bNewAlive)
 			BodyAnim->PlayDeath(Direction);
 		}
 	}
+	// v1.1: the body goes limp; the death clip above is only the fallback.
+	SetRagdoll(!bNewAlive);
 	if (FirstPersonMesh)
 	{
 		FirstPersonMesh->SetVisibility(bNewAlive && IsLocalPlayerView(), true);
@@ -1205,6 +1306,11 @@ void ACSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(InputConfig->IA_Scoreboard, ETriggerEvent::Completed, this, &ACSCharacter::Input_ScoreboardStop);
 		++Bound;
 	}
+	if (UInputAction* BuyAction = InputConfig->GetBuyMenuAction())
+	{
+		Input->BindAction(BuyAction, ETriggerEvent::Started, this, &ACSCharacter::Input_BuyMenu);
+		++Bound;
+	}
 
 	UE_LOG(LogCS, Log, TEXT("%s: bound %d input actions."), *GetName(), Bound);
 
@@ -1366,6 +1472,14 @@ void ACSCharacter::Input_ToggleInventory(const FInputActionValue& /*Value*/)
 	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
 	{
 		PC->ToggleInventoryScreen();
+	}
+}
+
+void ACSCharacter::Input_BuyMenu(const FInputActionValue& /*Value*/)
+{
+	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
+	{
+		PC->ToggleShopScreen();
 	}
 }
 

@@ -43,6 +43,15 @@ enum class ECSMatchPhase : uint8
 	PostMatch			UMETA(DisplayName = "Post Match")
 };
 
+/** v1.1 game modes. Rules per mode live in UCSModeSettings (DefaultGame.ini). */
+UENUM(BlueprintType)
+enum class ECSGameModeType : uint8
+{
+	Deathmatch		UMETA(DisplayName = "Deathmatch"),
+	TeamDeathmatch	UMETA(DisplayName = "Team Deathmatch"),
+	Competitive		UMETA(DisplayName = "5 vs 5")
+};
+
 UENUM(BlueprintType)
 enum class ECSTeam : uint8
 {

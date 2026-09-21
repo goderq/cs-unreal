@@ -94,7 +94,8 @@ public:
 	float GetCurrentSpreadDegrees() const;
 
 	UFUNCTION(BlueprintPure, Category = "CS|Weapon")
-	bool IsAiming() const { return bAiming; }
+	/** False while a grenade is in hand (nothing to aim down). */
+	bool IsAiming() const;
 
 	void SetAiming(bool bNewAiming) { bAiming = bNewAiming; }
 

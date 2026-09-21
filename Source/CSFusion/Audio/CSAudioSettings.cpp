@@ -31,6 +31,9 @@ UCSAudioSettings::UCSAudioSettings()
 		At<USoundBase>(TEXT("/Game/Audio/Player/S_Footstep_04")),
 	};
 	JumpLand = At<USoundBase>(TEXT("/Game/Audio/Player/S_Land"));
+	GrenadeExplode = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Explode"));
+	GrenadeBounce = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Bounce"));
+	GrenadePin = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Pin"));
 	BulletImpact = At<USoundBase>(TEXT("/Game/Audio/Impacts/S_Impact_Surface"));
 	BodyHit = At<USoundBase>(TEXT("/Game/Audio/Impacts/S_Impact_Body"));
 	Death = At<USoundBase>(TEXT("/Game/Audio/Player/S_Death"));

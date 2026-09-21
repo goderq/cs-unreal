@@ -34,6 +34,14 @@ struct CSFUSION_API FCSStanceAnimSet
 	UPROPERTY(EditAnywhere, Config, Category = "Locomotion")
 	TSoftObjectPtr<UAnimSequence> FallLoop;
 
+	/** v1.1: take-off, played as the jump leaves the ground. */
+	UPROPERTY(EditAnywhere, Config, Category = "Locomotion")
+	TSoftObjectPtr<UAnimSequence> JumpStart;
+
+	/** v1.1: additive knee-bend on landing. */
+	UPROPERTY(EditAnywhere, Config, Category = "Locomotion")
+	TSoftObjectPtr<UAnimSequence> LandRecovery;
+
 	/** Mesh-space additive poses aiming up / down (the Mannequin AO keys). */
 	UPROPERTY(EditAnywhere, Config, Category = "Aim")
 	TSoftObjectPtr<UAnimSequence> AimUp;
@@ -98,4 +106,8 @@ public:
 	/** Character meshes: Manny for even player ids, Quinn for odd. */
 	UPROPERTY(EditAnywhere, Config, Category = "Meshes")
 	TArray<TSoftObjectPtr<USkeletalMesh>> CharacterMeshes;
+
+	/** v1.1: translucent material swapped onto spawn-protected players (scalar "Fade" 0..1). */
+	UPROPERTY(EditAnywhere, Config, Category = "Meshes")
+	TSoftObjectPtr<class UMaterialInterface> SpawnProtectionMaterial;
 };

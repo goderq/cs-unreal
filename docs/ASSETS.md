@@ -52,6 +52,45 @@ UnrealEditor-Cmd.exe CSFusion.uproject -run=pythonscript -script=Scripts/render_
 (`Saved/WeaponProfiles/*.png`). По ним сняты точки хвата, цевья, прицела и
 дула в `Config/DefaultGame.ini` → `[/Script/CSFusion.CSWeaponPresentationSettings]`.
 
+### Карты: Poly Haven (v1.1)
+
+| Что | Путь в проекте | Откуда | В git |
+|---|---|---|---|
+| 16 PBR-текстур 2K (Diffuse, Normal GL, ARM): asphalt_02, concrete_floor_worn_001, concrete_wall_003, corrugated_iron, metal_plate, rusty_painted_metal, painted_concrete, red_brick_03, castle_brick_02_red, cobblestone_floor_08, stone_tiles_02, plastered_wall_02, white_plaster_02, yellow_plaster, clay_roof_tiles_02, weathered_planks | `SourceArt/Maps/PolyHaven/<id>/` → `Content/Environment/Textures`, инстансы в `Content/Environment/Surfaces` | [polyhaven.com](https://polyhaven.com), скачаны скриптом `Scripts/download_polyhaven.py` через официальный API | да |
+| 10 моделей 1K: Barrel_01, wooden_crate_01, wooden_crate_02, concrete_road_barrier, cardboard_box_01, utility_box_02, old_military_crate, wine_barrel_01, planter_box_01, painted_wooden_bench | `SourceArt/Maps/PolyHaven/<id>/` → `Content/Environment/Props` | то же | да |
+
+**Лицензия:** [CC0 1.0](https://polyhaven.com/license). Можно использовать и
+распространять без ограничений и без атрибуции.
+
+Материалы собраны из узлов движка в `Scripts/import_polyhaven.py`:
+- `M_EnvTriplanar`: мировая проекция по трём осям, поэтому текстура не
+  растягивается на блоках любого размера;
+- `M_PropPBR`: обычный PBR по UV для пропсов.
+
+Обе карты (`Lvl_Depot`, `Lvl_OldTown`) целиком строит `Scripts/build_maps.py`.
+Этот файл и есть их дизайн. Треугольная призма для фронтонов
+(`Content/Environment/Meshes/SM_Wedge`) сделана им же через Geometry Script.
+
+### Звуки выстрелов: The Free Firearm Sound Library (v1.1)
+
+| Что | Путь | Откуда | В git |
+|---|---|---|---|
+| Выстрелы 6 видов оружия из реальных записей: Walther PPQ (пистолет), AK-47, AR-15 (M4), Carl Gustav M45 (SMG), Benelli Nova (дробовик), Tikka T3 .30-06 (снайперская) | `SourceArt/Audio/Weapons/S_Real_*_Fire.wav` → `Content/Audio/Weapons` | [opengameart.org/content/the-free-firearm-sound-library](https://opengameart.org/content/the-free-firearm-sound-library), авторы Ben Jaszczak, Brian Nelson, Kevin Heras, Matthew Nanney | только нарезанные клипы; исходный архив (194 МБ) лежит в `SourceArt/_download`, это игнорируется git |
+
+**Лицензия:** CC0 1.0: без ограничений, атрибуция не требуется.
+
+Как делаются клипы: `Scripts/prepare_weapon_sounds.py` вырезает первый выстрел
+от атаки до естественного хвоста, делает плавное затухание, нормализует и
+переводит в 44.1 кГц моно, чтобы звук работал в 3D.
+
+### Собственные ассеты проекта (v1.1)
+
+| Что | Путь | Как сделано |
+|---|---|---|
+| Осколочная граната: корпус «ананас», запал, рычаг, кольцо с чекой | `Content/Weapons/Grenade/SM_FragGrenade` | Geometry Script в `Scripts/bootstrap_v11.py` |
+| Звуки гранаты: взрыв, отскок, чека | `SourceArt/Audio/Weapons/S_Grenade_*.wav` | синтез в `generate_audio.py` |
+| Материал защиты на спавне («призрак») | `Content/FX/M_SpawnGhost` | узлы материала в `bootstrap_v11.py` |
+
 ### Собственные ассеты проекта
 
 | Что | Путь | Как сделано | В git |

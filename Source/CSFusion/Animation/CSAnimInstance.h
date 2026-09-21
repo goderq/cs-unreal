@@ -48,6 +48,8 @@ struct FCSAnimSnapshot
 	const UAnimSequence* Upper = nullptr;		// reload / equip / dry fire, whichever is active
 	const UAnimSequence* HitReact = nullptr;
 	const UAnimSequence* Death = nullptr;
+	const UAnimSequence* JumpStart = nullptr;
+	const UAnimSequence* LandRecovery = nullptr;
 
 	float IdleTime = 0.f;
 	float LocoPhase = 0.f;			// 0..1, shared by every walk/jog clip
@@ -67,6 +69,13 @@ struct FCSAnimSnapshot
 	float HitTime = -1.f;
 	float DeathTime = -1.f;
 	float DeathAlpha = 0.f;
+
+	/** v1.1: take-off clip time (< 0 inactive), landing additive time, crouch 0..1. */
+	float JumpStartTime = -1.f;
+	float LandTime = -1.f;
+	float LandWeight = 0.f;
+	float CrouchAlpha = 0.f;
+	float ThrowTime = -1.f;
 
 	/** Left hand IK onto the weapon (v1.0): target in hand_r bone space, cm. */
 	float LeftHandIKAlpha = 0.f;
@@ -92,6 +101,10 @@ private:
 	void SampleDirectional(const UAnimSequence* const Clips[8], FPoseContext& Out) const;
 	void SolveLeftHandIK(FPoseContext& Output) const;
 	void SolveTwoHandIK(FPoseContext& Output) const;
+	/** v1.1 procedural crouch: pelvis down, feet kept planted by leg IK, spine leaning in. */
+	void ApplyCrouch(FPoseContext& Output) const;
+	/** v1.1 procedural overarm throw (third person). */
+	void ApplyThrow(FPoseContext& Output) const;
 
 	FCSAnimSnapshot Snapshot;
 };
@@ -114,6 +127,8 @@ public:
 	void PlayDryFire();
 	void CancelUpperBody();
 	void PlayHitReact(bool bFromFront);
+	/** v1.1: overarm grenade throw. */
+	void PlayThrow(float StartAt = 0.f) { ThrowTime = StartAt; }
 
 	/**
 	 * v1.0: the left hand reaches for this point (hand_r bone space, cm) by
@@ -169,6 +184,8 @@ private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UAnimSequence>> WalkClips;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAnimSequence>> JogClips;
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> FallClip;
+	UPROPERTY(Transient) TObjectPtr<UAnimSequence> JumpStartClip;
+	UPROPERTY(Transient) TObjectPtr<UAnimSequence> LandClip;
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> AimUpClip;
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> AimDownClip;
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> FireClip;
@@ -203,6 +220,12 @@ private:
 	float HitTime = -1.f;
 	float DeathTime = -1.f;
 	float DeathAlpha = 0.f;
+	float JumpStartTime = -1.f;
+	float LandTime = -1.f;
+	float LandWeight = 0.f;
+	float CrouchAlpha = 0.f;
+	bool bWasFalling = false;
+	float ThrowTime = -1.f;
 
 	bool bLeftHandIK = false;
 	FVector LeftHandTargetInHandR = FVector::ZeroVector;

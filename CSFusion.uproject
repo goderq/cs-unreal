@@ -27,6 +27,13 @@
 			]
 		},
 		{
+			"Name": "GeometryScripting",
+			"Enabled": true,
+			"TargetAllowList": [
+				"Editor"
+			]
+		},
+		{
 			"Name": "PhotonFusion",
 			"Enabled": true
 		},

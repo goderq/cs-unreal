@@ -250,7 +250,8 @@ bool ACSPlayerInventory::SetEquippedSlot(int32 Slot)
 	if (Slot != INDEX_NONE)
 	{
 		const UCSItemDefinition* Item = GetItemInSlot(Slot);
-		if (!Item || !Item->IsWeapon())
+		// Weapons, and (v1.1) grenades, which are held and thrown.
+		if (!Item || (!Item->IsWeapon() && Item->ItemType != ECSItemType::Grenade))
 		{
 			return false;
 		}

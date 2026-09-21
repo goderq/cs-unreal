@@ -50,7 +50,7 @@ $uatArgs = @(
     "BuildCookRun", "-project=$Project", "-noP4", "-platform=Win64", "-clientconfig=$Config",
     "-build", "-cook", "-stage", "-pak", "-iostore", "-compressed", "-prereqs", "-archive",
     "-archivedirectory=$Archive",
-    "-map=/Game/Maps/Lvl_MainMenu+/Game/Maps/Lvl_Warehouse",
+    "-map=/Game/Maps/Lvl_MainMenu+/Game/Maps/Lvl_Warehouse+/Game/Maps/Lvl_Depot+/Game/Maps/Lvl_OldTown",
     "-unattended", "-utf8output"
 )
 if ($Config -eq "Shipping") { $uatArgs += @("-nodebuginfo", "-distribution") }

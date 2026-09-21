@@ -71,6 +71,30 @@ public:
 	int32 GetBotCount() const { return BotCount; }
 	ECSBotDifficulty GetBotDifficulty() const { return BotDifficulty; }
 
+	// --- Game mode (v1.1) ---------------------------------------------------
+	// Replicated for the same reason as the bots: a new Master Client after a
+	// migration continues the same match - mode, round, scores, streaks.
+
+	/** Authority: set the mode once per match (host's choice or -mode=). */
+	void ConfigureMode(ECSGameModeType Mode);
+	bool IsModeConfigured() const { return bModeConfigured; }
+	ECSGameModeType GetGameMode() const { return GameModeType; }
+	const struct FCSModeRules& GetRules() const;
+
+	int32 GetRoundNumber() const { return RoundNumber; }
+	/** Rounds modes: network time the buy window closes. 0 = closed. */
+	double GetBuyEndNetworkTime() const { return BuyEndNetworkTime; }
+	float GetBuyTimeRemaining() const;
+	ECSTeam GetWinnerTeam() const { return WinnerTeam; }
+	int32 GetWinnerPlayerId() const { return WinnerPlayerId; }
+	int32 GetLossStreak(ECSTeam Team) const { return Team == ECSTeam::Alpha ? LossStreakAlpha : LossStreakBravo; }
+
+	void SetRoundNumber(int32 Round);
+	void SetBuyEndNetworkTime(double Time);
+	void SetWinner(ECSTeam Team, int32 PlayerId);
+	void SetLossStreak(ECSTeam Team, int32 Streak);
+	void ResetTeamScores();
+
 protected:
 	/**
 	 * Fusion discovers replicated properties by scanning for Replicated /
@@ -99,6 +123,30 @@ protected:
 
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Bots")
 	ECSBotDifficulty BotDifficulty = ECSBotDifficulty::Normal;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	ECSGameModeType GameModeType = ECSGameModeType::Deathmatch;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	bool bModeConfigured = false;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	int32 RoundNumber = 0;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	double BuyEndNetworkTime = 0.0;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	ECSTeam WinnerTeam = ECSTeam::None;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	int32 WinnerPlayerId = 0;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	int32 LossStreakAlpha = 0;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	int32 LossStreakBravo = 0;
 
 	UFUNCTION()
 	void OnRep_MatchPhase();

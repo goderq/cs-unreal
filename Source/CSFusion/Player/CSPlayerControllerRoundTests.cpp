@@ -2,7 +2,7 @@
 //
 // v1.0 round-flow self-test (-cstestround, use with -roundtime=20 -bots=2):
 //   1. hold the scoreboard key (real input) -> scoreboard drawn, release -> hidden;
-//   2. at the end of the round -> "ROUND OVER" banner and the scoreboard by itself;
+//   2. at the end of the round -> "MATCH OVER" banner and the scoreboard by itself;
 //   3. the next round starts with every player's kills and deaths at zero.
 
 #include "Player/CSPlayerController.h"
@@ -75,7 +75,7 @@ void ACSPlayerController::CSTestRound()
 				if (!RoundTestSawPostMatch && Phase == ECSMatchPhase::PostMatch)
 				{
 					// Give the HUD a frame to raise the banner.
-					if (Hud3->GetBannerTitle() != TEXT("ROUND OVER"))
+					if (Hud3->GetBannerTitle() != TEXT("MATCH OVER"))
 					{
 						return;
 					}

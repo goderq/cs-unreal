@@ -60,7 +60,7 @@ namespace CSUI
 			return Style;
 		};
 
-		static const FButtonStyle NormalStyle  = Make(Hover, FLinearColor(0.17f, 0.19f, 0.23f, 1.f), AccentDim);
+		static const FButtonStyle NormalStyle  = Make(PanelRaised, Hover, AccentDim);
 		static const FButtonStyle PrimaryStyle = Make(AccentDim, Accent * 0.8f, Accent);
 		static const FButtonStyle DangerStyle  = Make(FLinearColor(0.30f, 0.07f, 0.07f, 1.f), FLinearColor(0.55f, 0.12f, 0.11f, 1.f), Danger);
 		static const FButtonStyle NavStyle     = Make(FLinearColor::Transparent, Hover, AccentDim);
@@ -178,6 +178,45 @@ namespace CSUI
 			}
 		}
 		return FText::FromString(Tag);
+	}
+
+	FLinearColor TeamColor(uint8 Team)
+	{
+		return Team == 1 ? TeamAlpha : (Team == 2 ? TeamBravo : Accent);
+	}
+
+	FText MoneyText(int32 Amount)
+	{
+		FNumberFormattingOptions Options;
+		Options.UseGrouping = true;
+		return FText::FromString(TEXT("$") + FText::AsNumber(Amount, &Options).ToString());
+	}
+
+	FText ClockText(float Seconds)
+	{
+		const int32 Total = FMath::Max(0, FMath::CeilToInt(Seconds));
+		return FText::FromString(FString::Printf(TEXT("%d:%02d"), Total / 60, Total % 60));
+	}
+
+	TSharedRef<SWidget> MakeStatBar(const TAttribute<float>& Fraction, const FLinearColor& Color, float Height)
+	{
+		// Track + fill; the fill width follows the attribute every frame.
+		return SNew(SBox).HeightOverride(Height).WidthOverride(220.f)
+			[
+				SNew(SOverlay)
+				+ SOverlay::Slot()
+				[
+					SNew(SImage).Image(WhiteBrush()).ColorAndOpacity(FLinearColor(1.f, 1.f, 1.f, 0.08f))
+				]
+				+ SOverlay::Slot().HAlign(HAlign_Left)
+				[
+					SNew(SBox)
+					.WidthOverride_Lambda([Fraction]() { return 220.f * FMath::Clamp(Fraction.Get(), 0.f, 1.f); })
+					[
+						SNew(SImage).Image(WhiteBrush()).ColorAndOpacity(Color)
+					]
+				]
+			];
 	}
 }
 

@@ -310,6 +310,23 @@ def make_music():
     write("Music", "S_Music_Menu", out, peak=0.6)
 
 
+def make_grenade():
+    # v1.1 grenade. Its own random stream, so the earlier sounds stay byte-identical.
+    global rng
+    rng = random.Random(4242)
+    boom = mix(
+        env_exp(sine(62, 1.6, 26), 0.45),
+        gain(env_exp(lowpass(noise(1.8), 1800, 250), 0.35), 1.2),
+        gain(env_exp(highpass(noise(0.12), 2500), 0.03), 0.8),
+    )
+    boom = echo(soft_clip(boom, 2.6), [(0.09, 0.35), (0.21, 0.22), (0.43, 0.12)])
+    write("Weapons", "S_Grenade_Explode", fade_tail(boom, 0.2), peak=0.95)
+    clink = mix(resonator(env_exp(noise(0.25), 0.004), 2300, 0.9985), gain(resonator(env_exp(noise(0.25), 0.004), 3700, 0.998), 0.6))
+    write("Weapons", "S_Grenade_Bounce", env_exp(clink, 0.07), peak=0.5)
+    pin = mix(mechanical_click(3200, 0.012, 7000), gain(resonator(env_exp(noise(0.35), 0.003), 4100, 0.9992), 0.35), offsets=[0.0, 0.05])
+    write("Weapons", "S_Grenade_Pin", pin, peak=0.55)
+
+
 if __name__ == "__main__":
     make_weapons()
     make_player()
@@ -317,4 +334,5 @@ if __name__ == "__main__":
     make_feedback()
     make_ui()
     make_music()
+    make_grenade()
     print("done ->", ROOT)

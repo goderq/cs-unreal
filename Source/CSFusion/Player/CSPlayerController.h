@@ -65,6 +65,10 @@ public:
 
 	void CloseMenus();
 
+	/** v1.1 buy menu on/off (B). Only opens while the shop is open for this player. */
+	void ToggleShopScreen();
+	bool IsShopOpen() const { return bShopOpen; }
+
 	bool IsInventoryOpen() const { return bInventoryOpen; }
 	bool IsPauseMenuOpen() const { return bPauseOpen; }
 
@@ -126,6 +130,28 @@ protected:
 	bool RoundTestSawPostMatch = false;
 	float RoundTestElapsed = 0.f;
 	int32 RoundTestKillsAtEnd = 0;
+
+	/** v1.1 self-tests (CSPlayerControllerModeTests.cpp). */
+	UFUNCTION(Exec)
+	void CSTestTour();
+	UFUNCTION(Exec)
+	void CSTestModes();
+	UFUNCTION(Exec)
+	void CSTestComp();
+	UFUNCTION(Exec)
+	void CSTestPoses();
+	TWeakObjectPtr<class ACSCharacter> PoseBot;
+	FTimerHandle TestModesTimer;
+	TArray<FTransform> TourPoints;
+	int32 TourIndex = -1;
+	int32 ModesStep = 0;
+	int32 ModesMoneyBefore = 0;
+	int32 ModesGrenadesBefore = 0;
+	bool ModesGrenadeThrown = false;
+	int32 CompRoundAtStart = 0;
+	float CompElapsed = 0.f;
+	int32 CompChecked = 0;
+	int32 CompMoneyBefore = 0;
 
 	/** v1.0 weapon presentation self-test, enabled with -cstestweapons. */
 	UFUNCTION(Exec)
@@ -193,6 +219,9 @@ protected:
 	TSharedPtr<SWidget> InventoryHost;
 	bool bPauseOpen = false;
 	bool bInventoryOpen = false;
+	TSharedPtr<class SCSShopPanel> ShopPanel;
+	TSharedPtr<SWidget> ShopHost;
+	bool bShopOpen = false;
 	bool bScoreboardHeld = false;
 
 	// --- Stage 4 self-tests (CSPlayerControllerLootTests.cpp) ---

@@ -36,6 +36,8 @@ enum class ECSRequestKind : uint8
 	Pickup,
 	Slot,
 	Drop,
+	Buy,
+	Throw,
 	Count
 };
 

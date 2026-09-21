@@ -54,9 +54,8 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Match")
 	float WarmupSeconds = 5.f;
 
-	/** Round length in seconds. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Match")
-	float RoundSeconds = 600.f;
+	/** -roundtime=N (tests): overrides the mode's time limit / round length. 0 = use the mode's. */
+	float RoundSecondsOverride = 0.f;
 
 	/** Post-match scoreboard time before the round restarts. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Match")
@@ -77,6 +76,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "CS|Match")
 	int32 GetNumPlayerStarts() const { return CachedPlayerStarts.Num(); }
 
+	/**
+	 * Start indices a team may use (v1.1). Starts whose PlayerStartTag is
+	 * "Alpha" / "Bravo" belong to that team; untagged ones serve anybody.
+	 * ECSTeam::None (free for all) gets every start.
+	 */
+	void GetSpawnIndicesForTeam(ECSTeam Team, TArray<int32>& OutIndices) const;
+
 protected:
 	/** Authority creates the single MatchDirector if the world has none. */
 	void EnsureMatchDirector();
@@ -85,6 +91,20 @@ protected:
 	void SpawnMapPickups();
 	/** Authority-only match-phase driver, ticked from Tick(). */
 	void UpdateMatchFlow();
+
+	// --- v1.1 per-mode flow (authority) ---
+	/** Authority: fix the mode from the creator's choice (or -mode=). */
+	void ConfigureModeIfNeeded();
+	float GetTimeLimit(const struct FCSModeRules& Rules) const;
+	/** Deathmatch / Team Deathmatch: kill limit or time. */
+	void UpdateScoreLimit(const FCSModeRules& Rules);
+	/** 5 vs 5: elimination or time decides a round; first to ScoreLimit rounds wins. */
+	void UpdateRounds(const FCSModeRules& Rules);
+	void BeginRound(int32 Round);
+	void FinishRound(ECSTeam Winner, const FCSModeRules& Rules);
+	/** Round result showing (WinnerTeam set, or the draw sentinel WinnerPlayerId -1). */
+	bool IsRoundDecided() const;
+	void FinishMatch(ECSTeam WinnerTeam, int32 WinnerPlayerId);
 
 	ACSGameState* GetCSGameState() const;
 

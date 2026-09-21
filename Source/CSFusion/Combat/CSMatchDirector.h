@@ -30,6 +30,7 @@
 #include "Core/CSCoreTypes.h"
 #include "Core/CSFusionCompat.h"
 #include "Combat/CSCheatGuard.h"
+#include "Items/CSShopSettings.h"
 #include "GameFramework/Actor.h"
 
 // Required because Records uses the FusionArraySize meta tag.
@@ -113,6 +114,26 @@ struct CSFUSION_API FCSPlayerCombatRecord
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
 	int32 ReloadSlot = INDEX_NONE;
 
+	// --- v1.1 game modes ---
+
+	/** ECSTeam as a byte: 0 none (free for all), 1 Alpha, 2 Bravo. */
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
+	uint8 Team = 0;
+
+	/** In-match currency, spent in the shop. */
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
+	int32 Money = 0;
+
+	/**
+	 * Spawn protection until this network time (0 = none). No damage is taken
+	 * while it lasts; in Deathmatch modes the shop is open exactly as long.
+	 * Moving, jumping, crouching or firing ends it early.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
+	double ProtectedUntil = 0.0;
+
+	ECSTeam GetTeam() const { return static_cast<ECSTeam>(Team); }
+
 	bool IsValidRecord() const { return PlayerId != 0; }
 };
 
@@ -128,6 +149,9 @@ struct FCSLoadoutView
 
 	/** INDEX_NONE = starter pistol, otherwise the inventory slot. */
 	int32 Slot = INDEX_NONE;
+
+	/** v1.1: a grenade stack is in hand (Weapon is its presentation stand-in; RoundsInMag = how many). */
+	bool bGrenade = false;
 
 	int32 RoundsInMag = 0;
 
@@ -195,6 +219,49 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "CS|Combat")
 	const TArray<FCSPlayerCombatRecord>& GetAllRecords() const { return Records; }
+
+	// --- v1.1 modes: reads (every peer) --------------------------------------
+
+	ECSTeam GetTeam(int32 PlayerId) const;
+	int32 GetMoney(int32 PlayerId) const;
+	/** Spawn protection active right now. */
+	bool IsProtected(int32 PlayerId) const;
+	float GetProtectionRemaining(int32 PlayerId) const;
+	/** Shop open for this player right now (mode rule, see CSShopSettings.h). */
+	bool CanBuy(int32 PlayerId) const;
+	/** Seconds the shop stays open for this player (0 = closed). */
+	float GetBuyTimeRemaining(int32 PlayerId) const;
+	/** Two players on the same team (never true in free for all). */
+	bool AreTeammates(int32 A, int32 B) const;
+	int32 CountAlive(ECSTeam Team) const;
+	int32 CountMembers(ECSTeam Team) const;
+
+	// --- v1.1 modes: authority writes ----------------------------------------
+
+	void AddMoney(int32 PlayerId, int32 Delta);
+	void CancelProtection(int32 PlayerId, const TCHAR* Why);
+	/** Validates everything (shop open, money, room) and delivers the item. */
+	ECSBuyResult TryBuy(int32 PlayerId, int32 ShopIndex);
+	/** Rounds modes: everyone back to life at their team's spawn, buy window open. */
+	void StartNewRound();
+	/** Match restart: scores, money, inventories, respawn everyone. */
+	void ResetForNewMatch();
+	/** Picks a spawn point for a player (team spawns, away from enemies). */
+	int32 PickSpawnPoint(int32 PlayerId) const;
+
+	// --- v1.1 grenades (authority) ---
+	/** Validates and consumes a grenade, then launches it on every peer. */
+	bool TryThrowGrenade(int32 PlayerId, const FVector& Origin, const FVector& Direction, const FVector& PawnLocation, const FVector& PawnVelocity);
+	/** The authority's copy of a grenade reached its fuse: damage, then tell everyone. */
+	void ExplodeGrenade(class ACSGrenade* Grenade);
+
+	SEND_FUSIONRPC(TargetAllClients)
+	void RpcGrenadeThrown(int32 Serial, int32 ThrowerId, FVector Origin, FVector Velocity);
+	void RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, FVector Origin, FVector Velocity);
+
+	SEND_FUSIONRPC(TargetAllClients)
+	void RpcGrenadeExploded(int32 Serial, FVector Location);
+	void RpcGrenadeExploded_Receive(int32 Serial, FVector Location);
 
 	// --- Authority-only writes ---------------------------------------------
 
@@ -339,6 +406,17 @@ private:
 	/** Players whose departure has been processed. Guards against double drops. */
 	TSet<int32> HandledDepartures;
 
+	// v1.1 spawn protection, authority-local: where each protected player must
+	// appear, and whether its pawn has arrived there yet (the owning client
+	// moves itself, so until it arrives it is still at its death spot).
+	TMap<int32, FVector> ProtectionSpawn;
+	TSet<int32> ProtectionArrived;
+
+	void BeginProtection(FCSPlayerCombatRecord& Record);
+	/** Full health, fresh starter magazine, alive at a start; bumps RespawnCounter so the owner teleports. */
+	void ResetLife(FCSPlayerCombatRecord& Record, int32 SpawnPointIndex);
+	void WatchProtection(FCSPlayerCombatRecord& Record, const class ACSCharacter* Pawn);
+
 	/** Last heartbeat value seen per player, and when it last changed. */
 	TMap<int32, TPair<int32, double>> HeartbeatSeen;
 
@@ -353,4 +431,9 @@ private:
 	TArray<FCSCombatEvent> PendingCombatEvents;
 	void FlushCombatEvents();
 	void QueueCombatEvent(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, ECSHitZone Zone);
+
+	/** Kill feed name while a grenade blast is being applied (else the thrower's weapon in hand). */
+	FString CombatWeaponOverride;
+	int32 NextGrenadeSerial = 1;
+	TMap<int32, double> LastThrowTime;
 };

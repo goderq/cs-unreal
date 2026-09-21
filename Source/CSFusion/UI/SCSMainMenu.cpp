@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Core/CSModeSettings.h"
 #include "UI/CSUIStyle.h"
 #include "UI/SCSInventoryPanel.h"
 #include "UI/SCSSettingsPanel.h"
@@ -141,7 +142,8 @@ FCSSessionRequest SCSMainMenu::MakeRequest() const
 	FCSSessionRequest Request;
 	Request.Region = GetSelectedRegion();
 	Request.bSelectRegion = !Request.Region.IsEmpty();
-	Request.InitialWorld = UCSSessionSubsystem::DefaultMatchWorld();
+	Request.Mode = SelectedMode;
+	Request.MapId = GetSelectedMap();
 	Request.BotCount = GetSelectedBotCount();
 	Request.BotDifficulty = GetSelectedBotDifficulty();
 	return Request;
@@ -164,7 +166,7 @@ void SCSMainMenu::StartPractice()
 	if (UCSSessionSubsystem* Session = GetSession())
 	{
 		UE_LOG(LogCSNet, Log, TEXT("Menu: offline practice with %d bot(s)."), GetSelectedBotCount());
-		Session->StartOfflinePractice(FMath::Max(1, GetSelectedBotCount()), GetSelectedBotDifficulty());
+		Session->StartOfflinePractice(FMath::Max(1, GetSelectedBotCount()), GetSelectedBotDifficulty(), SelectedMode, GetSelectedMap());
 	}
 }
 
@@ -209,7 +211,15 @@ TSharedRef<SWidget> SCSMainMenu::MakeNav()
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(STextBlock).Text(LOCTEXT("GameTitle", "CS FUSION")).Font(CSUI::Font(44, true)).ColorAndOpacity(CSUI::Text)
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(STextBlock).Text(LOCTEXT("GameTitleA", "CS ")).Font(CSUI::Font(46, true)).ColorAndOpacity(CSUI::Text)
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(STextBlock).Text(LOCTEXT("GameTitleB", "FUSION")).Font(CSUI::Font(46, true)).ColorAndOpacity(CSUI::Accent)
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 44.f)
 		[
@@ -271,15 +281,16 @@ TSharedRef<SWidget> SCSMainMenu::MakeHomePage()
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			CSUI::MakeHeader(LOCTEXT("Welcome", "WELCOME"),
-				LOCTEXT("WelcomeBody", "Pick up weapons, armor and medkits around the map. When a player dies or leaves, everything they carried drops as loot. Your starter pistol is always yours."))
+				LOCTEXT("WelcomeBody", "Three modes - Deathmatch, Team Deathmatch and 5 vs 5 - on three maps. Earn money for kills and rounds and spend it in the shop. Weapons are bought, not found; whatever a player carried drops when they die."))
 		]
 		+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("ControlsLabel", "CONTROLS")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KMove", "W A S D"), LOCTEXT("AMove", "Move  -  Space jump, Shift sprint, Ctrl crouch")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KFire", "LMB / RMB"), LOCTEXT("AFire", "Fire / aim")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KReload", "R"), LOCTEXT("AReload", "Reload")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KPick", "E / G"), LOCTEXT("APick", "Pick up / drop the weapon in hand")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KSlots", "1 - 7"), LOCTEXT("ASlots", "1 starter pistol, 2-7 inventory slots (medkit / armor are used)")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KInv", "TAB"), LOCTEXT("AInv", "Inventory")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KSlots", "1 - 7"), LOCTEXT("ASlots", "1 pistol, 2-7 inventory: weapons and grenades are held, medkit / armor used")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KShop", "B"), LOCTEXT("AShop", "Shop - while spawn-protected (DM / TDM) or during buy time (5 vs 5)")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KTab", "TAB  /  I"), LOCTEXT("ATab", "Scoreboard (hold)  /  inventory")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KEsc", "ESC"), LOCTEXT("AEsc", "Menu  -  resume, settings, leave match")) ]
 		+ SVerticalBox::Slot().FillHeight(1.f)[ SNew(SBox) ]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
@@ -292,6 +303,68 @@ TSharedRef<SWidget> SCSMainMenu::MakeHomePage()
 		];
 }
 
+TSharedRef<SWidget> SCSMainMenu::MakeChoiceTile(const FText& Title, const FText& TagText, const FText& Body, const FLinearColor& Color,
+	TFunction<bool()> IsSelected, TFunction<void()> OnPick, float Height)
+{
+	return SNew(SBox).HeightOverride(Height)
+		[
+			SNew(SButton).IsFocusable(false)
+			.ButtonStyle(&CSUI::ButtonStyle(CSUI::EButtonKind::Normal))
+			.ContentPadding(FMargin(0.f))
+			.OnClicked_Lambda([OnPick]() { OnPick(); return FReply::Handled(); })
+			[
+				SNew(SOverlay)
+				// Tint of the tile's colour; stronger when chosen.
+				+ SOverlay::Slot()
+				[
+					SNew(SImage).Image(CSUI::WhiteBrush())
+					.ColorAndOpacity_Lambda([IsSelected, Color]() { return FSlateColor(FLinearColor(Color.R, Color.G, Color.B, IsSelected() ? 0.22f : 0.06f)); })
+				]
+				+ SOverlay::Slot().VAlign(VAlign_Top)
+				[
+					SNew(SBox).HeightOverride(4.f)
+					[
+						SNew(SImage).Image(CSUI::WhiteBrush())
+						.ColorAndOpacity_Lambda([IsSelected, Color]() { return FSlateColor(IsSelected() ? Color : FLinearColor(1.f, 1.f, 1.f, 0.08f)); })
+					]
+				]
+				+ SOverlay::Slot().Padding(FMargin(18.f, 16.f))
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock).Text(TagText).Font(CSUI::Font(11, true))
+						.ColorAndOpacity_Lambda([IsSelected, Color]() { return FSlateColor(IsSelected() ? Color : CSUI::TextDim); })
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 6.f)
+					[
+						SNew(STextBlock).Text(Title).Font(CSUI::Font(21, true)).ColorAndOpacity(CSUI::Text)
+					]
+					+ SVerticalBox::Slot().FillHeight(1.f)
+					[
+						SNew(STextBlock).Text(Body).Font(CSUI::Font(12)).ColorAndOpacity(CSUI::TextDim).AutoWrapText(true)
+					]
+				]
+				+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top).Padding(FMargin(0.f, 14.f, 14.f, 0.f))
+				[
+					SNew(STextBlock).Text(LOCTEXT("Chosen", "SELECTED")).Font(CSUI::Font(10, true)).ColorAndOpacity(Color)
+					.Visibility_Lambda([IsSelected]() { return IsSelected() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+				]
+			]
+		];
+}
+
+FName SCSMainMenu::GetSelectedMap() const
+{
+	const TArray<FCSMapInfo>& Maps = UCSModeSettings::Get()->Maps;
+	return Maps.IsValidIndex(SelectedMapIndex) ? Maps[SelectedMapIndex].Id : NAME_None;
+}
+
+void SCSMainMenu::SelectMap(int32 Index)
+{
+	SelectedMapIndex = FMath::Clamp(Index, 0, FMath::Max(0, UCSModeSettings::Get()->Maps.Num() - 1));
+}
+
 TSharedRef<SWidget> SCSMainMenu::MakePlayPage()
 {
 	TArray<FText> Regions;
@@ -300,76 +373,107 @@ TSharedRef<SWidget> SCSMainMenu::MakePlayPage()
 		Regions.Add(FText::FromString(Name));
 	}
 
-	auto Card = [](const FText& Title, const FText& Body, FOnClicked OnClicked, bool bPrimary) -> TSharedRef<SWidget>
+	// --- Modes ---
+	struct FModeCard { ECSGameModeType Mode; FText Tag; FText Body; FLinearColor Color; };
+	const FModeCard Modes[] = {
+		{ ECSGameModeType::Deathmatch, LOCTEXT("DMTag", "FREE FOR ALL"),
+			LOCTEXT("DMBody", "Everyone against everyone. Respawn with 7 s of protection and a shop. First to 30 kills."), CSUI::Accent },
+		{ ECSGameModeType::TeamDeathmatch, LOCTEXT("TDMTag", "TEAMS  -  RESPAWN"),
+			LOCTEXT("TDMBody", "Alpha vs Bravo with respawns, spawn protection and a shop. First team to 75 kills."), CSUI::TeamAlpha },
+		{ ECSGameModeType::Competitive, LOCTEXT("CompTag", "TEAMS  -  ROUNDS"),
+			LOCTEXT("CompBody", "Five against five, one life per round, 15 s buy time, money for kills and rounds. First to 8 rounds. Bots fill the teams."), CSUI::TeamBravo },
+	};
+	TSharedRef<SHorizontalBox> ModeRow = SNew(SHorizontalBox);
+	for (int32 i = 0; i < UE_ARRAY_COUNT(Modes); ++i)
 	{
-		return SNew(SBox).Padding(FMargin(0.f, 5.f))
+		const ECSGameModeType Mode = Modes[i].Mode;
+		ModeRow->AddSlot().FillWidth(1.f).Padding(i == 0 ? 0.f : 10.f, 0.f, 0.f, 0.f)
+		[
+			MakeChoiceTile(UCSModeSettings::ModeName(Mode), Modes[i].Tag, Modes[i].Body, Modes[i].Color,
+				[this, Mode]() { return SelectedMode == Mode; }, [this, Mode]() { SelectedMode = Mode; }, 150.f)
+		];
+	}
+
+	// --- Maps ---
+	TSharedRef<SHorizontalBox> MapRow = SNew(SHorizontalBox);
+	const TArray<FCSMapInfo>& Maps = UCSModeSettings::Get()->Maps;
+	for (int32 i = 0; i < Maps.Num(); ++i)
+	{
+		MapRow->AddSlot().FillWidth(1.f).Padding(i == 0 ? 0.f : 10.f, 0.f, 0.f, 0.f)
+		[
+			MakeChoiceTile(FText::FromString(Maps[i].DisplayName.ToUpper()), LOCTEXT("MapTag", "MAP"), FText::FromString(Maps[i].Description),
+				CSUI::Money, [this, i]() { return SelectedMapIndex == i; }, [this, i]() { SelectedMapIndex = i; }, 120.f)
+		];
+	}
+
+	auto Action = [](const FText& Label, FOnClicked OnClicked, CSUI::EButtonKind Kind) -> TSharedRef<SWidget>
+	{
+		return SNew(SBox).HeightOverride(52.f)
 			[
-				SNew(SButton).IsFocusable(false)
-				.ButtonStyle(&CSUI::ButtonStyle(bPrimary ? CSUI::EButtonKind::Primary : CSUI::EButtonKind::Normal))
-				.ContentPadding(FMargin(22.f, 16.f))
-				.OnClicked(OnClicked)
-				[
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						SNew(STextBlock).Text(Title).Font(CSUI::Font(21, true)).ColorAndOpacity(CSUI::Text)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
-					[
-						SNew(STextBlock).Text(Body).Font(CSUI::Font(14)).ColorAndOpacity(CSUI::Text * 0.8f).AutoWrapText(true)
-					]
-				]
+				CSUI::MakeButton(Label, OnClicked, Kind, true, 17)
 			];
 	};
 
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight()
+	return SNew(SScrollBox)
+		+ SScrollBox::Slot()
 		[
-			CSUI::MakeHeader(LOCTEXT("PlayTitle", "PLAY"), LOCTEXT("PlaySub", "Online matches through Photon Cloud."))
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
-		[
-			CSUI::MakeRow(LOCTEXT("Region", "Region"), SAssignNew(RegionSelector, SCSSelector).Options(Regions))
-		]
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			CSUI::MakeRow(LOCTEXT("Bots", "Bots (if you create the match)"),
-				SAssignNew(BotCountSelector, SCSSelector)
-				.Options({ FText::AsNumber(0), FText::AsNumber(1), FText::AsNumber(2), FText::AsNumber(3), FText::AsNumber(4),
-					FText::AsNumber(5), FText::AsNumber(6), FText::AsNumber(7), FText::AsNumber(8) })
-				.SelectedIndex(3))
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
-		[
-			CSUI::MakeRow(LOCTEXT("BotDifficulty", "Bot difficulty"),
-				SAssignNew(BotDifficultySelector, SCSSelector)
-				.Options({ LOCTEXT("Easy", "Easy"), LOCTEXT("Normal", "Normal"), LOCTEXT("Hard", "Hard") })
-				.SelectedIndex(1))
-		]
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			Card(LOCTEXT("Quick", "QUICK MATCH"), LOCTEXT("QuickBody", "Join any open match. If there is none, a new one is created and others will join you."),
-				FOnClicked::CreateLambda([this]() { QuickMatch(); return FReply::Handled(); }), true)
-		]
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			Card(LOCTEXT("Create", "CREATE SESSION"), LOCTEXT("CreateBody", "Host a named match your friends can join."),
-				FOnClicked::CreateLambda([this]() { ShowPage(EPage::Create); return FReply::Handled(); }), false)
-		]
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			Card(LOCTEXT("Join", "JOIN SESSION"), LOCTEXT("JoinBody", "Join a match by its exact name."),
-				FOnClicked::CreateLambda([this]() { ShowPage(EPage::Join); return FReply::Handled(); }), false)
-		]
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			Card(LOCTEXT("Browser", "SESSION BROWSER"), LOCTEXT("BrowserBody", "See every open match in the region and pick one."),
-				FOnClicked::CreateLambda([this]() { ShowPage(EPage::Browser); return FReply::Handled(); }), false)
-		]
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			Card(LOCTEXT("Practice", "PRACTICE VS BOTS"), LOCTEXT("PracticeBody", "Offline match against bots - no internet needed."),
-				FOnClicked::CreateLambda([this]() { StartPractice(); return FReply::Handled(); }), false)
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				CSUI::MakeHeader(LOCTEXT("PlayTitle", "PLAY"), LOCTEXT("PlaySub", "Pick a mode and a map, then find or create a match. Joining an existing match uses its own mode and map."))
+			]
+			+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("ModeLabel", "MODE")) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)[ ModeRow ]
+			+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("MapLabel", "MAP")) ]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)[ MapRow ]
+			+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("OptionsLabel", "OPTIONS")) ]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				CSUI::MakeRow(LOCTEXT("Region", "Region"), SAssignNew(RegionSelector, SCSSelector).Options(Regions))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				CSUI::MakeRow(LOCTEXT("Bots", "Bots (if you create the match; 5 vs 5 fills teams itself)"),
+					SAssignNew(BotCountSelector, SCSSelector)
+					.Options({ FText::AsNumber(0), FText::AsNumber(1), FText::AsNumber(2), FText::AsNumber(3), FText::AsNumber(4),
+						FText::AsNumber(5), FText::AsNumber(6), FText::AsNumber(7), FText::AsNumber(8) })
+					.SelectedIndex(3))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 18.f)
+			[
+				CSUI::MakeRow(LOCTEXT("BotDifficulty", "Bot difficulty"),
+					SAssignNew(BotDifficultySelector, SCSSelector)
+					.Options({ LOCTEXT("Easy", "Easy"), LOCTEXT("Normal", "Normal"), LOCTEXT("Hard", "Hard") })
+					.SelectedIndex(1))
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.4f)
+				[
+					Action(LOCTEXT("Quick", "QUICK MATCH"), FOnClicked::CreateLambda([this]() { QuickMatch(); return FReply::Handled(); }), CSUI::EButtonKind::Primary)
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					Action(LOCTEXT("Practice", "PRACTICE VS BOTS"), FOnClicked::CreateLambda([this]() { StartPractice(); return FReply::Handled(); }), CSUI::EButtonKind::Normal)
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				[
+					Action(LOCTEXT("Create", "CREATE SESSION"), FOnClicked::CreateLambda([this]() { ShowPage(EPage::Create); return FReply::Handled(); }), CSUI::EButtonKind::Normal)
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					Action(LOCTEXT("Join", "JOIN BY NAME"), FOnClicked::CreateLambda([this]() { ShowPage(EPage::Join); return FReply::Handled(); }), CSUI::EButtonKind::Normal)
+				]
+				+ SHorizontalBox::Slot().FillWidth(1.f).Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					Action(LOCTEXT("Browser", "SESSION BROWSER"), FOnClicked::CreateLambda([this]() { ShowPage(EPage::Browser); return FReply::Handled(); }), CSUI::EButtonKind::Normal)
+				]
+			]
 		];
 }
 
@@ -664,6 +768,20 @@ void SCSMainMenu::RebuildRoomList()
 	{
 		const FString Name = Room.Name;
 		const bool bJoinable = Room.IsJoinable();
+		// v1.1: Quick Match rooms are named "QM <mode> <map> [#n]" - show that readably.
+		FString Display = Name;
+		if (Name.StartsWith(TEXT("QM ")))
+		{
+			TArray<FString> Parts;
+			Name.ParseIntoArrayWS(Parts);
+			ECSGameModeType Mode = ECSGameModeType::Deathmatch;
+			if (Parts.Num() >= 3 && UCSModeSettings::ParseModeTag(Parts[1], Mode))
+			{
+				const FCSMapInfo* Map = UCSModeSettings::Get()->FindMap(FName(*Parts[2]));
+				Display = FString::Printf(TEXT("Quick Match  -  %s  -  %s%s"), *UCSModeSettings::ModeName(Mode).ToString(),
+					Map ? *Map->DisplayName : *Parts[2], Parts.Num() > 3 ? *(TEXT("  ") + Parts[3]) : TEXT(""));
+			}
+		}
 
 		RoomListBox->AddSlot().AutoHeight().Padding(0.f, 3.f)
 		[
@@ -675,7 +793,7 @@ void SCSMainMenu::RebuildRoomList()
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().FillWidth(0.5f).VAlign(VAlign_Center)
 				[
-					SNew(STextBlock).Text(FText::FromString(Name)).Font(CSUI::Font(16, true)).ColorAndOpacity(CSUI::Text)
+					SNew(STextBlock).Text(FText::FromString(Display)).Font(CSUI::Font(16, true)).ColorAndOpacity(CSUI::Text)
 				]
 				+ SHorizontalBox::Slot().FillWidth(0.2f).VAlign(VAlign_Center)
 				[

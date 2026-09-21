@@ -7,6 +7,8 @@
 #include "AI/CSBotManager.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
+#include "Core/CSModeSettings.h"
+#include "Multiplayer/CSSessionSubsystem.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
 #include "GameFramework/PlayerState.h"
@@ -42,7 +44,7 @@ void ACSGameMode::BeginPlay()
 	float RoundOverride = 0.f;
 	if (FParse::Value(FCommandLine::Get(), TEXT("roundtime="), RoundOverride) && RoundOverride > 0.f)
 	{
-		RoundSeconds = FMath::Max(10.f, RoundOverride);
+		RoundSecondsOverride = FMath::Max(10.f, RoundOverride);
 	}
 
 	UE_LOG(LogCS, Log,
@@ -61,6 +63,7 @@ void ACSGameMode::BeginPlay()
 
 	if (UCSAuthority::IsGameAuthority(this))
 	{
+		ConfigureModeIfNeeded();
 		EnsureMatchDirector();
 		SpawnMapPickups();
 
@@ -120,6 +123,38 @@ AActor* ACSGameMode::GetPlayerStartByIndex(int32 Index) const
 
 	const int32 Wrapped = FMath::Abs(Index) % CachedPlayerStarts.Num();
 	return CachedPlayerStarts[Wrapped];
+}
+
+void ACSGameMode::GetSpawnIndicesForTeam(ECSTeam Team, TArray<int32>& OutIndices) const
+{
+	OutIndices.Reset();
+	const FName TeamTag = Team == ECSTeam::Alpha ? FName(TEXT("Alpha")) : (Team == ECSTeam::Bravo ? FName(TEXT("Bravo")) : NAME_None);
+
+	TArray<int32> Untagged;
+	for (int32 i = 0; i < CachedPlayerStarts.Num(); ++i)
+	{
+		const APlayerStart* Start = Cast<APlayerStart>(CachedPlayerStarts[i]);
+		const FName Tag = Start ? Start->PlayerStartTag : NAME_None;
+		if (Team == ECSTeam::None || Tag == TeamTag)
+		{
+			OutIndices.Add(i);
+		}
+		else if (Tag.IsNone())
+		{
+			Untagged.Add(i);
+		}
+	}
+	if (OutIndices.Num() == 0)
+	{
+		OutIndices = Untagged.Num() > 0 ? Untagged : TArray<int32>();
+	}
+	if (OutIndices.Num() == 0)
+	{
+		for (int32 i = 0; i < CachedPlayerStarts.Num(); ++i)
+		{
+			OutIndices.Add(i);
+		}
+	}
 }
 
 void ACSGameMode::CachePlayerStarts()
@@ -198,11 +233,15 @@ void ACSGameMode::UpdateMatchFlow()
 	CS_AUTHORITY_ONLY(this);
 
 	ACSGameState* GS = GetCSGameState();
-	if (!GS)
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!GS || !Director)
 	{
 		return;
 	}
 
+	ConfigureModeIfNeeded();
+
+	const FCSModeRules& Rules = GS->GetRules();
 	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
 	const int32 PlayerCount = UCSAuthority::GetRoomPlayerCount(this);
 
@@ -223,23 +262,35 @@ void ACSGameMode::UpdateMatchFlow()
 	case ECSMatchPhase::Warmup:
 		if (GS->GetPhaseTimeRemaining() <= 0.f)
 		{
-			GS->SetPhaseEndTime(Now + RoundSeconds);
+			// Fresh match: kills, money and inventories from warmup do not count.
+			GS->ResetTeamScores();
+			GS->SetWinner(ECSTeam::None, 0);
+			GS->SetLossStreak(ECSTeam::Alpha, 0);
+			GS->SetLossStreak(ECSTeam::Bravo, 0);
 			GS->SetMatchPhase(ECSMatchPhase::InProgress);
+			Director->ResetForNewMatch();
 
-			// Kills during warmup do not count.
-			if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+			if (Rules.bRounds)
 			{
-				Director->ResetScores();
+				BeginRound(1);
+			}
+			else
+			{
+				GS->SetRoundNumber(0);
+				GS->SetBuyEndNetworkTime(0.0);
+				GS->SetPhaseEndTime(Now + GetTimeLimit(Rules));
 			}
 		}
 		break;
 
 	case ECSMatchPhase::InProgress:
-		if (GS->GetPhaseTimeRemaining() <= 0.f)
+		if (Rules.bRounds)
 		{
-			GS->SetPhaseEndTime(Now + PostMatchSeconds);
-			GS->SetMatchPhase(ECSMatchPhase::PostMatch);
-			UE_LOG(LogCS, Log, TEXT("Round over."));
+			UpdateRounds(Rules);
+		}
+		else
+		{
+			UpdateScoreLimit(Rules);
 		}
 		break;
 
@@ -250,6 +301,181 @@ void ACSGameMode::UpdateMatchFlow()
 		}
 		break;
 	}
+}
+
+float ACSGameMode::GetTimeLimit(const FCSModeRules& Rules) const
+{
+	// -roundtime= (tests) overrides the configured limit.
+	return RoundSecondsOverride > 0.f ? RoundSecondsOverride : Rules.TimeLimitSeconds;
+}
+
+void ACSGameMode::FinishMatch(ECSTeam WinnerTeam, int32 WinnerPlayerId)
+{
+	ACSGameState* GS = GetCSGameState();
+	GS->SetWinner(WinnerTeam, WinnerPlayerId);
+	GS->SetBuyEndNetworkTime(0.0);
+	GS->SetPhaseEndTime(UCSAuthority::GetNetworkTimeSeconds(this) + PostMatchSeconds);
+	GS->SetMatchPhase(ECSMatchPhase::PostMatch);
+	UE_LOG(LogCS, Log, TEXT("Match over. Winner: team %d / player %d."), static_cast<int32>(WinnerTeam), WinnerPlayerId);
+}
+
+void ACSGameMode::UpdateScoreLimit(const FCSModeRules& Rules)
+{
+	ACSGameState* GS = GetCSGameState();
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+
+	if (Rules.bTeams)
+	{
+		// Team Deathmatch: first team to the kill limit, or the leader at time.
+		const int32 Alpha = GS->GetTeamScore(ECSTeam::Alpha);
+		const int32 Bravo = GS->GetTeamScore(ECSTeam::Bravo);
+		if (Alpha >= Rules.ScoreLimit || Bravo >= Rules.ScoreLimit || GS->GetPhaseTimeRemaining() <= 0.f)
+		{
+			FinishMatch(Alpha == Bravo ? ECSTeam::None : (Alpha > Bravo ? ECSTeam::Alpha : ECSTeam::Bravo), 0);
+		}
+		return;
+	}
+
+	// Deathmatch: first player to the kill limit, or the top fragger at time.
+	int32 BestId = 0;
+	int32 BestKills = -1;
+	bool bTie = false;
+	for (const FCSPlayerCombatRecord& Record : Director->GetAllRecords())
+	{
+		if (Record.Kills > BestKills)
+		{
+			BestKills = Record.Kills;
+			BestId = Record.PlayerId;
+			bTie = false;
+		}
+		else if (Record.Kills == BestKills)
+		{
+			bTie = true;
+		}
+	}
+	if (BestKills >= Rules.ScoreLimit || GS->GetPhaseTimeRemaining() <= 0.f)
+	{
+		FinishMatch(ECSTeam::None, bTie ? 0 : BestId);
+	}
+}
+
+void ACSGameMode::BeginRound(int32 Round)
+{
+	ACSGameState* GS = GetCSGameState();
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const FCSModeRules& Rules = GS->GetRules();
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+
+	GS->SetRoundNumber(Round);
+	GS->SetWinner(ECSTeam::None, 0);
+	GS->SetBuyEndNetworkTime(Now + Rules.BuySeconds);
+	GS->SetPhaseEndTime(Now + GetTimeLimit(Rules));
+	if (Round > 1)
+	{
+		Director->StartNewRound();
+	}
+	UE_LOG(LogCS, Log, TEXT("Round %d begins (buy time %.0fs)."), Round, Rules.BuySeconds);
+}
+
+void ACSGameMode::UpdateRounds(const FCSModeRules& Rules)
+{
+	ACSGameState* GS = GetCSGameState();
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+
+	// A decided round shows its result for RoundEndSeconds. The decision
+	// lives in the replicated WinnerTeam, so a master migration in the middle
+	// of it neither loses the result nor pays it out twice.
+	if (IsRoundDecided())
+	{
+		if (GS->GetPhaseTimeRemaining() > 0.f)
+		{
+			return;
+		}
+		const ECSTeam Winner = GS->GetWinnerTeam();
+		if (Winner != ECSTeam::None && GS->GetTeamScore(Winner) >= Rules.ScoreLimit)
+		{
+			FinishMatch(Winner, 0);
+			return;
+		}
+		BeginRound(GS->GetRoundNumber() + 1);
+		return;
+	}
+
+	const int32 AlphaMembers = Director->CountMembers(ECSTeam::Alpha);
+	const int32 BravoMembers = Director->CountMembers(ECSTeam::Bravo);
+	const int32 AlphaAlive = Director->CountAlive(ECSTeam::Alpha);
+	const int32 BravoAlive = Director->CountAlive(ECSTeam::Bravo);
+
+	ECSTeam Winner = ECSTeam::None;
+	bool bDecided = false;
+	if (AlphaMembers > 0 && BravoMembers > 0 && (AlphaAlive == 0 || BravoAlive == 0))
+	{
+		// Elimination.
+		Winner = AlphaAlive > 0 ? ECSTeam::Alpha : (BravoAlive > 0 ? ECSTeam::Bravo : ECSTeam::None);
+		bDecided = true;
+	}
+	else if (GS->GetPhaseTimeRemaining() <= 0.f)
+	{
+		// Time: more players standing wins; equal is a draw.
+		Winner = AlphaAlive == BravoAlive ? ECSTeam::None : (AlphaAlive > BravoAlive ? ECSTeam::Alpha : ECSTeam::Bravo);
+		bDecided = true;
+	}
+	if (!bDecided)
+	{
+		return;
+	}
+
+	FinishRound(Winner, Rules);
+}
+
+bool ACSGameMode::IsRoundDecided() const
+{
+	// WinnerTeam is set for the round-end pause; a draw marks it with the
+	// sentinel player id -1.
+	const ACSGameState* GS = GetCSGameState();
+	return GS && (GS->GetWinnerTeam() != ECSTeam::None || GS->GetWinnerPlayerId() == -1);
+}
+
+void ACSGameMode::FinishRound(ECSTeam Winner, const FCSModeRules& Rules)
+{
+	ACSGameState* GS = GetCSGameState();
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+
+	GS->SetWinner(Winner, Winner == ECSTeam::None ? -1 : 0);
+	GS->SetBuyEndNetworkTime(0.0);
+	GS->SetPhaseEndTime(UCSAuthority::GetNetworkTimeSeconds(this) + Rules.RoundEndSeconds);
+	if (Winner != ECSTeam::None)
+	{
+		GS->AddTeamScore(Winner, 1);
+	}
+
+	// CS economy: the winners get the win bonus; the losers a consolation that
+	// grows with every round lost in a row.
+	for (const ECSTeam Team : { ECSTeam::Alpha, ECSTeam::Bravo })
+	{
+		int32 Reward = 0;
+		if (Team == Winner)
+		{
+			Reward = Rules.RoundWinReward;
+			GS->SetLossStreak(Team, 0);
+		}
+		else
+		{
+			const int32 Streak = GS->GetLossStreak(Team);
+			Reward = FMath::Min(Rules.RoundLossReward + Streak * Rules.LossStreakBonus, Rules.LossRewardMax);
+			GS->SetLossStreak(Team, Streak + 1);
+		}
+		for (const FCSPlayerCombatRecord& Record : Director->GetAllRecords())
+		{
+			if (Record.GetTeam() == Team)
+			{
+				Director->AddMoney(Record.PlayerId, Reward);
+			}
+		}
+	}
+
+	UE_LOG(LogCS, Log, TEXT("Round %d won by team %d. Score %d : %d."), GS->GetRoundNumber(), static_cast<int32>(Winner),
+		GS->GetTeamScore(ECSTeam::Alpha), GS->GetTeamScore(ECSTeam::Bravo));
 }
 
 void ACSGameMode::AddInactivePlayer(APlayerState* LeavingPlayerState, APlayerController* PC)
@@ -273,4 +499,23 @@ void ACSGameMode::AddInactivePlayer(APlayerState* LeavingPlayerState, APlayerCon
 		// notification cannot create a second set of loot.
 		Director->RemovePlayer(PlayerNumber, ECSDeathReason::Disconnected);
 	}
+}
+
+void ACSGameMode::ConfigureModeIfNeeded()
+{
+	CS_AUTHORITY_ONLY(this);
+
+	// The mode is fixed by whoever created the room; a new master after a
+	// migration finds it already configured in the replicated GameState.
+	ACSGameState* GS = GetCSGameState();
+	if (!GS || GS->IsModeConfigured())
+	{
+		return;
+	}
+	ECSGameModeType Mode = ECSGameModeType::Deathmatch;
+	if (const UCSSessionSubsystem* Session = GetGameInstance()->GetSubsystem<UCSSessionSubsystem>())
+	{
+		Mode = Session->GetMatchMode();
+	}
+	GS->ConfigureMode(Mode);
 }

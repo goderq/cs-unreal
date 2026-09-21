@@ -80,4 +80,24 @@ public:
 	/** Hard cap on tracked players. Fusion networked arrays cap at 64. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Match", meta = (ClampMin = "2", ClampMax = "64"))
 	int32 MaxTrackedPlayers = 16;
+
+	// --- v1.1 grenade ---
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
+	float GrenadeFuseSeconds = 2.2f;
+
+	/** Throw speed along the view, cm/s (plus a little lift and the thrower's own motion). */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
+	float GrenadeThrowSpeed = 1450.f;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
+	float GrenadeRadius = 500.f;
+
+	/** Damage at the centre; falls off to nothing at the radius, and walls block it. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
+	float GrenadeMaxDamage = 98.f;
+
+	/** Seconds between two throws by one player (the authority enforces it). */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
+	float GrenadeThrowInterval = 0.9f;
 };

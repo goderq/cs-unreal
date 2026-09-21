@@ -47,6 +47,16 @@ public:
 	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
 	TSoftObjectPtr<USoundBase> JumpLand;
 
+	// v1.1 grenade
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> GrenadeExplode;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> GrenadeBounce;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> GrenadePin;
+
 	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
 	TSoftObjectPtr<USoundBase> BulletImpact;
 

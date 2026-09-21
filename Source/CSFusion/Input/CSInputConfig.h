@@ -89,6 +89,18 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Inventory")
 	TObjectPtr<UInputAction> IA_Drop;
 
+	/**
+	 * v1.1 shop (B). Created in code on first use rather than as an asset, so
+	 * the input data asset does not have to be regenerated.
+	 */
+	UInputAction* GetBuyMenuAction() const;
+
+private:
+	UPROPERTY(Transient)
+	mutable TObjectPtr<UInputAction> IA_BuyMenuRuntime;
+
+public:
+
 	// --- Runtime-built mapping context -------------------------------------
 	//
 	// The bindings are constructed in C++ rather than read from the
@@ -150,17 +162,20 @@ public:
 	FKey Key_Interact = EKeys::E;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
-	FKey Key_ToggleInventory = EKeys::Tab;
+	FKey Key_ToggleInventory = EKeys::I;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	FKey Key_PauseMenu = EKeys::Escape;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	// Not F1: in non-Shipping builds the engine binds F1 to the wireframe view mode.
-	FKey Key_Scoreboard = EKeys::Q;
+	FKey Key_Scoreboard = EKeys::Tab;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	FKey Key_Drop = EKeys::G;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
+	FKey Key_BuyMenu = EKeys::B;
 
 	/** Key 1 = starter pistol, keys 2..7 = inventory slots 1..6. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")

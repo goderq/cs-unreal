@@ -8,6 +8,7 @@
 
 #include "Animation/CSAnimInstance.h"
 #include "Camera/CameraComponent.h"
+#include "Characters/CSCharacterMovementComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/SkeletalMeshSocket.h"
@@ -107,6 +108,14 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 			ViewReloadTime = -1.f;
 		}
 	}
+	if (ViewThrowTime >= 0.f)
+	{
+		ViewThrowTime += DeltaSeconds;
+		if (ViewThrowTime > 0.7f)
+		{
+			ViewThrowTime = -1.f;
+		}
+	}
 	const bool bBusy = ViewEquipTime >= 0.f || ViewReloadTime >= 0.f;
 
 	// --- Aim blend ---------------------------------------------------------
@@ -129,7 +138,8 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 	{
 		// The model hangs off the camera, not the arms: mirror their visibility.
 		WeaponComp->SetVisibility(bHasModel && FirstPersonMesh->IsVisible());
-		WeaponComp->SetHiddenInGame(bScopedView);
+		// A thrown grenade leaves the hand at the release point.
+		WeaponComp->SetHiddenInGame(bScopedView || ViewThrowTime > 0.3f);
 	}
 
 	const FTransform HipDefault(FRotator(0.f, -90.f, 0.f), FirstPersonMeshOffset);
@@ -161,7 +171,30 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 	// Equip: rises from below, muzzle down. Reload: dips and rolls out, then back.
 	FVector ActionOffset = FVector::ZeroVector;
 	FRotator ActionRotation = FRotator::ZeroRotator;
-	if (ViewEquipTime >= 0.f)
+	if (ViewThrowTime >= 0.f)
+	{
+		// Overarm throw: pull back and up, whip forward, hand drops away.
+		const float T = ViewThrowTime;
+		if (T < 0.22f)
+		{
+			const float A = FMath::SmoothStep(0.f, 1.f, T / 0.22f);
+			ActionOffset = FVector(-8.f, 5.f, 12.f) * A;
+			ActionRotation = FRotator(35.f, 0.f, 12.f) * A;
+		}
+		else if (T < 0.36f)
+		{
+			const float A = FMath::SmoothStep(0.f, 1.f, (T - 0.22f) / 0.14f);
+			ActionOffset = FMath::Lerp(FVector(-8.f, 5.f, 12.f), FVector(28.f, -6.f, 4.f), A);
+			ActionRotation = FMath::Lerp(FRotator(35.f, 0.f, 12.f), FRotator(-35.f, 0.f, -8.f), A);
+		}
+		else
+		{
+			const float A = FMath::SmoothStep(0.f, 1.f, (T - 0.36f) / 0.34f);
+			ActionOffset = FMath::Lerp(FVector(28.f, -6.f, 4.f), FVector(0.f, 0.f, -30.f), A);
+			ActionRotation = FMath::Lerp(FRotator(-35.f, 0.f, -8.f), FRotator(-20.f, 0.f, 0.f), A);
+		}
+	}
+	else 	if (ViewEquipTime >= 0.f)
 	{
 		const float Down = 1.f - FMath::InterpEaseOut(0.f, 1.f, ViewEquipTime / 0.45f, 2.5f);
 		ActionOffset = FVector(-4.f, 0.f, -22.f) * Down;
@@ -188,7 +221,12 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 	// whatever its length. Aimed: the sight on the view axis.
 	const FVector HipGrip = Model->HipGrip.IsNearlyZero() ? FVector(22.f, 12.f, -22.f) : Model->HipGrip;
 	const FTransform Hip = PlaceModel(*Model, Model->Grip, Model->HipRotation, HipGrip);
-	const FTransform Ads = PlaceModel(*Model, Model->Sight, FRotator::ZeroRotator, FVector(Model->SightDistance, 0.f, 0.f));
+	// v1.1: never closer than would put the grip - and the hand on it - into
+	// the face. Long rifles with the rear sight far ahead of the grip (AK-47)
+	// used to shove hand and receiver right up to the eye.
+	const float GripBehindSight = (Model->Sight.X - Model->Grip.X) * Model->Scale;
+	const float AdsDistance = FMath::Max(Model->SightDistance, GripBehindSight + MinAdsGripDistance);
+	const FTransform Ads = PlaceModel(*Model, Model->Sight, FRotator::ZeroRotator, FVector(AdsDistance, 0.f, 0.f));
 	FTransform Weapon = BlendTransforms(Hip, Ads, Ease);
 	Weapon.SetScale3D(FVector(Model->Scale));
 
@@ -221,7 +259,7 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 void ACSCharacter::UpdateRemoteSmoothing(float DeltaSeconds)
 {
 	USkeletalMeshComponent* Body = GetMesh();
-	if (!Body || IsLocallyControlled() || DeltaSeconds <= 0.f)
+	if (!Body || IsLocallyControlled() || DeltaSeconds <= 0.f || bRagdoll)
 	{
 		return;
 	}
@@ -234,8 +272,6 @@ void ACSCharacter::UpdateRemoteSmoothing(float DeltaSeconds)
 		LastReplicatedLocation = Actor;
 		SmoothedVelocity = FVector::ZeroVector;
 		SmoothedYaw = Yaw;
-		BodyMeshBaseLocation = Body->GetRelativeLocation();
-		BodyMeshBaseRotation = Body->GetRelativeRotation();
 		bSmoothingInit = true;
 		return;
 	}
@@ -267,6 +303,69 @@ void ACSCharacter::UpdateRemoteSmoothing(float DeltaSeconds)
 
 	const FVector Offset = GetActorRotation().UnrotateVector(SmoothedLocation - Actor);
 	const float YawOffset = FMath::FindDeltaAngleDegrees(Yaw, SmoothedYaw);
-	Body->SetRelativeLocationAndRotation(BodyMeshBaseLocation + Offset,
-		BodyMeshBaseRotation + FRotator(0.f, YawOffset, 0.f));
+	// The base is re-read every frame: crouching moves it (ACharacter::OnStartCrouch).
+	Body->SetRelativeLocationAndRotation(GetBaseTranslationOffset() + Offset,
+		GetBaseRotationOffset().Rotator() + FRotator(0.f, YawOffset, 0.f));
+}
+
+// ---------------------------------------------------------------------------
+// v1.1 movement feel: crouch camera, landing dip, jump cooldown
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::OnStartCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust)
+{
+	Super::OnStartCrouch(HalfHeightAdjust, ScaledHalfHeightAdjust);
+	// The capsule centre just dropped: keep the eyes where they were and let
+	// UpdateCameraHeight glide them down, instead of a one-frame snap.
+	CameraZ += ScaledHalfHeightAdjust;
+}
+
+void ACSCharacter::OnEndCrouch(float HalfHeightAdjust, float ScaledHalfHeightAdjust)
+{
+	Super::OnEndCrouch(HalfHeightAdjust, ScaledHalfHeightAdjust);
+	CameraZ -= ScaledHalfHeightAdjust;
+}
+
+void ACSCharacter::Landed(const FHitResult& Hit)
+{
+	// Velocity still carries the fall here (the movement component flattens it after).
+	const float Impact = FMath::Max(0.f, -static_cast<float>(GetVelocity().Z));
+	Super::Landed(Hit);
+
+	LastLandingImpact = Impact;
+	LastLandedTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	// Kick the camera spring down; a long fall dips deeper.
+	LandDipVelocity -= FMath::Clamp(Impact * 0.09f, 15.f, 140.f);
+}
+
+bool ACSCharacter::CanJumpInternal_Implementation() const
+{
+	// No bunny hopping: a short pause after every landing.
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	return Super::CanJumpInternal_Implementation() && Now - LastLandedTime > 0.22;
+}
+
+void ACSCharacter::UpdateCameraHeight(float DeltaSeconds)
+{
+	if (!FirstPersonCamera || DeltaSeconds <= 0.f)
+	{
+		return;
+	}
+	const UCSCharacterMovementComponent* Move = GetCSMovement();
+	const float Target = (Move && Move->IsCrouching()) ? CrouchedCameraHeight : CameraHeight;
+	CameraZ = FMath::FInterpTo(CameraZ, Target, DeltaSeconds, 11.f);
+
+	// Damped spring for the landing dip.
+	constexpr float Stiffness = 170.f;
+	constexpr float Damping = 20.f;
+	LandDipVelocity += (-Stiffness * LandDip - Damping * LandDipVelocity) * DeltaSeconds;
+	LandDip = FMath::Clamp(LandDip + LandDipVelocity * DeltaSeconds, -12.f, 4.f);
+
+	// Blast shake: a quick jitter of the eye point that dies away.
+	ExplosionShake = FMath::FInterpConstantTo(ExplosionShake, 0.f, DeltaSeconds, 1.6f);
+	const float ShakeAmp = ExplosionShake * ExplosionShake * 4.f;
+	const double Time = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	const FVector Shake(0.f, FMath::Sin(Time * 71.0) * ShakeAmp, FMath::Sin(Time * 57.0 + 1.3) * ShakeAmp);
+
+	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, CameraZ + LandDip) + Shake);
 }

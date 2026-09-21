@@ -45,6 +45,11 @@ $Suites = @(
     @{ Name = "weapons";    Flags = "-cstestweapons";          Done = "WEAPON TEST: done";             Timeout = 150 },
     @{ Name = "round";     Flags = "-roundtime=20 -bots=2 -cstestround"; Done = "SCORES RESET|ROUND FLOW BROKEN"; Timeout = 120 },
     @{ Name = "cheat";     Flags = "-cstestcheat";            Done = "suspension lifted";             Timeout = 90 },
+    @{ Name = "modes";     Flags = "-mode=dm -cstestmodes";   Done = "MODES TEST: done";              Timeout = 120; Map = "/Game/Maps/Lvl_Depot" },
+    @{ Name = "comp";      Flags = "-mode=5v5 -roundtime=40 -cstestcomp"; Done = "ROUNDS OK|ROUNDS BROKEN"; Timeout = 240; Map = "/Game/Maps/Lvl_OldTown" },
+    @{ Name = "poses";     Flags = "-mode=dm -bots=1 -cstestposes"; Done = "RESPAWN POSE"; Timeout = 90; Map = "/Game/Maps/Lvl_Depot" },
+    @{ Name = "tourdepot"; Flags = "-cstesttour";             Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_Depot" },
+    @{ Name = "touroldtown"; Flags = "-cstesttour";           Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_OldTown" },
     @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT";              Timeout = 120 }
 )
 
@@ -59,6 +64,9 @@ function Add-Result([string]$Suite, [bool]$Ok, [string]$Detail) {
 # $StartMap = "" starts on the project's default map (the main menu).
 function Start-Client([string]$ClientArgs, [string]$LogName, [string]$StartMap = $Map) {
     $logArg = "-LOG=$LogName"
+    # Legacy suites test pickup and shooting as in v1.0: weapons on the floor,
+    # no spawn protection. The v1.1 mode suites (-cstestmodes*) run the real rules.
+    if ($ClientArgs -notmatch "cstestmodes|cstestposes|cstestcomp") { $ClientArgs = "-mapweapons -nospawnprotection $ClientArgs" }
     if ($Packaged) {
         return Start-Process -FilePath $GameExe -ArgumentList "$StartMap -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
     }
@@ -126,7 +134,8 @@ foreach ($s in $Suites) {
     $logPath = Join-Path $LogDir $logName
     if (Test-Path $logPath) { Remove-Item $logPath -Force }
 
-    $proc = Start-Client "-noautoconnect $($s.Flags)" $logName
+    $suiteMap = $(if ($s.Map) { $s.Map } else { $Map })
+    $proc = Start-Client "-noautoconnect $($s.Flags)" $logName $suiteMap
     $done = Wait-ForLine $logPath $s.Done $s.Timeout
     Stop-Client $proc
 

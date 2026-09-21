@@ -4,14 +4,18 @@
 
 #include "AI/CSBotManager.h"
 #include "Camera/PlayerCameraManager.h"
+#include "CanvasItem.h"
 #include "Characters/CSCharacter.h"
 #include "Combat/CSMatchDirector.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
+#include "Core/CSModeSettings.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
+#include "Fonts/FontMeasure.h"
+#include "Framework/Application/SlateApplication.h"
 #include "GameFramework/PlayerController.h"
 #include "GameModes/CSGameState.h"
 #include "Input/CSInputConfig.h"
@@ -20,29 +24,41 @@
 #include "Items/CSItemSettings.h"
 #include "Pickups/CSWorldPickup.h"
 #include "Player/CSPlayerController.h"
+#include "Rendering/SlateRenderer.h"
 #include "Settings/CSSettingsSubsystem.h"
+#include "Styling/CoreStyle.h"
+#include "UI/CSUIStyle.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
 
 namespace
 {
-	const FLinearColor GPanel(0.f, 0.f, 0.f, 0.45f);
-	const FLinearColor GPanelStrong(0.f, 0.f, 0.f, 0.6f);
-	const FLinearColor GText(0.95f, 0.96f, 0.97f, 1.f);
-	const FLinearColor GTextDim(0.62f, 0.65f, 0.70f, 1.f);
-	const FLinearColor GAccent(0.2f, 0.85f, 0.48f, 1.f);
-	const FLinearColor GHealth(0.92f, 0.94f, 0.95f, 1.f);
-	const FLinearColor GArmor(0.40f, 0.68f, 1.f, 1.f);
-	const FLinearColor GDanger(1.f, 0.30f, 0.28f, 1.f);
+	// Glass panels: dark, slightly blue, translucent.
+	const FLinearColor GPanel(0.010f, 0.014f, 0.024f, 0.62f);
+	const FLinearColor GPanelStrong(0.008f, 0.011f, 0.020f, 0.82f);
+	const FLinearColor GTrack(1.f, 1.f, 1.f, 0.10f);
+	const FLinearColor GHealth(0.95f, 0.96f, 0.97f, 1.f);
+	const FLinearColor GArmor(0.42f, 0.70f, 1.f, 1.f);
 
 	constexpr double GHitMarkerSeconds = 0.22;
 	constexpr double GKillMarkerSeconds = 0.45;
 	constexpr double GDamageIndicatorSeconds = 1.3;
 
-	// The engine's Canvas fonts are small (tuned for debug text); these bring
-	// the HUD to a readable size at the 1080p reference resolution.
-	constexpr float GMediumFontFactor = 1.5f;
-	constexpr float GLargeFontFactor = 1.9f;
+	FLinearColor WithAlpha(const FLinearColor& C, float A)
+	{
+		return FLinearColor(C.R, C.G, C.B, C.A * A);
+	}
+
+	FString Clock(float Seconds)
+	{
+		const int32 Total = FMath::Max(0, FMath::CeilToInt(Seconds));
+		return FString::Printf(TEXT("%d:%02d"), Total / 60, Total % 60);
+	}
+
+	FString TeamName(ECSTeam Team)
+	{
+		return Team == ECSTeam::Alpha ? TEXT("ALPHA") : (Team == ECSTeam::Bravo ? TEXT("BRAVO") : TEXT(""));
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -79,10 +95,21 @@ int32 ACSHUD::GetLocalPlayerId() const
 	return Pawn ? Pawn->GetOwningPlayerId() : UCSAuthority::GetLocalPlayerId(this);
 }
 
+const ACSGameState* ACSHUD::GetCSGameState() const
+{
+	return GetWorld() ? GetWorld()->GetGameState<ACSGameState>() : nullptr;
+}
+
 double ACSHUD::GetSecondsSinceHitMarker() const
 {
 	const UWorld* World = GetWorld();
 	return World ? World->GetRealTimeSeconds() - HitMarkerTime : 1000.0;
+}
+
+void ACSHUD::FlashNotice(const FText& Text)
+{
+	NoticeText = Text;
+	NoticeTime = GetWorld() ? GetWorld()->GetRealTimeSeconds() : 0.0;
 }
 
 void ACSHUD::HandleCombatEvent(const FCSCombatEvent& Event)
@@ -107,6 +134,13 @@ void ACSHUD::HandleCombatEvent(const FCSCombatEvent& Event)
 		{
 			KillFeed.RemoveAt(0);
 		}
+
+		if (Event.VictimId == Me)
+		{
+			LastKillerId = Event.InstigatorId;
+			LastKillerWeapon = Event.WeaponName;
+			bLastDeathHeadshot = Event.Zone == ECSHitZone::Head;
+		}
 	}
 
 	if (Event.InstigatorId == Me && Event.VictimId != Me)
@@ -129,35 +163,57 @@ void ACSHUD::HandleCombatEvent(const FCSCombatEvent& Event)
 // Drawing helpers
 // ---------------------------------------------------------------------------
 
+FSlateFontInfo ACSHUD::HudFont(float Size, bool bBold) const
+{
+	// Slate sizes are points; 0.75 turns the intended pixel height at 1080p
+	// into points (Slate renders 1pt as 96/72 px).
+	return FCoreStyle::GetDefaultFontStyle(bBold ? "Bold" : "Regular", FMath::Max(5, FMath::RoundToInt(Size * 0.75f * S)));
+}
+
 void ACSHUD::DrawBox(const FLinearColor& Color, float X, float Y, float W, float H)
 {
 	DrawRect(Color, X * S, Y * S, W * S, H * S);
 }
 
-float ACSHUD::TextWidth(const FString& Text, float Scale, bool bLarge) const
+void ACSHUD::DrawFrame(const FLinearColor& Color, float X, float Y, float W, float H, float T)
 {
-	Scale *= bLarge ? GLargeFontFactor : GMediumFontFactor;
-	UFont* Font = GEngine ? (bLarge ? GEngine->GetLargeFont() : GEngine->GetMediumFont()) : nullptr;
-	if (!Font)
+	DrawBox(Color, X, Y, W, T);
+	DrawBox(Color, X, Y + H - T, W, T);
+	DrawBox(Color, X, Y + T, T, H - 2.f * T);
+	DrawBox(Color, X + W - T, Y + T, T, H - 2.f * T);
+}
+
+float ACSHUD::TextWidth(const FString& Text, float Size, bool bBold) const
+{
+	if (Text.IsEmpty() || !FSlateApplication::IsInitialized() || !FSlateApplication::Get().GetRenderer())
 	{
 		return 0.f;
 	}
-	float W = 0.f;
-	float H = 0.f;
-	const_cast<ACSHUD*>(this)->GetTextSize(Text, W, H, Font, Scale * S);
-	return W / S;
+	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+	return Measure->Measure(Text, HudFont(Size, bBold)).X / FMath::Max(S, 0.01f);
 }
 
-void ACSHUD::DrawLabel(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale, bool bLarge, float AlignX)
+void ACSHUD::DrawLabel(const FString& Text, float X, float Y, const FLinearColor& Color, float Size, bool bBold, float AlignX)
 {
-	const float FontScale = Scale * (bLarge ? GLargeFontFactor : GMediumFontFactor);
-	UFont* Font = GEngine ? (bLarge ? GEngine->GetLargeFont() : GEngine->GetMediumFont()) : nullptr;
+	if (Text.IsEmpty() || !Canvas)
+	{
+		return;
+	}
 	if (AlignX != 0.f)
 	{
-		X -= TextWidth(Text, Scale, bLarge) * AlignX;
+		X -= TextWidth(Text, Size, bBold) * AlignX;
 	}
-	DrawText(Text, FLinearColor(0.f, 0.f, 0.f, 0.7f * Color.A), (X + 1.5f) * S, (Y + 1.5f) * S, Font, FontScale * S);
-	DrawText(Text, Color, X * S, Y * S, Font, FontScale * S);
+	FCanvasTextItem Item(FVector2D(X * S, Y * S), FText::FromString(Text), HudFont(Size, bBold), Color);
+	// The Slate font needs a runtime-cache UFont next to it, or the item counts
+	// as having no font and draws nothing (FCanvasSimpleTextItem::HasValidText).
+	static TWeakObjectPtr<UFont> RuntimeFont;
+	if (!RuntimeFont.IsValid())
+	{
+		RuntimeFont = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/Roboto.Roboto"));
+	}
+	Item.Font = RuntimeFont.IsValid() ? RuntimeFont.Get() : (GEngine ? GEngine->GetMediumFont() : nullptr);
+	Item.EnableShadow(FLinearColor(0.f, 0.f, 0.f, 0.55f * Color.A), FVector2D(FMath::Max(1.f, 1.5f * S)));
+	Canvas->DrawItem(Item);
 }
 
 FString ACSHUD::PlayerLabel(int32 PlayerId) const
@@ -167,6 +223,17 @@ FString ACSHUD::PlayerLabel(int32 PlayerId) const
 		return TEXT("You");
 	}
 	return CSBots::IsBotId(PlayerId) ? ACSBotManager::GetBotName(PlayerId) : FString::Printf(TEXT("Player %d"), PlayerId);
+}
+
+FLinearColor ACSHUD::PlayerColor(int32 PlayerId) const
+{
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const ECSTeam Team = Director ? Director->GetTeam(PlayerId) : ECSTeam::None;
+	if (Team != ECSTeam::None)
+	{
+		return CSUI::TeamColor(static_cast<uint8>(Team));
+	}
+	return PlayerId == GetLocalPlayerId() ? CSUI::Accent : CSUI::Text;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,7 +256,8 @@ void ACSHUD::DrawHUD()
 	KillFeed.RemoveAll([this, Now](const FKillFeedEntry& E) { return Now - E.Time > KillFeedSeconds; });
 	DamageIndicators.RemoveAll([Now](const FDamageIndicator& D) { return Now - D.Time > GDamageIndicatorSeconds; });
 
-	DrawMatchInfo();
+	DrawScoreBar();
+	DrawModeTag();
 	DrawKillFeed();
 	DrawFpsCounter();
 
@@ -200,19 +268,17 @@ void ACSHUD::DrawHUD()
 	if (!Pawn || !Director || !Director->GetRecord(Pawn->GetOwningPlayerId(), Record))
 	{
 		const FString Waiting = (!Pawn || !Director) ? TEXT("Waiting for match state...") : TEXT("Joining match...");
-		DrawLabel(Waiting, W * 0.5f, 600.f, GText, 1.2f, false, 0.5f);
+		DrawLabel(Waiting, W * 0.5f, 600.f, CSUI::Text, 24.f, false, 0.5f);
 		DrawRoundOverlays();
 		return;
 	}
 
-	// The scoreboard takes the centre of the screen; the death overlay would
-	// show through it.
 	if (!Record.bAlive)
 	{
+		// The scoreboard takes the centre of the screen; the death screen would show through it.
 		if (!ShouldShowScoreboard())
 		{
-			const double NetNow = UCSAuthority::GetNetworkTimeSeconds(this);
-			DrawDeathOverlay(static_cast<float>(FMath::Max(0.0, Record.RespawnAtNetworkTime - NetNow)));
+			DrawDeathOverlay(Record);
 		}
 	}
 	else
@@ -220,17 +286,20 @@ void ACSHUD::DrawHUD()
 		DrawCrosshair();
 		DrawHitMarker();
 		DrawInteractionPrompt();
+		DrawShopStatus(Record);
 	}
 
 	DrawDamageIndicators();
-	DrawVitals();
+	DrawMoney(Record);
+	DrawVitals(Record);
 	DrawAmmo();
 	DrawQuickSlots();
+	DrawNotice();
 	DrawRoundOverlays();
 }
 
 // ---------------------------------------------------------------------------
-// Round flow: phase banner and scoreboard (v1.0)
+// Round flow: banners and scoreboard
 // ---------------------------------------------------------------------------
 
 TArray<FCSPlayerCombatRecord> ACSHUD::SortedScores(const ACSMatchDirector* Director)
@@ -258,10 +327,10 @@ TArray<FCSPlayerCombatRecord> ACSHUD::SortedScores(const ACSMatchDirector* Direc
 
 bool ACSHUD::ShouldShowScoreboard() const
 {
-	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
+	const ACSGameState* GS = GetCSGameState();
 	const ACSPlayerController* PC = Cast<ACSPlayerController>(GetOwningPlayerController());
 	const bool bPostMatch = GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch;
-	const bool bMenuOpen = PC && (PC->IsPauseMenuOpen() || PC->IsInventoryOpen());
+	const bool bMenuOpen = PC && (PC->IsPauseMenuOpen() || PC->IsInventoryOpen() || PC->IsShopOpen());
 	return !bMenuOpen && (bPostMatch || (PC && PC->IsScoreboardHeld()));
 }
 
@@ -279,24 +348,37 @@ void ACSHUD::DrawRoundOverlays()
 
 void ACSHUD::UpdatePhaseBanner()
 {
-	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
+	const ACSGameState* GS = GetCSGameState();
 	if (!GS)
 	{
 		return;
 	}
+	const FCSModeRules& Rules = GS->GetRules();
 	const uint8 Phase = static_cast<uint8>(GS->GetMatchPhase());
-	if (Phase == LastSeenPhase)
+	const bool bRoundDecided = GS->GetMatchPhase() == ECSMatchPhase::InProgress && Rules.bRounds
+		&& (GS->GetWinnerTeam() != ECSTeam::None || GS->GetWinnerPlayerId() == -1);
+	const int32 Round = GS->GetRoundNumber();
+
+	const bool bPhaseChanged = Phase != LastSeenPhase;
+	const bool bRoundChanged = Round != LastSeenRound;
+	const bool bDecidedChanged = bRoundDecided != bLastRoundDecided;
+	if (!bPhaseChanged && !bRoundChanged && !bDecidedChanged)
 	{
 		return;
 	}
-	// The first phase seen after joining is the state of an ongoing match, not
-	// a change - no banner for it.
+	// The first state seen after joining is the state of an ongoing match, not a change.
 	const bool bFirstSight = LastSeenPhase == 0xFF;
 	LastSeenPhase = Phase;
+	LastSeenRound = Round;
+	bLastRoundDecided = bRoundDecided;
 	if (bFirstSight)
 	{
 		return;
 	}
+
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const ECSTeam MyTeam = Director ? Director->GetTeam(GetLocalPlayerId()) : ECSTeam::None;
+	BannerColor = CSUI::Accent;
 
 	switch (GS->GetMatchPhase())
 	{
@@ -304,27 +386,58 @@ void ACSHUD::UpdatePhaseBanner()
 		BannerTitle = TEXT("WARMUP");
 		BannerSubtitle = TEXT("Kills during warmup do not count");
 		break;
+
 	case ECSMatchPhase::InProgress:
-		BannerTitle = TEXT("ROUND STARTED");
-		BannerSubtitle = TEXT("Good luck");
-		break;
-	case ECSMatchPhase::PostMatch:
-	{
-		BannerTitle = TEXT("ROUND OVER");
-		const TArray<FCSPlayerCombatRecord> Scores = SortedScores(ACSMatchDirector::Get(this));
-		if (Scores.Num() == 0 || Scores[0].Kills == 0)
+		if (bRoundDecided)
 		{
-			BannerSubtitle = TEXT("No kills this round");
+			const ECSTeam Winner = GS->GetWinnerTeam();
+			BannerTitle = Winner == ECSTeam::None ? TEXT("ROUND DRAW") : FString::Printf(TEXT("%s WINS THE ROUND"), *TeamName(Winner));
+			BannerSubtitle = FString::Printf(TEXT("ALPHA  %d  :  %d  BRAVO"), GS->GetTeamScore(ECSTeam::Alpha), GS->GetTeamScore(ECSTeam::Bravo));
+			BannerColor = Winner == ECSTeam::None ? CSUI::TextDim : CSUI::TeamColor(static_cast<uint8>(Winner));
 		}
-		else if (Scores.Num() > 1 && Scores[1].Kills == Scores[0].Kills && Scores[1].Deaths == Scores[0].Deaths)
+		else if (Rules.bRounds)
 		{
-			BannerSubtitle = FString::Printf(TEXT("Draw at %d kills"), Scores[0].Kills);
+			BannerTitle = FString::Printf(TEXT("ROUND %d"), FMath::Max(1, Round));
+			BannerSubtitle = FString::Printf(TEXT("Buy time %.0f s  -  press B to open the shop"), Rules.BuySeconds);
+			BannerColor = MyTeam != ECSTeam::None ? CSUI::TeamColor(static_cast<uint8>(MyTeam)) : CSUI::Accent;
 		}
 		else
 		{
-			const bool bMe = Scores[0].PlayerId == GetLocalPlayerId();
-			BannerSubtitle = FString::Printf(TEXT("%s %s with %d kills"), *PlayerLabel(Scores[0].PlayerId),
-				bMe ? TEXT("win") : TEXT("wins"), Scores[0].Kills);
+			BannerTitle = TEXT("MATCH STARTED");
+			BannerSubtitle = Rules.bTeams
+				? FString::Printf(TEXT("You are on team %s  -  first team to %d kills"), *TeamName(MyTeam), Rules.ScoreLimit)
+				: FString::Printf(TEXT("First to %d kills wins"), Rules.ScoreLimit);
+			BannerColor = MyTeam != ECSTeam::None ? CSUI::TeamColor(static_cast<uint8>(MyTeam)) : CSUI::Accent;
+		}
+		break;
+
+	case ECSMatchPhase::PostMatch:
+	{
+		BannerTitle = TEXT("MATCH OVER");
+		const ECSTeam WinnerTeam = GS->GetWinnerTeam();
+		if (Rules.bTeams)
+		{
+			BannerSubtitle = WinnerTeam == ECSTeam::None
+				? FString::Printf(TEXT("Draw  %d : %d"), GS->GetTeamScore(ECSTeam::Alpha), GS->GetTeamScore(ECSTeam::Bravo))
+				: FString::Printf(TEXT("%s wins  %d : %d%s"), *TeamName(WinnerTeam), GS->GetTeamScore(ECSTeam::Alpha),
+					GS->GetTeamScore(ECSTeam::Bravo), WinnerTeam == MyTeam ? TEXT("  -  VICTORY") : TEXT("  -  DEFEAT"));
+			BannerColor = WinnerTeam == ECSTeam::None ? CSUI::TextDim : CSUI::TeamColor(static_cast<uint8>(WinnerTeam));
+		}
+		else
+		{
+			const TArray<FCSPlayerCombatRecord> Scores = SortedScores(Director);
+			const int32 Winner = GS->GetWinnerPlayerId();
+			const int32 Kills = Scores.Num() > 0 ? Scores[0].Kills : 0;
+			if (Winner == 0 || Kills == 0)
+			{
+				BannerSubtitle = Kills == 0 ? TEXT("No kills this match") : FString::Printf(TEXT("Draw at %d kills"), Kills);
+			}
+			else
+			{
+				const bool bMe = Winner == GetLocalPlayerId();
+				BannerSubtitle = FString::Printf(TEXT("%s %s with %d kills"), *PlayerLabel(Winner), bMe ? TEXT("win") : TEXT("wins"), Kills);
+				BannerColor = bMe ? CSUI::Money : CSUI::Accent;
+			}
 		}
 		break;
 	}
@@ -337,7 +450,7 @@ void ACSHUD::UpdatePhaseBanner()
 
 void ACSHUD::DrawPhaseBanner()
 {
-	constexpr double Hold = 2.6;
+	constexpr double Hold = 2.8;
 	constexpr double Fade = 0.6;
 	const double Age = GetWorld()->GetRealTimeSeconds() - BannerTime;
 	if (Age < 0.0 || Age > Hold + Fade)
@@ -345,68 +458,141 @@ void ACSHUD::DrawPhaseBanner()
 		return;
 	}
 	const float Alpha = Age <= Hold ? 1.f : static_cast<float>(1.0 - (Age - Hold) / Fade);
+	// Slides open from the centre in the first 0.2 s.
+	const float Open = FMath::Clamp(static_cast<float>(Age / 0.2), 0.f, 1.f);
 	const float W = Canvas->ClipX / S;
-	DrawBox(FLinearColor(0.f, 0.f, 0.f, 0.55f * Alpha), 0.f, 250.f, W, 110.f);
-	DrawBox(FLinearColor(GAccent.R, GAccent.G, GAccent.B, 0.9f * Alpha), 0.f, 250.f, W, 3.f);
-	DrawLabel(BannerTitle, W * 0.5f, 262.f, FLinearColor(GText.R, GText.G, GText.B, Alpha), 1.6f, true, 0.5f);
-	DrawLabel(BannerSubtitle, W * 0.5f, 318.f, FLinearColor(GTextDim.R, GTextDim.G, GTextDim.B, Alpha), 1.f, false, 0.5f);
+	const float BandW = FMath::Lerp(200.f, 900.f, Open);
+	const float X = W * 0.5f - BandW * 0.5f;
+	const float Y = 230.f;
+
+	DrawBox(WithAlpha(GPanelStrong, Alpha), X, Y, BandW, 116.f);
+	DrawBox(WithAlpha(BannerColor, 0.95f * Alpha), X, Y, BandW, 4.f);
+	DrawBox(WithAlpha(BannerColor, 0.35f * Alpha), X, Y + 112.f, BandW, 4.f);
+	if (Open >= 1.f)
+	{
+		DrawLabel(BannerTitle, W * 0.5f, Y + 14.f, WithAlpha(CSUI::Text, Alpha), 48.f, true, 0.5f);
+		DrawLabel(BannerSubtitle, W * 0.5f, Y + 74.f, WithAlpha(CSUI::TextDim, Alpha), 20.f, false, 0.5f);
+	}
+}
+
+float ACSHUD::DrawScoreTable(const TArray<FCSPlayerCombatRecord>& Rows, float X, float Y, float Width,
+	const FString& Title, const FLinearColor& Color, bool bShowMoney, int32 TeamScore)
+{
+	constexpr float RowH = 36.f;
+	const int32 Me = GetLocalPlayerId();
+
+	// Header strip in the team colour.
+	DrawBox(WithAlpha(Color, 0.22f), X, Y, Width, 44.f);
+	DrawBox(Color, X, Y, 5.f, 44.f);
+	DrawLabel(Title, X + 20.f, Y + 9.f, CSUI::Text, 22.f, true);
+	if (TeamScore >= 0)
+	{
+		DrawLabel(FString::FromInt(TeamScore), X + Width - 18.f, Y + 4.f, Color, 32.f, true, 1.f);
+	}
+
+	const float ColMoney = X + Width - 330.f;
+	const float ColK = X + Width - 200.f;
+	const float ColD = X + Width - 130.f;
+	const float ColState = X + Width - 50.f;
+	float RowY = Y + 52.f;
+	DrawLabel(TEXT("PLAYER"), X + 20.f, RowY, CSUI::TextDim, 13.f, true);
+	if (bShowMoney)
+	{
+		DrawLabel(TEXT("MONEY"), ColMoney, RowY, CSUI::TextDim, 13.f, true, 0.5f);
+	}
+	DrawLabel(TEXT("K"), ColK, RowY, CSUI::TextDim, 13.f, true, 0.5f);
+	DrawLabel(TEXT("D"), ColD, RowY, CSUI::TextDim, 13.f, true, 0.5f);
+	RowY += 24.f;
+
+	if (Rows.Num() == 0)
+	{
+		DrawLabel(TEXT("Nobody here"), X + 20.f, RowY + 6.f, CSUI::TextDim, 17.f);
+		RowY += RowH;
+	}
+	for (int32 i = 0; i < Rows.Num(); ++i)
+	{
+		const FCSPlayerCombatRecord& R = Rows[i];
+		const bool bMine = R.PlayerId == Me;
+		DrawBox(bMine ? WithAlpha(CSUI::Accent, 0.16f) : FLinearColor(1.f, 1.f, 1.f, i % 2 == 0 ? 0.035f : 0.f), X, RowY, Width, RowH - 2.f);
+		if (bMine)
+		{
+			DrawBox(CSUI::Accent, X, RowY, 3.f, RowH - 2.f);
+		}
+		const FLinearColor TextColor = R.bAlive ? CSUI::Text : CSUI::TextDim;
+		DrawLabel(FString::Printf(TEXT("%d"), i + 1), X + 20.f, RowY + 8.f, CSUI::TextDim, 16.f);
+		DrawLabel(PlayerLabel(R.PlayerId), X + 52.f, RowY + 6.f, bMine ? CSUI::Accent : TextColor, 19.f, bMine);
+		if (bShowMoney)
+		{
+			DrawLabel(CSUI::MoneyText(R.Money).ToString(), ColMoney, RowY + 7.f, WithAlpha(CSUI::Money, R.bAlive ? 1.f : 0.6f), 17.f, false, 0.5f);
+		}
+		DrawLabel(FString::FromInt(R.Kills), ColK, RowY + 6.f, TextColor, 19.f, true, 0.5f);
+		DrawLabel(FString::FromInt(R.Deaths), ColD, RowY + 6.f, TextColor, 19.f, false, 0.5f);
+		if (!R.bAlive)
+		{
+			DrawLabel(TEXT("DEAD"), ColState, RowY + 9.f, CSUI::Danger, 13.f, true, 0.5f);
+		}
+		RowY += RowH;
+	}
+	return RowY - Y;
 }
 
 void ACSHUD::DrawScoreboard()
 {
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
-	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
+	const ACSGameState* GS = GetCSGameState();
 	const TArray<FCSPlayerCombatRecord> Scores = SortedScores(Director);
 	ScoreboardRows = Scores.Num();
+	const FCSModeRules& Rules = GS ? GS->GetRules() : UCSModeSettings::Rules(ECSGameModeType::Deathmatch);
+	const ECSGameModeType Mode = GS ? GS->GetGameMode() : ECSGameModeType::Deathmatch;
 
 	const float W = Canvas->ClipX / S;
-	constexpr float PanelW = 620.f;
-	constexpr float RowH = 34.f;
+	const float H = Canvas->ClipY / S;
+	constexpr float PanelW = 920.f;
 	const float X = W * 0.5f - PanelW * 0.5f;
-	const float Y = 380.f;
-	const float H = 96.f + RowH * FMath::Max(1, Scores.Num()) + 16.f;
+	float Y = 150.f;
 
-	DrawBox(FLinearColor(0.02f, 0.03f, 0.04f, 0.88f), X, Y, PanelW, H);
-	DrawBox(GAccent, X, Y, PanelW, 3.f);
+	// Full-screen dim, then the panel.
+	DrawBox(FLinearColor(0.f, 0.f, 0.f, 0.35f), 0.f, 0.f, W, H);
+	const int32 TableCount = Rules.bTeams ? 2 : 1;
+	const float EstimatedH = 110.f + TableCount * 90.f + FMath::Max(1, Scores.Num()) * 36.f + (TableCount - 1) * 26.f + 40.f;
+	DrawBox(GPanelStrong, X - 24.f, Y - 24.f, PanelW + 48.f, EstimatedH);
+	DrawBox(CSUI::Accent, X - 24.f, Y - 24.f, PanelW + 48.f, 4.f);
 
-	FString Title = TEXT("SCOREBOARD");
+	// Title line: mode, map, and the time / result.
+	FString Title = UCSModeSettings::ModeName(Mode).ToString().ToUpper();
+	if (const FCSMapInfo* Map = UCSModeSettings::Get()->FindMapByWorld(GetWorld()->GetOutermost()->GetName()))
+	{
+		Title += TEXT("   /   ") + Map->DisplayName.ToUpper();
+	}
+	DrawLabel(Title, X, Y, CSUI::Text, 28.f, true);
+	FString Right;
 	if (GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch)
 	{
-		const int32 Next = FMath::Max(0, FMath::CeilToInt(GS->GetPhaseTimeRemaining()));
-		Title = FString::Printf(TEXT("ROUND OVER  -  NEXT ROUND IN %d"), Next);
+		Right = FString::Printf(TEXT("NEXT MATCH IN %d"), FMath::Max(0, FMath::CeilToInt(GS->GetPhaseTimeRemaining())));
 	}
-	DrawLabel(Title, X + 24.f, Y + 14.f, GText, 1.1f, true);
-
-	const float ColK = X + PanelW - 170.f;
-	const float ColD = X + PanelW - 100.f;
-	const float ColState = X + PanelW - 40.f;
-	DrawLabel(TEXT("PLAYER"), X + 24.f, Y + 64.f, GTextDim, 0.8f);
-	DrawLabel(TEXT("K"), ColK, Y + 64.f, GTextDim, 0.8f, false, 0.5f);
-	DrawLabel(TEXT("D"), ColD, Y + 64.f, GTextDim, 0.8f, false, 0.5f);
-
-	const int32 Me = GetLocalPlayerId();
-	float RowY = Y + 92.f;
-	if (Scores.Num() == 0)
+	else if (GS)
 	{
-		DrawLabel(TEXT("No players yet"), X + 24.f, RowY + 4.f, GTextDim, 0.9f);
+		Right = Rules.bRounds
+			? FString::Printf(TEXT("ROUND %d  -  FIRST TO %d"), FMath::Max(1, GS->GetRoundNumber()), Rules.ScoreLimit)
+			: FString::Printf(TEXT("FIRST TO %d  -  %s LEFT"), Rules.ScoreLimit, *Clock(GS->GetPhaseTimeRemaining()));
 	}
-	for (int32 i = 0; i < Scores.Num(); ++i)
+	DrawLabel(Right, X + PanelW, Y + 8.f, CSUI::TextDim, 17.f, true, 1.f);
+	Y += 56.f;
+
+	if (!Rules.bTeams)
 	{
-		const FCSPlayerCombatRecord& R = Scores[i];
-		const bool bMine = R.PlayerId == Me;
-		if (bMine)
-		{
-			DrawBox(FLinearColor(GAccent.R, GAccent.G, GAccent.B, 0.18f), X + 8.f, RowY, PanelW - 16.f, RowH - 4.f);
-		}
-		const FLinearColor Color = bMine ? GAccent : (R.bAlive ? GText : GTextDim);
-		DrawLabel(FString::Printf(TEXT("%d.  %s"), i + 1, *PlayerLabel(R.PlayerId)), X + 24.f, RowY + 4.f, Color, 0.95f);
-		DrawLabel(FString::FromInt(R.Kills), ColK, RowY + 4.f, Color, 0.95f, false, 0.5f);
-		DrawLabel(FString::FromInt(R.Deaths), ColD, RowY + 4.f, Color, 0.95f, false, 0.5f);
-		if (!R.bAlive)
-		{
-			DrawLabel(TEXT("DEAD"), ColState, RowY + 7.f, GDanger, 0.7f, false, 0.5f);
-		}
-		RowY += RowH;
+		DrawScoreTable(Scores, X, Y, PanelW, TEXT("PLAYERS"), CSUI::Accent, /*bShowMoney*/ true, -1);
+		return;
+	}
+
+	// Money is shown for your own team only, as in CS.
+	const ECSTeam MyTeam = Director ? Director->GetTeam(GetLocalPlayerId()) : ECSTeam::None;
+	for (const ECSTeam Team : { ECSTeam::Alpha, ECSTeam::Bravo })
+	{
+		TArray<FCSPlayerCombatRecord> Rows = Scores.FilterByPredicate([Team](const FCSPlayerCombatRecord& R) { return R.GetTeam() == Team; });
+		const FString Name = Team == ECSTeam::Alpha ? TEXT("TEAM ALPHA") : TEXT("TEAM BRAVO");
+		Y += DrawScoreTable(Rows, X, Y, PanelW, Name, CSUI::TeamColor(static_cast<uint8>(Team)), Team == MyTeam,
+			GS ? GS->GetTeamScore(Team) : 0) + 26.f;
 	}
 }
 
@@ -425,8 +611,135 @@ void ACSHUD::DrawFpsCounter()
 	const double FrameMs = FApp::GetDeltaTime() * 1000.0;
 	SmoothedFrameMs = SmoothedFrameMs <= 0.0 ? FrameMs : FMath::Lerp(SmoothedFrameMs, FrameMs, 0.05);
 	const double Fps = SmoothedFrameMs > 0.0 ? 1000.0 / SmoothedFrameMs : 0.0;
-	const FLinearColor Color = Fps >= 60.0 ? FLinearColor(0.4f, 1.f, 0.4f) : (Fps >= 30.0 ? FLinearColor(1.f, 0.85f, 0.3f) : FLinearColor(1.f, 0.35f, 0.3f));
-	DrawLabel(FString::Printf(TEXT("%d FPS  %.1f ms"), FMath::RoundToInt(Fps), SmoothedFrameMs), 16.f, 12.f, Color, 0.8f);
+	const FLinearColor Color = Fps >= 60.0 ? CSUI::Money : (Fps >= 30.0 ? CSUI::Warning : CSUI::Danger);
+	DrawLabel(FString::Printf(TEXT("%d FPS  %.1f ms"), FMath::RoundToInt(Fps), SmoothedFrameMs), 24.f, 52.f, Color, 14.f, true);
+}
+
+void ACSHUD::DrawModeTag()
+{
+	const ACSGameState* GS = GetCSGameState();
+	if (!GS)
+	{
+		return;
+	}
+	FString Tag = UCSModeSettings::ModeName(GS->GetGameMode()).ToString().ToUpper();
+	if (const FCSMapInfo* Map = UCSModeSettings::Get()->FindMapByWorld(GetWorld()->GetOutermost()->GetName()))
+	{
+		Tag += TEXT("  /  ") + Map->DisplayName.ToUpper();
+	}
+	DrawBox(CSUI::Accent, 24.f, 22.f, 3.f, 20.f);
+	DrawLabel(Tag, 34.f, 22.f, CSUI::TextDim, 15.f, true);
+}
+
+void ACSHUD::DrawScoreBar()
+{
+	const ACSGameState* GS = GetCSGameState();
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!GS)
+	{
+		return;
+	}
+	const FCSModeRules& Rules = GS->GetRules();
+	const float W = Canvas->ClipX / S;
+	const float CX = W * 0.5f;
+	const float Y = 16.f;
+
+	// Timer block. In a round's buy time it counts the buy time down instead.
+	float TimeLeft = GS->GetPhaseTimeRemaining();
+	FString Sub;
+	FLinearColor TimerColor = CSUI::Text;
+	switch (GS->GetMatchPhase())
+	{
+	case ECSMatchPhase::WaitingForPlayers:	Sub = TEXT("WAITING"); TimeLeft = 0.f; break;
+	case ECSMatchPhase::Warmup:				Sub = TEXT("WARMUP"); break;
+	case ECSMatchPhase::PostMatch:			Sub = TEXT("MATCH OVER"); break;
+	case ECSMatchPhase::InProgress:
+		if (Rules.bRounds)
+		{
+			const bool bDecided = GS->GetWinnerTeam() != ECSTeam::None || GS->GetWinnerPlayerId() == -1;
+			Sub = FString::Printf(TEXT("ROUND %d"), FMath::Max(1, GS->GetRoundNumber()));
+			if (!bDecided && GS->GetBuyTimeRemaining() > 0.f)
+			{
+				Sub = FString::Printf(TEXT("BUY  %d"), FMath::CeilToInt(GS->GetBuyTimeRemaining()));
+				TimerColor = CSUI::Money;
+			}
+		}
+		else
+		{
+			Sub = FString::Printf(TEXT("FIRST TO %d"), Rules.ScoreLimit);
+		}
+		break;
+	}
+	if (GS->GetMatchPhase() == ECSMatchPhase::InProgress && TimeLeft <= 10.f && TimeLeft > 0.f)
+	{
+		TimerColor = CSUI::Danger;
+	}
+
+	constexpr float TimerW = 150.f;
+	constexpr float BlockH = 64.f;
+	DrawBox(GPanelStrong, CX - TimerW * 0.5f, Y, TimerW, BlockH);
+	DrawLabel(Clock(TimeLeft), CX, Y + 2.f, TimerColor, 36.f, true, 0.5f);
+	DrawLabel(Sub, CX, Y + 43.f, CSUI::TextDim, 13.f, true, 0.5f);
+
+	// Side blocks: team scores, or your kills vs the leader in free for all.
+	constexpr float SideW = 118.f;
+	auto Side = [&](float X, const FString& Label, int32 Value, const FLinearColor& Color, bool bLeft)
+	{
+		DrawBox(WithAlpha(Color, 0.20f), X, Y, SideW, BlockH);
+		DrawBox(Color, bLeft ? X : X + SideW - 4.f, Y, 4.f, BlockH);
+		DrawLabel(FString::FromInt(Value), X + SideW * 0.5f, Y + 2.f, CSUI::Text, 38.f, true, 0.5f);
+		DrawLabel(Label, X + SideW * 0.5f, Y + 45.f, Color, 12.f, true, 0.5f);
+	};
+
+	if (Rules.bTeams)
+	{
+		const float LeftX = CX - TimerW * 0.5f - 4.f - SideW;
+		const float RightX = CX + TimerW * 0.5f + 4.f;
+		Side(LeftX, TEXT("ALPHA"), GS->GetTeamScore(ECSTeam::Alpha), CSUI::TeamAlpha, true);
+		Side(RightX, TEXT("BRAVO"), GS->GetTeamScore(ECSTeam::Bravo), CSUI::TeamBravo, false);
+
+		// Rounds: one pip per team member, bright while alive.
+		if (Rules.bRounds && Director)
+		{
+			for (const ECSTeam Team : { ECSTeam::Alpha, ECSTeam::Bravo })
+			{
+				const int32 Members = Director->CountMembers(Team);
+				const int32 Alive = Director->CountAlive(Team);
+				const FLinearColor Color = CSUI::TeamColor(static_cast<uint8>(Team));
+				const float PipW = 14.f;
+				const float Gap = 5.f;
+				const float Total = Members * PipW + FMath::Max(0, Members - 1) * Gap;
+				const float StartX = (Team == ECSTeam::Alpha ? LeftX + SideW : RightX) + (Team == ECSTeam::Alpha ? -Total : 0.f);
+				for (int32 i = 0; i < Members; ++i)
+				{
+					DrawBox(i < Alive ? Color : FLinearColor(1.f, 1.f, 1.f, 0.15f), StartX + i * (PipW + Gap), Y + BlockH + 6.f, PipW, 6.f);
+				}
+			}
+		}
+	}
+	else if (Director)
+	{
+		const int32 Me = GetLocalPlayerId();
+		const TArray<FCSPlayerCombatRecord> Scores = SortedScores(Director);
+		int32 MyKills = 0;
+		for (const FCSPlayerCombatRecord& R : Scores)
+		{
+			MyKills = R.PlayerId == Me ? R.Kills : MyKills;
+		}
+		// The best other player: the leader, or the runner-up if you lead.
+		int32 BestOther = 0;
+		for (const FCSPlayerCombatRecord& R : Scores)
+		{
+			if (R.PlayerId != Me)
+			{
+				BestOther = R.Kills;
+				break;
+			}
+		}
+		const bool bLeading = MyKills > BestOther;
+		Side(CX - TimerW * 0.5f - 4.f - SideW, TEXT("YOU"), MyKills, CSUI::Accent, true);
+		Side(CX + TimerW * 0.5f + 4.f, bLeading ? TEXT("2ND") : TEXT("LEADER"), BestOther, CSUI::TextDim, false);
+	}
 }
 
 void ACSHUD::DrawScope()
@@ -487,16 +800,22 @@ void ACSHUD::DrawCrosshair()
 			Gap += Weapon->GetCurrentSpreadDegrees() * 6.f;
 		}
 	}
-	const FLinearColor Col(CrosshairColor.R, CrosshairColor.G, CrosshairColor.B,
-		CrosshairColor.A * Alpha);
+	const FLinearColor Col(CrosshairColor.R, CrosshairColor.G, CrosshairColor.B, CrosshairColor.A * Alpha);
+	const FLinearColor Outline(0.f, 0.f, 0.f, 0.55f * Alpha);
 
 	const float G = Gap * S;
 	const float L = CrosshairLength * S;
 	const float T = FMath::Max(1.f, 2.f * S);
-	DrawLine(CX - G - L, CY, CX - G, CY, Col, T);
-	DrawLine(CX + G, CY, CX + G + L, CY, Col, T);
-	DrawLine(CX, CY - G - L, CX, CY - G, Col, T);
-	DrawLine(CX, CY + G, CX, CY + G + L, Col, T);
+	const float O = FMath::Max(1.f, 1.f * S);
+	// Dark outline under each arm keeps it readable on bright walls.
+	DrawRect(Outline, CX - G - L - O, CY - T * 0.5f - O, L + 2.f * O, T + 2.f * O);
+	DrawRect(Outline, CX + G - O, CY - T * 0.5f - O, L + 2.f * O, T + 2.f * O);
+	DrawRect(Outline, CX - T * 0.5f - O, CY - G - L - O, T + 2.f * O, L + 2.f * O);
+	DrawRect(Outline, CX - T * 0.5f - O, CY + G - O, T + 2.f * O, L + 2.f * O);
+	DrawRect(Col, CX - G - L, CY - T * 0.5f, L, T);
+	DrawRect(Col, CX + G, CY - T * 0.5f, L, T);
+	DrawRect(Col, CX - T * 0.5f, CY - G - L, T, L);
+	DrawRect(Col, CX - T * 0.5f, CY + G, T, L);
 	DrawRect(Col, CX - T * 0.5f, CY - T * 0.5f, T, T);
 }
 
@@ -510,7 +829,7 @@ void ACSHUD::DrawHitMarker()
 	}
 
 	const float Alpha = 1.f - static_cast<float>(Age / Life);
-	const FLinearColor Color = bHitMarkerKill ? FLinearColor(GDanger.R, GDanger.G, GDanger.B, Alpha)
+	const FLinearColor Color = bHitMarkerKill ? WithAlpha(CSUI::Danger, Alpha)
 		: (bHitMarkerHead ? FLinearColor(1.f, 0.85f, 0.3f, Alpha) : FLinearColor(1.f, 1.f, 1.f, Alpha));
 
 	const float CX = Canvas->ClipX * 0.5f;
@@ -559,7 +878,7 @@ void ACSHUD::DrawDamageIndicators()
 		// 0 = straight ahead (top of the screen), clockwise positive.
 		const float Relative = FMath::DegreesToRadians(FRotator::NormalizeAxis(ToAttacker.Rotation().Yaw - CamYaw));
 		const float HalfArc = FMath::DegreesToRadians(20.f);
-		const FLinearColor Color(GDanger.R, GDanger.G, GDanger.B, 0.85f * Alpha);
+		const FLinearColor Color = WithAlpha(CSUI::Danger, 0.85f * Alpha);
 
 		constexpr int32 Segments = 8;
 		for (int32 i = 0; i < Segments; ++i)
@@ -583,39 +902,75 @@ void ACSHUD::DrawDamageIndicators()
 	}
 }
 
-void ACSHUD::DrawVitals()
+void ACSHUD::DrawMoney(const FCSPlayerCombatRecord& Record)
 {
-	const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn());
-	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
-	FCSPlayerCombatRecord Record;
-	if (!Pawn || !Director || !Director->GetRecord(Pawn->GetOwningPlayerId(), Record))
+	const double Now = GetWorld()->GetRealTimeSeconds();
+	if (LastMoney != INT32_MIN && Record.Money != LastMoney)
 	{
-		return;
+		MoneyDelta = Record.Money - LastMoney;
+		MoneyDeltaTime = Now;
 	}
+	LastMoney = Record.Money;
 
+	const float H = Canvas->ClipY / S;
+	const float X = 32.f;
+	const float Y = H - 176.f;
+	DrawLabel(CSUI::MoneyText(Record.Money).ToString(), X, Y, CSUI::Money, 30.f, true);
+
+	// "+$300" floats up and fades next to the balance.
+	const double Age = Now - MoneyDeltaTime;
+	if (Age < 1.8 && MoneyDelta != 0)
+	{
+		const float Alpha = FMath::Clamp(static_cast<float>(1.8 - Age) / 0.6f, 0.f, 1.f);
+		const FString Delta = (MoneyDelta > 0 ? TEXT("+") : TEXT("-")) + CSUI::MoneyText(FMath::Abs(MoneyDelta)).ToString();
+		const float Rise = static_cast<float>(Age) * 18.f;
+		DrawLabel(Delta, X + TextWidth(CSUI::MoneyText(Record.Money).ToString(), 30.f, true) + 14.f, Y + 6.f - Rise,
+			WithAlpha(MoneyDelta > 0 ? CSUI::Money : CSUI::Danger, Alpha), 20.f, true);
+	}
+}
+
+void ACSHUD::DrawVitals(const FCSPlayerCombatRecord& Record)
+{
 	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
 	const float H = Canvas->ClipY / S;
-	const float X = 40.f;
-	const float Y = H - 150.f;
-	const float PanelW = 320.f;
+	const float X = 32.f;
+	const float Y = H - 128.f;
+	constexpr float PanelW = 330.f;
+	constexpr float PanelH = 96.f;
 
-	DrawBox(GPanel, X, Y, PanelW, 104.f);
+	DrawBox(GPanel, X, Y, PanelW, PanelH);
+	DrawBox(CSUI::Stroke, X, Y, PanelW, 1.5f);
 
 	const float HealthPct = FMath::Clamp(Record.Health / FMath::Max(1.f, Settings->MaxHealth), 0.f, 1.f);
 	const float ArmorPct = FMath::Clamp(Record.Armor / FMath::Max(1.f, Settings->MaxArmor), 0.f, 1.f);
-	const FLinearColor HealthColor = HealthPct > 0.5f ? GHealth : (HealthPct > 0.25f ? FLinearColor(1.f, 0.8f, 0.3f) : GDanger);
+	const FLinearColor HealthColor = HealthPct > 0.5f ? GHealth : (HealthPct > 0.25f ? CSUI::Warning : CSUI::Danger);
 
-	DrawLabel(TEXT("HP"), X + 16.f, Y + 14.f, GTextDim, 0.9f);
-	DrawLabel(FString::FromInt(FMath::CeilToInt(Record.Health)), X + 60.f, Y + 2.f, HealthColor, 1.5f, true);
-	DrawBox(FLinearColor(1.f, 1.f, 1.f, 0.12f), X + 150.f, Y + 22.f, 154.f, 8.f);
-	DrawBox(HealthColor, X + 150.f, Y + 22.f, 154.f * HealthPct, 8.f);
+	// Health: a cross, the number, and a segmented bar.
+	const float IX = X + 18.f;
+	const float IY = Y + 16.f;
+	DrawBox(HealthColor, IX + 8.f, IY, 8.f, 24.f);
+	DrawBox(HealthColor, IX, IY + 8.f, 24.f, 8.f);
+	DrawLabel(FString::FromInt(FMath::CeilToInt(Record.Health)), IX + 38.f, Y + 4.f, HealthColor, 40.f, true);
 
-	DrawLabel(TEXT("ARM"), X + 16.f, Y + 62.f, GTextDim, 0.9f);
-	DrawLabel(FString::FromInt(FMath::CeilToInt(Record.Armor)), X + 60.f, Y + 52.f, GArmor, 1.2f, true);
-	DrawBox(FLinearColor(1.f, 1.f, 1.f, 0.12f), X + 150.f, Y + 70.f, 154.f, 8.f);
-	DrawBox(GArmor, X + 150.f, Y + 70.f, 154.f * ArmorPct, 8.f);
+	constexpr int32 Segments = 10;
+	const float BarX = X + 140.f;
+	const float BarW = PanelW - 158.f;
+	const float SegW = (BarW - (Segments - 1) * 3.f) / Segments;
+	for (int32 i = 0; i < Segments; ++i)
+	{
+		const float Fill = FMath::Clamp(HealthPct * Segments - i, 0.f, 1.f);
+		const float SX = BarX + i * (SegW + 3.f);
+		DrawBox(GTrack, SX, Y + 24.f, SegW, 10.f);
+		DrawBox(HealthColor, SX, Y + 24.f, SegW * Fill, 10.f);
+	}
 
-	DrawLabel(FString::Printf(TEXT("K %d   D %d"), Record.Kills, Record.Deaths), X, Y - 30.f, GTextDim, 1.f);
+	// Armor: a small shield, the number and a thin bar.
+	const float AY = Y + 60.f;
+	DrawBox(GArmor, IX + 3.f, AY, 18.f, 14.f);
+	DrawBox(GArmor, IX + 7.f, AY + 14.f, 10.f, 5.f);
+	DrawLabel(FString::FromInt(FMath::CeilToInt(Record.Armor)), IX + 38.f, AY - 7.f, ArmorPct > 0.f ? GArmor : CSUI::TextDim, 26.f, true);
+	DrawBox(GTrack, BarX, AY + 6.f, BarW, 6.f);
+	DrawBox(GArmor, BarX, AY + 6.f, BarW * ArmorPct, 6.f);
 }
 
 void ACSHUD::DrawAmmo()
@@ -634,17 +989,28 @@ void ACSHUD::DrawAmmo()
 
 	const float W = Canvas->ClipX / S;
 	const float H = Canvas->ClipY / S;
-	const float Right = W - 40.f;
-	const float Y = H - 150.f;
+	constexpr float PanelW = 330.f;
+	constexpr float PanelH = 96.f;
+	const float X = W - 32.f - PanelW;
+	const float Y = H - 128.f;
+	const float Right = X + PanelW - 18.f;
 
-	DrawBox(GPanel, Right - 320.f, Y, 320.f, 104.f);
+	DrawBox(GPanel, X, Y, PanelW, PanelH);
+	DrawBox(CSUI::Stroke, X, Y, PanelW, 1.5f);
 
 	const FString WeaponName = Weapon ? Weapon->DisplayName.ToString().ToUpper() : TEXT("NO WEAPON");
-	DrawLabel(WeaponName, Right - 16.f, Y + 12.f, GTextDim, 0.95f, false, 1.f);
+	DrawLabel(WeaponName, X + 18.f, Y + 12.f, CSUI::TextDim, 15.f, true);
+
+	if (Loadout.bGrenade)
+	{
+		DrawLabel(FString::Printf(TEXT("x%d"), Loadout.RoundsInMag), Right, Y + 26.f, CSUI::Text, 50.f, true, 1.f);
+		DrawLabel(TEXT("CLICK TO THROW"), X + 18.f, Y + 64.f, CSUI::Accent, 13.f, true);
+		return;
+	}
 
 	if (Loadout.bReloading)
 	{
-		DrawLabel(TEXT("RELOADING"), Right - 16.f, Y + 44.f, FLinearColor(1.f, 0.8f, 0.3f), 1.2f, true, 1.f);
+		DrawLabel(TEXT("RELOADING"), Right, Y + 38.f, CSUI::Warning, 30.f, true, 1.f);
 		return;
 	}
 	if (!Weapon)
@@ -653,51 +1019,30 @@ void ACSHUD::DrawAmmo()
 	}
 
 	const FString Reserve = Loadout.Reserve < 0 ? TEXT("INF") : FString::FromInt(Loadout.Reserve);
-	const FLinearColor MagColor = Loadout.RoundsInMag == 0 ? GDanger
-		: (Loadout.RoundsInMag <= FMath::Max(1, Weapon->MagazineSize / 4) ? FLinearColor(1.f, 0.8f, 0.3f) : GText);
+	const FLinearColor MagColor = Loadout.RoundsInMag == 0 ? CSUI::Danger
+		: (Loadout.RoundsInMag <= FMath::Max(1, Weapon->MagazineSize / 4) ? CSUI::Warning : CSUI::Text);
 
-	const float ReserveW = TextWidth(Reserve, 1.1f, false);
-	DrawLabel(Reserve, Right - 16.f, Y + 58.f, GTextDim, 1.1f, false, 1.f);
-	DrawLabel(TEXT("/"), Right - 26.f - ReserveW, Y + 58.f, GTextDim, 1.1f, false, 1.f);
-	DrawLabel(FString::FromInt(Loadout.RoundsInMag), Right - 44.f - ReserveW, Y + 36.f, MagColor, 1.7f, true, 1.f);
+	const float ReserveW = TextWidth(Reserve, 22.f, false);
+	DrawLabel(Reserve, Right, Y + 50.f, CSUI::TextDim, 22.f, false, 1.f);
+	DrawLabel(TEXT("/"), Right - ReserveW - 8.f, Y + 50.f, CSUI::TextDim, 22.f, false, 1.f);
+	DrawLabel(FString::FromInt(Loadout.RoundsInMag), Right - ReserveW - 24.f, Y + 26.f, MagColor, 50.f, true, 1.f);
+
+	// One tick per round in the magazine (compressed for big magazines).
+	const int32 Mag = FMath::Max(1, Weapon->MagazineSize);
+	const int32 Ticks = FMath::Min(Mag, 30);
+	const float TickW = 4.f;
+	const float TickGap = 2.f;
+	const float TicksX = X + 18.f;
+	for (int32 i = 0; i < Ticks; ++i)
+	{
+		const bool bFull = i < FMath::CeilToInt(static_cast<float>(Loadout.RoundsInMag) * Ticks / Mag);
+		DrawBox(bFull ? WithAlpha(MagColor, 0.9f) : GTrack, TicksX + i * (TickW + TickGap), Y + 70.f, TickW, 12.f);
+	}
 
 	if (Loadout.RoundsInMag == 0)
 	{
-		DrawLabel(TEXT("PRESS R TO RELOAD"), W * 0.5f, H * 0.5f + 90.f, GDanger, 1.f, false, 0.5f);
+		DrawLabel(TEXT("PRESS R TO RELOAD"), W * 0.5f, H * 0.5f + 90.f, CSUI::Danger, 18.f, true, 0.5f);
 	}
-}
-
-void ACSHUD::DrawMatchInfo()
-{
-	const ACSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ACSGameState>() : nullptr;
-	if (!GS)
-	{
-		return;
-	}
-
-	FString Phase;
-	switch (GS->GetMatchPhase())
-	{
-	case ECSMatchPhase::WaitingForPlayers:	Phase = TEXT("WAITING FOR PLAYERS"); break;
-	case ECSMatchPhase::Warmup:				Phase = TEXT("WARMUP"); break;
-	case ECSMatchPhase::InProgress:			Phase = TEXT("ROUND"); break;
-	case ECSMatchPhase::PostMatch:			Phase = TEXT("ROUND OVER"); break;
-	}
-
-	const float W = Canvas->ClipX / S;
-	const int32 Remaining = FMath::Max(0, FMath::CeilToInt(GS->GetPhaseTimeRemaining()));
-	const FString Timer = FString::Printf(TEXT("%d:%02d"), Remaining / 60, Remaining % 60);
-
-	DrawBox(GPanel, W * 0.5f - 110.f, 18.f, 220.f, 70.f);
-	DrawLabel(Timer, W * 0.5f, 18.f, GText, 1.3f, true, 0.5f);
-	const int32 Players = UCSAuthority::GetRoomPlayerCount(this);
-	const int32 Bots = ACSBotManager::CountBots(this);
-	FString Who = FString::Printf(TEXT("%d %s"), Players, Players == 1 ? TEXT("PLAYER") : TEXT("PLAYERS"));
-	if (Bots > 0)
-	{
-		Who += FString::Printf(TEXT(" + %d %s"), Bots, Bots == 1 ? TEXT("BOT") : TEXT("BOTS"));
-	}
-	DrawLabel(FString::Printf(TEXT("%s  -  %s"), *Phase, *Who), W * 0.5f, 60.f, GTextDim, 0.8f, false, 0.5f);
 }
 
 void ACSHUD::DrawKillFeed()
@@ -710,7 +1055,7 @@ void ACSHUD::DrawKillFeed()
 	const float W = Canvas->ClipX / S;
 	const int32 Me = GetLocalPlayerId();
 	const double Now = GetWorld()->GetRealTimeSeconds();
-	float Y = 24.f;
+	float Y = 22.f;
 
 	for (int32 i = KillFeed.Num() - 1; i >= 0; --i)
 	{
@@ -718,24 +1063,36 @@ void ACSHUD::DrawKillFeed()
 		const float Alpha = FMath::Clamp(static_cast<float>(KillFeedSeconds - (Now - E.Time)), 0.f, 1.f);
 
 		const FString Killer = E.KillerId == E.VictimId ? FString() : PlayerLabel(E.KillerId);
-		const FString Middle = FString::Printf(TEXT("  [%s%s]  "), E.Weapon.IsEmpty() ? TEXT("?") : *E.Weapon, E.bHeadshot ? TEXT(" HS") : TEXT(""));
+		const FString Weapon = E.Weapon.IsEmpty() ? TEXT("?") : E.Weapon.ToUpper();
 		const FString Victim = PlayerLabel(E.VictimId);
 
-		const float WK = TextWidth(Killer, 0.95f, false);
-		const float WM = TextWidth(Middle, 0.85f, false);
-		const float WV = TextWidth(Victim, 0.95f, false);
-		const float Total = WK + WM + WV + 24.f;
-		const float X = W - 40.f - Total;
+		const float WK = TextWidth(Killer, 17.f, true);
+		const float WW = TextWidth(Weapon, 13.f, true);
+		const float WV = TextWidth(Victim, 17.f, true);
+		const float HS = E.bHeadshot ? 30.f : 0.f;
+		const float Total = WK + WW + WV + HS + 56.f;
+		const float X = W - 32.f - Total;
 
 		const bool bMine = E.KillerId == Me || E.VictimId == Me;
-		DrawBox(bMine ? FLinearColor(0.6f, 0.08f, 0.06f, 0.55f * Alpha) : FLinearColor(0.f, 0.f, 0.f, 0.45f * Alpha), X, Y, Total, 32.f);
+		DrawBox(WithAlpha(GPanel, Alpha), X, Y, Total, 32.f);
+		if (bMine)
+		{
+			DrawFrame(WithAlpha(E.VictimId == Me ? CSUI::Danger : CSUI::Accent, 0.9f * Alpha), X, Y, Total, 32.f);
+		}
 
 		float CursorX = X + 12.f;
-		DrawLabel(Killer, CursorX, Y + 5.f, E.KillerId == Me ? FLinearColor(GAccent.R, GAccent.G, GAccent.B, Alpha) : FLinearColor(1.f, 1.f, 1.f, Alpha), 0.95f);
-		CursorX += WK;
-		DrawLabel(Middle, CursorX, Y + 6.f, FLinearColor(GTextDim.R, GTextDim.G, GTextDim.B, Alpha), 0.85f);
-		CursorX += WM;
-		DrawLabel(Victim, CursorX, Y + 5.f, E.VictimId == Me ? FLinearColor(GDanger.R, GDanger.G, GDanger.B, Alpha) : FLinearColor(1.f, 1.f, 1.f, Alpha), 0.95f);
+		DrawLabel(Killer, CursorX, Y + 5.f, WithAlpha(PlayerColor(E.KillerId), Alpha), 17.f, true);
+		CursorX += WK + 12.f;
+		DrawLabel(Weapon, CursorX, Y + 9.f, WithAlpha(CSUI::TextDim, Alpha), 13.f, true);
+		CursorX += WW + 8.f;
+		if (E.bHeadshot)
+		{
+			DrawBox(WithAlpha(CSUI::Danger, 0.85f * Alpha), CursorX, Y + 8.f, 24.f, 16.f);
+			DrawLabel(TEXT("HS"), CursorX + 12.f, Y + 8.f, WithAlpha(CSUI::Text, Alpha), 12.f, true, 0.5f);
+			CursorX += HS;
+		}
+		CursorX += 4.f;
+		DrawLabel(Victim, CursorX, Y + 5.f, WithAlpha(PlayerColor(E.VictimId), Alpha), 17.f, true);
 
 		Y += 38.f;
 	}
@@ -759,19 +1116,87 @@ void ACSHUD::DrawInteractionPrompt()
 
 	const float W = Canvas->ClipX / S;
 	const float H = Canvas->ClipY / S;
-	const FString Name = Pickup->GetPromptName().ToString();
-	const FString KeyText = FString::Printf(TEXT(" %s "), *Key.GetDisplayName().ToString().ToUpper());
-	const FString Action = FString::Printf(TEXT("  Pick up  %s"), *Name);
+	const FString KeyText = Key.GetDisplayName().ToString().ToUpper();
+	const FString Action = FString::Printf(TEXT("Pick up  %s"), *Pickup->GetPromptName().ToString());
 
-	const float WK = TextWidth(KeyText, 1.f, false);
-	const float WA = TextWidth(Action, 1.f, false);
-	const float X = W * 0.5f - (WK + WA) * 0.5f;
+	const float WK = FMath::Max(28.f, TextWidth(KeyText, 16.f, true) + 14.f);
+	const float WA = TextWidth(Action, 18.f, false);
+	const float Total = WK + WA + 32.f;
+	const float X = W * 0.5f - Total * 0.5f;
 	const float Y = H * 0.5f + 44.f;
 
-	DrawBox(GPanelStrong, X - 10.f, Y - 6.f, WK + WA + 20.f, 36.f);
-	DrawBox(FLinearColor(1.f, 1.f, 1.f, 0.9f), X, Y - 1.f, WK, 26.f);
-	DrawLabel(KeyText, X, Y, FLinearColor(0.05f, 0.05f, 0.05f, 1.f), 1.f);
-	DrawLabel(Action, X + WK, Y, GText, 1.f);
+	DrawBox(GPanelStrong, X, Y, Total, 38.f);
+	DrawBox(CSUI::Text, X + 8.f, Y + 6.f, WK, 26.f);
+	DrawLabel(KeyText, X + 8.f + WK * 0.5f, Y + 9.f, FLinearColor(0.03f, 0.03f, 0.05f, 1.f), 16.f, true, 0.5f);
+	DrawLabel(Action, X + WK + 20.f, Y + 8.f, CSUI::Text, 18.f);
+}
+
+void ACSHUD::DrawShopStatus(const FCSPlayerCombatRecord& Record)
+{
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const ACSGameState* GS = GetCSGameState();
+	if (!Director || !GS)
+	{
+		return;
+	}
+	const int32 Me = Record.PlayerId;
+	const float Protection = Director->GetProtectionRemaining(Me);
+	const float BuyLeft = Director->GetBuyTimeRemaining(Me);
+	if (Protection <= 0.f && BuyLeft <= 0.f)
+	{
+		return;
+	}
+
+	FKey Key = GetDefault<UCSInputConfig>()->Key_BuyMenu;
+	if (const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		Key = Settings->GetKeyFor(TEXT("BuyMenu"), Key);
+	}
+
+	const float W = Canvas->ClipX / S;
+	const float H = Canvas->ClipY / S;
+	constexpr float PanelW = 420.f;
+	const float X = W * 0.5f - PanelW * 0.5f;
+	const float Y = H - 200.f;
+
+	const bool bProtection = Protection > 0.f;
+	const float Total = bProtection ? FMath::Max(1.f, GS->GetRules().ProtectionSeconds) : FMath::Max(1.f, GS->GetRules().BuySeconds);
+	const float Left = bProtection ? Protection : BuyLeft;
+	const FLinearColor Color = bProtection ? GArmor : CSUI::Money;
+
+	DrawBox(GPanelStrong, X, Y, PanelW, 50.f);
+	DrawBox(GTrack, X, Y + 46.f, PanelW, 4.f);
+	DrawBox(Color, X, Y + 46.f, PanelW * FMath::Clamp(Left / Total, 0.f, 1.f), 4.f);
+	DrawLabel(bProtection ? TEXT("SPAWN PROTECTION") : TEXT("BUY TIME"), X + 16.f, Y + 6.f, Color, 16.f, true);
+	DrawLabel(FString::Printf(TEXT("%.1f s"), Left), X + 16.f, Y + 25.f, CSUI::Text, 15.f);
+	if (BuyLeft > 0.f)
+	{
+		const FString KeyText = Key.GetDisplayName().ToString().ToUpper();
+		const float KW = FMath::Max(28.f, TextWidth(KeyText, 16.f, true) + 14.f);
+		DrawBox(CSUI::Text, X + PanelW - 110.f - KW, Y + 12.f, KW, 26.f);
+		DrawLabel(KeyText, X + PanelW - 110.f - KW * 0.5f, Y + 15.f, FLinearColor(0.03f, 0.03f, 0.05f, 1.f), 16.f, true, 0.5f);
+		DrawLabel(TEXT("OPEN SHOP"), X + PanelW - 14.f, Y + 16.f, CSUI::Text, 15.f, true, 1.f);
+	}
+	if (bProtection)
+	{
+		DrawLabel(TEXT("Moving, jumping, crouching or firing ends it"), W * 0.5f, Y - 24.f, CSUI::TextDim, 14.f, false, 0.5f);
+	}
+}
+
+void ACSHUD::DrawNotice()
+{
+	const double Age = GetWorld()->GetRealTimeSeconds() - NoticeTime;
+	if (Age < 0.0 || Age > 2.0 || NoticeText.IsEmpty())
+	{
+		return;
+	}
+	const float Alpha = FMath::Clamp(static_cast<float>(2.0 - Age) / 0.4f, 0.f, 1.f);
+	const float W = Canvas->ClipX / S;
+	const float H = Canvas->ClipY / S;
+	const FString Text = NoticeText.ToString();
+	const float TW = TextWidth(Text, 20.f, true) + 40.f;
+	DrawBox(WithAlpha(GPanelStrong, Alpha), W * 0.5f - TW * 0.5f, H * 0.5f + 130.f, TW, 40.f);
+	DrawLabel(Text, W * 0.5f, H * 0.5f + 137.f, WithAlpha(CSUI::Warning, Alpha), 20.f, true, 0.5f);
 }
 
 void ACSHUD::DrawQuickSlots()
@@ -788,23 +1213,23 @@ void ACSHUD::DrawQuickSlots()
 
 	const float W = Canvas->ClipX / S;
 	const float H = Canvas->ClipY / S;
-	const float BoxW = 112.f;
-	const float BoxH = 50.f;
-	const float Gap = 6.f;
+	constexpr float BoxW = 104.f;
+	constexpr float BoxH = 50.f;
+	constexpr float Gap = 5.f;
 	const int32 Total = NumSlots + 1; // +1 for the starter pistol
 	const float StartX = W * 0.5f - (Total * (BoxW + Gap) - Gap) * 0.5f;
-	const float Y = H - BoxH - 22.f;
+	const float Y = H - BoxH - 26.f;
 
 	auto Slot = [&](int32 Column, int32 KeyNumber, const FString& Label, const FString& Sub, bool bSelected, bool bEmpty, const FLinearColor& Tint)
 	{
 		const float X = StartX + Column * (BoxW + Gap);
-		DrawBox(bSelected ? FLinearColor(0.08f, 0.35f, 0.18f, 0.8f) : GPanel, X, Y, BoxW, BoxH);
-		DrawBox(bSelected ? GAccent : FLinearColor(Tint.R, Tint.G, Tint.B, bEmpty ? 0.f : 0.8f), X, Y + BoxH - 3.f, BoxW, 3.f);
-		DrawLabel(FString::FromInt(KeyNumber), X + 6.f, Y + 4.f, GTextDim, 0.75f);
-		DrawLabel(Label, X + 20.f, Y + 5.f, bEmpty ? GTextDim : GText, 0.85f);
+		DrawBox(bSelected ? WithAlpha(CSUI::Accent, 0.22f) : GPanel, X, Y, BoxW, BoxH);
+		DrawBox(bSelected ? CSUI::Accent : WithAlpha(Tint, bEmpty ? 0.f : 0.7f), X, Y + BoxH - 3.f, BoxW, 3.f);
+		DrawLabel(FString::FromInt(KeyNumber), X + 7.f, Y + 5.f, bSelected ? CSUI::Accent : CSUI::TextDim, 12.f, true);
+		DrawLabel(Label, X + 22.f, Y + 5.f, bEmpty ? CSUI::TextDim : CSUI::Text, 15.f, bSelected);
 		if (!Sub.IsEmpty())
 		{
-			DrawLabel(Sub, X + 20.f, Y + 26.f, GTextDim, 0.75f);
+			DrawLabel(Sub, X + 22.f, Y + 26.f, CSUI::TextDim, 13.f);
 		}
 	};
 
@@ -818,9 +1243,9 @@ void ACSHUD::DrawQuickSlots()
 		const UCSItemDefinition* Item = Data.IsEmpty() ? nullptr : Settings->GetItem(Data.ItemIndex);
 
 		FString Label = Item ? Item->DisplayName.ToString() : TEXT("-");
-		if (Label.Len() > 11)
+		if (Label.Len() > 10)
 		{
-			Label = Label.Left(10) + TEXT(".");
+			Label = Label.Left(9) + TEXT(".");
 		}
 
 		FString Sub;
@@ -834,13 +1259,52 @@ void ACSHUD::DrawQuickSlots()
 	}
 }
 
-void ACSHUD::DrawDeathOverlay(float SecondsToRespawn)
+void ACSHUD::DrawDeathOverlay(const FCSPlayerCombatRecord& Record)
 {
-	DrawRect(FLinearColor(0.35f, 0.f, 0.f, 0.35f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
 	const float W = Canvas->ClipX / S;
 	const float H = Canvas->ClipY / S;
-	DrawLabel(TEXT("YOU DIED"), W * 0.5f, H * 0.5f - 60.f, GDanger, 1.6f, true, 0.5f);
-	DrawLabel(FString::Printf(TEXT("Respawning in %.1f s"), SecondsToRespawn), W * 0.5f, H * 0.5f + 10.f, GText, 1.2f, false, 0.5f);
-	DrawLabel(TEXT("Your inventory dropped where you fell. Your pistol comes back with you."),
-		W * 0.5f, H * 0.5f + 44.f, GTextDim, 0.9f, false, 0.5f);
+
+	// Darkened edges, lighter centre.
+	DrawRect(FLinearColor(0.08f, 0.f, 0.f, 0.30f), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
+	DrawBox(FLinearColor(0.f, 0.f, 0.f, 0.35f), 0.f, 0.f, W, 120.f);
+	DrawBox(FLinearColor(0.f, 0.f, 0.f, 0.35f), 0.f, H - 120.f, W, 120.f);
+
+	const float Y = H * 0.5f - 110.f;
+	DrawBox(GPanelStrong, W * 0.5f - 300.f, Y, 600.f, 190.f);
+	DrawBox(CSUI::Danger, W * 0.5f - 300.f, Y, 600.f, 4.f);
+	DrawLabel(TEXT("ELIMINATED"), W * 0.5f, Y + 16.f, CSUI::Danger, 46.f, true, 0.5f);
+
+	FString By;
+	if (LastKillerId != 0 && LastKillerId != Record.PlayerId)
+	{
+		By = FString::Printf(TEXT("by %s"), *PlayerLabel(LastKillerId));
+		if (!LastKillerWeapon.IsEmpty())
+		{
+			By += FString::Printf(TEXT("  -  %s"), *LastKillerWeapon);
+		}
+		if (bLastDeathHeadshot)
+		{
+			By += TEXT("  -  headshot");
+		}
+	}
+	DrawLabel(By, W * 0.5f, Y + 80.f, CSUI::Text, 20.f, false, 0.5f);
+
+	const ACSGameState* GS = GetCSGameState();
+	const bool bRounds = GS && GS->GetRules().bRounds;
+	FString Line;
+	if (bRounds)
+	{
+		const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+		const int32 Alive = Director ? Director->CountAlive(Record.GetTeam()) : 0;
+		Line = Alive > 0 ? FString::Printf(TEXT("Back next round  -  %d teammate%s still fighting"), Alive, Alive == 1 ? TEXT("") : TEXT("s"))
+			: TEXT("Back next round");
+	}
+	else
+	{
+		const double NetNow = UCSAuthority::GetNetworkTimeSeconds(this);
+		Line = FString::Printf(TEXT("Respawning in %.1f s"), FMath::Max(0.0, Record.RespawnAtNetworkTime - NetNow));
+	}
+	DrawLabel(Line, W * 0.5f, Y + 118.f, CSUI::Accent, 22.f, true, 0.5f);
+	DrawLabel(TEXT("Your weapons dropped where you fell. The pistol comes back with you."),
+		W * 0.5f, Y + 154.f, CSUI::TextDim, 14.f, false, 0.5f);
 }

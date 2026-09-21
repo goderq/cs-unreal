@@ -9,7 +9,9 @@
 #include "Core/CSAuthority.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
+#include "Core/CSModeSettings.h"
 #include "EngineUtils.h"
+#include "GameModes/CSGameMode.h"
 #include "GameModes/CSGameState.h"
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
@@ -17,6 +19,23 @@
 #include "Pickups/CSWorldPickup.h"
 #include "Net/UnrealNetwork.h"
 #include "Weapons/CSWeaponDefinition.h"
+#include "Weapons/CSGrenade.h"
+
+namespace
+{
+	ACSGameState* ModeState(const UObject* Context)
+	{
+		const UWorld* World = Context ? Context->GetWorld() : nullptr;
+		return World ? World->GetGameState<ACSGameState>() : nullptr;
+	}
+
+	/** Rules of the running mode. Before the GameState exists: Deathmatch. */
+	const FCSModeRules& ModeRules(const UObject* Context)
+	{
+		const ACSGameState* GS = ModeState(Context);
+		return GS ? GS->GetRules() : UCSModeSettings::Rules(ECSGameModeType::Deathmatch);
+	}
+}
 
 ACSMatchDirector::ACSMatchDirector()
 {
@@ -176,7 +195,34 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 	Record.LastFireNetworkTime = 0.0;
 	Record.RespawnCounter = 1;
 
+	// v1.1: team (smaller side, bots included) and starting money.
+	const FCSModeRules& Rules = ModeRules(this);
+	if (Rules.bTeams)
+	{
+		Record.Team = static_cast<uint8>(CountMembers(ECSTeam::Alpha) <= CountMembers(ECSTeam::Bravo) ? ECSTeam::Alpha : ECSTeam::Bravo);
+	}
+	Record.Money = Rules.StartMoney;
+
 	Records.Add(Record);
+
+	// The spawn point is chosen now that the team is known. The owning client
+	// moves itself there on first sight of the record (ACSCharacter::SyncWithDirector).
+	{
+		FCSPlayerCombatRecord& Added = Records.Last();
+		Added.RespawnPointIndex = PickSpawnPoint(PlayerId);
+
+		// 5 vs 5: somebody arriving after the buy time sits the round out.
+		const ACSGameState* GS = ModeState(this);
+		if (Rules.bRounds && GS && GS->GetMatchPhase() == ECSMatchPhase::InProgress && GS->GetBuyTimeRemaining() <= 0.f)
+		{
+			Added.bAlive = false;
+			Added.Health = 0.f;
+		}
+		else
+		{
+			BeginProtection(Added);
+		}
+	}
 
 	// Every player gets a Master-Client-owned inventory, created empty: per
 	// the design a player starts with the starter pistol and nothing else.
@@ -191,8 +237,8 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 		}
 	}
 
-	UE_LOG(LogCSAuth, Log, TEXT("Registered player %d (hp %.0f, %d rounds)."),
-		PlayerId, Record.Health, Record.StarterRoundsInMag);
+	UE_LOG(LogCSAuth, Log, TEXT("Registered player %d (hp %.0f, %d rounds, team %d, $%d)."),
+		PlayerId, Record.Health, Record.StarterRoundsInMag, Record.Team, Record.Money);
 
 	OnRecordsChanged.Broadcast(PlayerId);
 }
@@ -229,6 +275,8 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 		PlayerId, *UEnum::GetValueAsString(Reason), Dropped, *Where.ToCompactString());
 
 	Records.RemoveAt(Index);
+	ProtectionSpawn.Remove(PlayerId);
+	ProtectionArrived.Remove(PlayerId);
 	LastKnownAlive.Remove(PlayerId);
 	LastKnownLocation.Remove(PlayerId);
 	HeartbeatSeen.Remove(PlayerId);
@@ -361,6 +409,19 @@ FCSLoadoutView ACSMatchDirector::GetLoadout(int32 PlayerId) const
 	if (const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
 	{
 		const int32 Slot = Inventory->GetEquippedSlot();
+		// v1.1: a grenade in hand. Its weapon asset only drives the model and hands.
+		if (const UCSItemDefinition* Held = Inventory->GetItemInSlot(Slot); Held && Held->ItemType == ECSItemType::Grenade)
+		{
+			FCSInventorySlot SlotData;
+			Inventory->GetSlot(Slot, SlotData);
+			View.bGrenade = true;
+			View.Slot = Slot;
+			View.Weapon = Held->Weapon.LoadSynchronous();
+			View.RoundsInMag = SlotData.Count;
+			View.Reserve = 0;
+			View.bReloading = false;
+			return View;
+		}
 		if (const UCSWeaponDefinition* Weapon = Inventory->GetEquippedWeapon())
 		{
 			FCSInventorySlot SlotData;
@@ -392,6 +453,11 @@ ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const FCSLoadout
 {
 	const UCSWeaponDefinition* Weapon = Loadout.Weapon;
 	if (!Weapon)
+	{
+		return ECSFireRejection::NoWeapon;
+	}
+	// Grenades are thrown (TryThrowGrenade), never fired.
+	if (Loadout.bGrenade)
 	{
 		return ECSFireRejection::NoWeapon;
 	}
@@ -481,6 +547,9 @@ void ACSMatchDirector::CommitFire(int32 PlayerId)
 
 	Record->LastFireNetworkTime = UCSAuthority::GetNetworkTimeSeconds(this);
 	OnRecordsChanged.Broadcast(PlayerId);
+
+	// Shooting from under spawn protection ends it.
+	CancelProtection(PlayerId, TEXT("fired"));
 }
 
 bool ACSMatchDirector::BeginReload(int32 PlayerId)
@@ -611,6 +680,18 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 	}
 
 	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
+	const FCSModeRules& Rules = ModeRules(this);
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+
+	// v1.1: spawn protection, and no friendly fire in team modes.
+	if (Victim->ProtectedUntil > Now)
+	{
+		return 0.f;
+	}
+	if (InstigatorId != VictimId && AreTeammates(VictimId, InstigatorId))
+	{
+		return 0.f;
+	}
 
 	// Armor eats a share of the incoming damage while it lasts.
 	float ToHealth = Damage;
@@ -634,14 +715,25 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 	{
 		Victim->bAlive = false;
 		Victim->Deaths += 1;
-		Victim->RespawnAtNetworkTime =
-			UCSAuthority::GetNetworkTimeSeconds(this) + Settings->RespawnDelaySeconds;
+		// 5 vs 5 has no respawn: the round decides when everyone comes back.
+		Victim->RespawnAtNetworkTime = Rules.bRespawn ? Now + Rules.RespawnDelay : 0.0;
+		Victim->ProtectedUntil = 0.0;
 
 		if (InstigatorId != VictimId)
 		{
 			if (FCSPlayerCombatRecord* Killer = FindRecordMutable(InstigatorId))
 			{
 				Killer->Kills += 1;
+				const int32 Reward = Rules.KillReward + (Zone == ECSHitZone::Head ? Rules.HeadshotBonus : 0);
+				Killer->Money = FMath::Clamp(Killer->Money + Reward, 0, Rules.MaxMoney);
+
+				// Team Deathmatch: every kill scores for the team.
+				ACSGameState* GS = ModeState(this);
+				if (GS && Rules.bTeams && !Rules.bRounds && GS->GetMatchPhase() == ECSMatchPhase::InProgress)
+				{
+					GS->AddTeamScore(Killer->GetTeam(), 1);
+				}
+				OnRecordsChanged.Broadcast(InstigatorId);
 			}
 		}
 
@@ -681,26 +773,453 @@ void ACSMatchDirector::RespawnPlayer(int32 PlayerId, int32 SpawnPointIndex)
 		return;
 	}
 
-	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
-	const UCSWeaponDefinition* Starter = Settings->StarterWeapon.LoadSynchronous();
-
-	Record->Health = Settings->MaxHealth;
+	ResetLife(*Record, SpawnPointIndex);
 	Record->Armor = 0.f;
-	Record->bAlive = true;
-	// The starter pistol is restored in full on every respawn, by design: it is
-	// not an inventory item and can never be lost.
-	Record->StarterRoundsInMag = Starter ? Starter->MagazineSize : 12;
-	Record->LastFireNetworkTime = 0.0;
-	Record->ReloadCompleteNetworkTime = 0.0;
-	Record->ReloadSlot = INDEX_NONE;
-	Record->RespawnAtNetworkTime = 0.0;
-	Record->RespawnPointIndex = SpawnPointIndex;
-	Record->RespawnCounter += 1;
 
 	UE_LOG(LogCSCombat, Log, TEXT("Player %d respawned at point %d (counter %d)."),
 		PlayerId, SpawnPointIndex, Record->RespawnCounter);
 
 	OnRecordsChanged.Broadcast(PlayerId);
+}
+
+void ACSMatchDirector::ResetLife(FCSPlayerCombatRecord& Record, int32 SpawnPointIndex)
+{
+	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
+	const UCSWeaponDefinition* Starter = Settings->StarterWeapon.LoadSynchronous();
+
+	Record.Health = Settings->MaxHealth;
+	Record.bAlive = true;
+	// The starter pistol is restored in full on every respawn, by design: it is
+	// not an inventory item and can never be lost.
+	Record.StarterRoundsInMag = Starter ? Starter->MagazineSize : 12;
+	Record.LastFireNetworkTime = 0.0;
+	Record.ReloadCompleteNetworkTime = 0.0;
+	Record.ReloadSlot = INDEX_NONE;
+	Record.RespawnAtNetworkTime = 0.0;
+	Record.RespawnPointIndex = SpawnPointIndex;
+	Record.RespawnCounter += 1;
+
+	BeginProtection(Record);
+}
+
+// ---------------------------------------------------------------------------
+// v1.1 game modes: teams, money, spawn protection, shop, rounds
+// ---------------------------------------------------------------------------
+
+ECSTeam ACSMatchDirector::GetTeam(int32 PlayerId) const
+{
+	const int32 Index = FindRecordIndex(PlayerId);
+	return Index == INDEX_NONE ? ECSTeam::None : Records[Index].GetTeam();
+}
+
+int32 ACSMatchDirector::GetMoney(int32 PlayerId) const
+{
+	const int32 Index = FindRecordIndex(PlayerId);
+	return Index == INDEX_NONE ? 0 : Records[Index].Money;
+}
+
+bool ACSMatchDirector::IsProtected(int32 PlayerId) const
+{
+	return GetProtectionRemaining(PlayerId) > 0.f;
+}
+
+float ACSMatchDirector::GetProtectionRemaining(int32 PlayerId) const
+{
+	const int32 Index = FindRecordIndex(PlayerId);
+	if (Index == INDEX_NONE || !Records[Index].bAlive || Records[Index].ProtectedUntil <= 0.0)
+	{
+		return 0.f;
+	}
+	return static_cast<float>(FMath::Max(0.0, Records[Index].ProtectedUntil - UCSAuthority::GetNetworkTimeSeconds(this)));
+}
+
+bool ACSMatchDirector::CanBuy(int32 PlayerId) const
+{
+	return GetBuyTimeRemaining(PlayerId) > 0.f;
+}
+
+float ACSMatchDirector::GetBuyTimeRemaining(int32 PlayerId) const
+{
+	if (!IsPlayerAlive(PlayerId))
+	{
+		return 0.f;
+	}
+	const ACSGameState* GS = ModeState(this);
+	if (GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch)
+	{
+		return 0.f;
+	}
+	// 5 vs 5: the first seconds of every round. Deathmatch modes: exactly as
+	// long as the spawn protection lasts.
+	if (ModeRules(this).bRounds)
+	{
+		return GS ? GS->GetBuyTimeRemaining() : 0.f;
+	}
+	return GetProtectionRemaining(PlayerId);
+}
+
+bool ACSMatchDirector::AreTeammates(int32 A, int32 B) const
+{
+	if (A == B || !ModeRules(this).bTeams)
+	{
+		return false;
+	}
+	const ECSTeam TeamA = GetTeam(A);
+	return TeamA != ECSTeam::None && TeamA == GetTeam(B);
+}
+
+int32 ACSMatchDirector::CountAlive(ECSTeam Team) const
+{
+	int32 Count = 0;
+	for (const FCSPlayerCombatRecord& Record : Records)
+	{
+		Count += (Record.GetTeam() == Team && Record.bAlive) ? 1 : 0;
+	}
+	return Count;
+}
+
+int32 ACSMatchDirector::CountMembers(ECSTeam Team) const
+{
+	int32 Count = 0;
+	for (const FCSPlayerCombatRecord& Record : Records)
+	{
+		Count += Record.GetTeam() == Team ? 1 : 0;
+	}
+	return Count;
+}
+
+void ACSMatchDirector::AddMoney(int32 PlayerId, int32 Delta)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId))
+	{
+		Record->Money = FMath::Clamp(Record->Money + Delta, 0, ModeRules(this).MaxMoney);
+		OnRecordsChanged.Broadcast(PlayerId);
+	}
+}
+
+void ACSMatchDirector::BeginProtection(FCSPlayerCombatRecord& Record)
+{
+	ProtectionArrived.Remove(Record.PlayerId);
+
+	// -nospawnprotection: the v1.0 regression suites shoot players the moment they appear.
+	static const bool bDisabled = FParse::Param(FCommandLine::Get(), TEXT("nospawnprotection"));
+	const float Seconds = bDisabled ? 0.f : ModeRules(this).ProtectionSeconds;
+	if (Seconds <= 0.f)
+	{
+		Record.ProtectedUntil = 0.0;
+		ProtectionSpawn.Remove(Record.PlayerId);
+		return;
+	}
+
+	Record.ProtectedUntil = UCSAuthority::GetNetworkTimeSeconds(this) + Seconds;
+
+	// Where the pawn is going to appear. Movement is measured from there once
+	// it has arrived: the owning client teleports itself, a moment later.
+	FVector Spawn = FVector::ZeroVector;
+	const ACSGameMode* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACSGameMode>() : nullptr;
+	if (const AActor* Start = GameMode ? GameMode->GetPlayerStartByIndex(Record.RespawnPointIndex) : nullptr)
+	{
+		Spawn = Start->GetActorLocation();
+	}
+	ProtectionSpawn.Add(Record.PlayerId, Spawn);
+}
+
+void ACSMatchDirector::WatchProtection(FCSPlayerCombatRecord& Record, const ACSCharacter* Pawn)
+{
+	if (Record.ProtectedUntil <= 0.0)
+	{
+		return;
+	}
+
+	const int32 PlayerId = Record.PlayerId;
+	if (!Record.bAlive || UCSAuthority::GetNetworkTimeSeconds(this) >= Record.ProtectedUntil)
+	{
+		CancelProtection(PlayerId, TEXT("expired"));
+		return;
+	}
+	if (!Pawn)
+	{
+		return;
+	}
+
+	const FVector Location = Pawn->GetActorLocation();
+	FVector& Anchor = ProtectionSpawn.FindOrAdd(PlayerId, Location);
+	if (!ProtectionArrived.Contains(PlayerId))
+	{
+		// Still where it died, or in the middle of the teleport.
+		if (FVector::Dist2D(Location, Anchor) < 150.f)
+		{
+			ProtectionArrived.Add(PlayerId);
+			Anchor = Location;
+		}
+		return;
+	}
+
+	// Walking, jumping or crouching ends protection - and with it the shop.
+	const FVector AnchorCopy = Anchor;
+	if (FVector::Dist2D(Location, AnchorCopy) > 60.f)
+	{
+		CancelProtection(PlayerId, TEXT("moved"));
+	}
+	else if (Location.Z > AnchorCopy.Z + 20.f)
+	{
+		CancelProtection(PlayerId, TEXT("jumped"));
+	}
+	else if (Pawn->GetStance() == ECSStanceState::Crouching)
+	{
+		CancelProtection(PlayerId, TEXT("crouched"));
+	}
+}
+
+void ACSMatchDirector::CancelProtection(int32 PlayerId, const TCHAR* Why)
+{
+	CS_AUTHORITY_ONLY(this);
+
+	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	ProtectionSpawn.Remove(PlayerId);
+	ProtectionArrived.Remove(PlayerId);
+	if (!Record || Record->ProtectedUntil <= 0.0)
+	{
+		return;
+	}
+	Record->ProtectedUntil = 0.0;
+	UE_LOG(LogCSCombat, Log, TEXT("Player %d spawn protection ended (%s)."), PlayerId, Why);
+	OnRecordsChanged.Broadcast(PlayerId);
+}
+
+int32 ACSMatchDirector::PickSpawnPoint(int32 PlayerId) const
+{
+	const ACSGameMode* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACSGameMode>() : nullptr;
+	if (!GameMode || GameMode->GetNumPlayerStarts() == 0)
+	{
+		return FMath::Abs(PlayerId);
+	}
+
+	const FCSModeRules& Rules = ModeRules(this);
+	const ECSTeam Team = Rules.bTeams ? GetTeam(PlayerId) : ECSTeam::None;
+
+	TArray<int32> Candidates;
+	GameMode->GetSpawnIndicesForTeam(Team, Candidates);
+	if (Candidates.Num() == 0)
+	{
+		return FMath::Abs(PlayerId);
+	}
+
+	// Rounds: a fixed pad per team member, so a whole team spawns side by side
+	// without two players on one start.
+	if (Rules.bRounds)
+	{
+		int32 Rank = 0;
+		for (const FCSPlayerCombatRecord& Other : Records)
+		{
+			Rank += (Other.PlayerId != PlayerId && Other.GetTeam() == Team && Other.PlayerId < PlayerId) ? 1 : 0;
+		}
+		return Candidates[Rank % Candidates.Num()];
+	}
+
+	// Respawn modes: as far from living enemies as possible, never onto
+	// somebody. A little randomness among the best few keeps it unpredictable.
+	TArray<TPair<float, int32>> Scored;
+	for (const int32 Index : Candidates)
+	{
+		const AActor* Start = GameMode->GetPlayerStartByIndex(Index);
+		if (!Start)
+		{
+			continue;
+		}
+		const FVector Pad = Start->GetActorLocation();
+		float NearestEnemy = 1.0e7f;
+		bool bOccupied = false;
+		for (const FCSPlayerCombatRecord& Other : Records)
+		{
+			FVector Where;
+			if (Other.PlayerId == PlayerId || !Other.bAlive || !GetLastKnownLocation(Other.PlayerId, Where))
+			{
+				continue;
+			}
+			const float Distance = FVector::Dist(Pad, Where);
+			bOccupied |= Distance < 120.f;
+			if (!AreTeammates(PlayerId, Other.PlayerId))
+			{
+				NearestEnemy = FMath::Min(NearestEnemy, Distance);
+			}
+		}
+		Scored.Add(TPair<float, int32>(bOccupied ? -1.f : NearestEnemy, Index));
+	}
+	if (Scored.Num() == 0)
+	{
+		return Candidates[0];
+	}
+	Scored.Sort([](const TPair<float, int32>& A, const TPair<float, int32>& B) { return A.Key > B.Key; });
+	const int32 Pool = FMath::Min(3, Scored.Num());
+	return Scored[FMath::RandRange(0, Pool - 1)].Value;
+}
+
+ECSBuyResult ACSMatchDirector::TryBuy(int32 PlayerId, int32 ShopIndex)
+{
+	CS_AUTHORITY_ONLY_RET(this, ECSBuyResult::Invalid);
+
+	const FCSShopEntry* Entry = UCSShopSettings::Get()->GetEntry(ShopIndex);
+	const UCSItemSettings* ItemSettings = UCSItemSettings::Get();
+	const int32 ItemIndex = Entry ? ItemSettings->FindItemIndex(Entry->ItemId) : INDEX_NONE;
+	const UCSItemDefinition* Item = ItemSettings->GetItem(ItemIndex);
+	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	if (!Entry || !Item || !Record || !Inventory)
+	{
+		return ECSBuyResult::Invalid;
+	}
+	if (!Record->bAlive)
+	{
+		return ECSBuyResult::Dead;
+	}
+	if (!CanBuy(PlayerId))
+	{
+		return ECSBuyResult::ShopClosed;
+	}
+	if (Record->Money < Entry->Price)
+	{
+		return ECSBuyResult::NotEnoughMoney;
+	}
+
+	switch (Item->ItemType)
+	{
+	case ECSItemType::Weapon:
+	{
+		const UCSWeaponDefinition* Weapon = Item->Weapon.LoadSynchronous();
+		if (!Weapon)
+		{
+			return ECSBuyResult::Invalid;
+		}
+		if (Inventory->CountItem(ItemIndex) > 0)
+		{
+			return ECSBuyResult::AlreadyOwned;
+		}
+		if (!Inventory->CanAccept(ItemIndex, 1) || Inventory->AddItem(ItemIndex, 1, Weapon->MagazineSize) > 0)
+		{
+			return ECSBuyResult::InventoryFull;
+		}
+		// Spare magazines, as far as they fit.
+		const int32 AmmoIndex = ItemSettings->FindItemIndex(Item->AmmoItemId);
+		if (AmmoIndex != INDEX_NONE && Entry->Bundle > 0)
+		{
+			Inventory->AddItem(AmmoIndex, Entry->Bundle * Weapon->MagazineSize, 0);
+		}
+		// Straight into the hands.
+		const TArray<FCSInventorySlot>& Slots = Inventory->GetSlots();
+		for (int32 Slot = 0; Slot < Slots.Num(); ++Slot)
+		{
+			if (Slots[Slot].ItemIndex == ItemIndex && !Slots[Slot].IsEmpty())
+			{
+				CancelReload(PlayerId);
+				Inventory->SetEquippedSlot(Slot);
+				break;
+			}
+		}
+		break;
+	}
+
+	case ECSItemType::Armor:
+		// Worn at once rather than carried.
+		if (AddArmor(PlayerId, Item->ArmorAmount) <= 0.f)
+		{
+			return ECSBuyResult::AlreadyOwned;
+		}
+		break;
+
+	default:
+	{
+		// Medkits, ammo: into the inventory.
+		const int32 Count = FMath::Max(1, Entry->Bundle) * FMath::Max(1, Item->DefaultPickupCount);
+		if (!Inventory->CanAccept(ItemIndex, Count))
+		{
+			return ECSBuyResult::InventoryFull;
+		}
+		Inventory->AddItem(ItemIndex, Count, 0);
+		break;
+	}
+	}
+
+	// Re-find: AddArmor and friends do not reallocate, but stay safe.
+	if (FCSPlayerCombatRecord* Buyer = FindRecordMutable(PlayerId))
+	{
+		Buyer->Money -= Entry->Price;
+		UE_LOG(LogCSInventory, Log, TEXT("Player %d bought %s for $%d ($%d left)."),
+			PlayerId, *Entry->ItemId.ToString(), Entry->Price, Buyer->Money);
+	}
+	OnRecordsChanged.Broadcast(PlayerId);
+	return ECSBuyResult::Ok;
+}
+
+void ACSMatchDirector::StartNewRound()
+{
+	CS_AUTHORITY_ONLY(this);
+
+	// Survivors keep their weapons and armor, the fallen come back with the
+	// starter pistol; everybody returns to their team's spawn.
+	for (FCSPlayerCombatRecord& Record : Records)
+	{
+		const float KeptArmor = Record.bAlive ? Record.Armor : 0.f;
+		ResetLife(Record, PickSpawnPoint(Record.PlayerId));
+		Record.Armor = KeptArmor;
+		OnRecordsChanged.Broadcast(Record.PlayerId);
+	}
+	UE_LOG(LogCSCombat, Log, TEXT("New round: %d players back at their spawns."), Records.Num());
+}
+
+void ACSMatchDirector::ResetForNewMatch()
+{
+	CS_AUTHORITY_ONLY(this);
+
+	const FCSModeRules& Rules = ModeRules(this);
+
+	// Teams: anyone registered before the mode was known gets one now, and a
+	// lopsided split (players left during the last match) is evened out.
+	for (FCSPlayerCombatRecord& Record : Records)
+	{
+		if (!Rules.bTeams)
+		{
+			Record.Team = 0;
+		}
+		else if (Record.GetTeam() == ECSTeam::None)
+		{
+			Record.Team = static_cast<uint8>(CountMembers(ECSTeam::Alpha) <= CountMembers(ECSTeam::Bravo) ? ECSTeam::Alpha : ECSTeam::Bravo);
+		}
+	}
+	if (Rules.bTeams)
+	{
+		// Move bots first, from the back, so humans keep their side.
+		for (int32 i = Records.Num() - 1; i >= 0; --i)
+		{
+			const int32 Alpha = CountMembers(ECSTeam::Alpha);
+			const int32 Bravo = CountMembers(ECSTeam::Bravo);
+			if (FMath::Abs(Alpha - Bravo) <= 1)
+			{
+				break;
+			}
+			const ECSTeam Bigger = Alpha > Bravo ? ECSTeam::Alpha : ECSTeam::Bravo;
+			if (CSBots::IsBotId(Records[i].PlayerId) && Records[i].GetTeam() == Bigger)
+			{
+				Records[i].Team = static_cast<uint8>(Bigger == ECSTeam::Alpha ? ECSTeam::Bravo : ECSTeam::Alpha);
+			}
+		}
+	}
+
+	for (FCSPlayerCombatRecord& Record : Records)
+	{
+		Record.Kills = 0;
+		Record.Deaths = 0;
+		Record.Money = Rules.StartMoney;
+		Record.Armor = 0.f;
+		if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Record.PlayerId))
+		{
+			Inventory->TakeAll();
+		}
+		ResetLife(Record, PickSpawnPoint(Record.PlayerId));
+		OnRecordsChanged.Broadcast(Record.PlayerId);
+	}
+	UE_LOG(LogCSCombat, Log, TEXT("Match reset: scores, money and inventories back to the start."));
 }
 
 // ---------------------------------------------------------------------------
@@ -805,8 +1324,11 @@ void ACSMatchDirector::TickAuthority()
 		RemovePlayer(PlayerId, ECSDeathReason::Disconnected);
 	}
 
-	for (FCSPlayerCombatRecord& Record : Records)
+	const bool bRespawnMode = ModeRules(this).bRespawn;
+	for (int32 i = 0; i < Records.Num(); ++i)
 	{
+		FCSPlayerCombatRecord& Record = Records[i];
+
 		// Complete reloads.
 		if (Record.ReloadCompleteNetworkTime > 0.0 && Now >= Record.ReloadCompleteNetworkTime)
 		{
@@ -814,13 +1336,13 @@ void ACSMatchDirector::TickAuthority()
 			OnRecordsChanged.Broadcast(Record.PlayerId);
 		}
 
+		WatchProtection(Record, FindPawnForPlayer(this, Record.PlayerId));
+
 		// Respawn is driven here rather than by the dead client, so refusing to
-		// die gains a cheater nothing.
-		if (!Record.bAlive && Record.RespawnAtNetworkTime > 0.0 && Now >= Record.RespawnAtNetworkTime)
+		// die gains a cheater nothing. 5 vs 5 has none: rounds revive everyone.
+		if (bRespawnMode && !Record.bAlive && Record.RespawnAtNetworkTime > 0.0 && Now >= Record.RespawnAtNetworkTime)
 		{
-			// Spread respawns across the available starts deterministically.
-			const int32 SpawnIndex = FMath::Abs(Record.PlayerId + Record.RespawnCounter);
-			RespawnPlayer(Record.PlayerId, SpawnIndex);
+			RespawnPlayer(Record.PlayerId, PickSpawnPoint(Record.PlayerId));
 		}
 	}
 }
@@ -871,8 +1393,15 @@ void ACSMatchDirector::QueueCombatEvent(int32 VictimId, int32 InstigatorId, floa
 	Event.bKilled = bKilled;
 	Event.Zone = Zone;
 
-	const FCSLoadoutView Loadout = GetLoadout(InstigatorId);
-	Event.WeaponName = Loadout.Weapon ? Loadout.Weapon->DisplayName.ToString() : FString();
+	if (!CombatWeaponOverride.IsEmpty())
+	{
+		Event.WeaponName = CombatWeaponOverride;
+	}
+	else
+	{
+		const FCSLoadoutView Loadout = GetLoadout(InstigatorId);
+		Event.WeaponName = Loadout.Weapon ? Loadout.Weapon->DisplayName.ToString() : FString();
+	}
 
 	if (const ACSCharacter* Shooter = FindPawnForPlayer(this, InstigatorId))
 	{
@@ -961,4 +1490,187 @@ void ACSMatchDirector::ResetScores()
 		}
 	}
 	UE_LOG(LogCSAuth, Log, TEXT("Scores reset for the new round."));
+}
+
+// ---------------------------------------------------------------------------
+// v1.1 grenades
+// ---------------------------------------------------------------------------
+
+bool ACSMatchDirector::TryThrowGrenade(int32 PlayerId, const FVector& Origin, const FVector& Direction,
+	const FVector& PawnLocation, const FVector& PawnVelocity)
+{
+	CS_AUTHORITY_ONLY_RET(this, false);
+
+	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
+	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	if (!Record || !Record->bAlive || !Inventory)
+	{
+		return false;
+	}
+	const ACSGameState* GS = ModeState(this);
+	if (GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch)
+	{
+		return false;
+	}
+
+	const FCSLoadoutView Loadout = GetLoadout(PlayerId);
+	if (!Loadout.bGrenade || Loadout.RoundsInMag <= 0)
+	{
+		return false;
+	}
+
+	// Same plausibility rules as a shot: sane direction, thrown from near the pawn.
+	const FVector Dir = Direction.GetSafeNormal();
+	if (Dir.IsNearlyZero() || FVector::DistSquared(Origin, PawnLocation) > FMath::Square(Settings->MaxFireOriginDeviation))
+	{
+		return false;
+	}
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+	if (const double* Last = LastThrowTime.Find(PlayerId); Last && Now - *Last < Settings->GrenadeThrowInterval * 0.85)
+	{
+		return false;
+	}
+	LastThrowTime.Add(PlayerId, Now);
+
+	// Consume it; an empty hand goes back to the pistol.
+	const int32 Slot = Loadout.Slot;
+	Inventory->RemoveFromSlot(Slot, 1);
+	FCSInventorySlot Left;
+	if (!Inventory->GetSlot(Slot, Left) || Left.IsEmpty())
+	{
+		Inventory->SetEquippedSlot(INDEX_NONE);
+	}
+	CancelProtection(PlayerId, TEXT("threw a grenade"));
+
+	// Along the view with a little lift, plus some of the thrower's own motion.
+	const FVector Velocity = Dir * Settings->GrenadeThrowSpeed + FVector(0.f, 0.f, 160.f) + PawnVelocity * 0.5f;
+	const FVector Start = Origin + Dir * 30.f - FVector(0.f, 0.f, 8.f);
+	const int32 Serial = NextGrenadeSerial++ + PlayerId * 100000;
+
+	UE_LOG(LogCSCombat, Log, TEXT("Player %d threw grenade %d."), PlayerId, Serial);
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcGrenadeThrown(Serial, PlayerId, Start, Velocity);
+	}
+	else
+	{
+		RpcGrenadeThrown_Receive(Serial, PlayerId, Start, Velocity);
+	}
+	OnRecordsChanged.Broadcast(PlayerId);
+	return true;
+}
+
+void ACSMatchDirector::RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, FVector Origin, FVector Velocity)
+{
+	UWorld* World = GetWorld();
+	if (!World || ACSGrenade::FindBySerial(this, Serial))
+	{
+		return;
+	}
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	Params.ObjectFlags |= RF_Transient;
+	if (ACSGrenade* Grenade = World->SpawnActor<ACSGrenade>(ACSGrenade::StaticClass(), Origin, Velocity.Rotation(), Params))
+	{
+		Grenade->Launch(Serial, ThrowerId, Velocity, UCSCombatSettings::Get()->GrenadeFuseSeconds);
+	}
+	// Everybody else sees the throwing motion (the thrower already played it).
+	if (ACSCharacter* Thrower = FindPawnForPlayer(this, ThrowerId))
+	{
+		if (!Thrower->IsLocallyControlled())
+		{
+			Thrower->PlayThrowPresentation(/*bFromRelease*/ true);
+		}
+	}
+}
+
+void ACSMatchDirector::ExplodeGrenade(ACSGrenade* Grenade)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (!Grenade)
+	{
+		return;
+	}
+
+	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
+	const FVector Center = Grenade->GetActorLocation() + FVector(0.f, 0.f, 10.f);
+	const int32 ThrowerId = Grenade->GetThrowerId();
+	const int32 Serial = Grenade->GetSerial();
+
+	// Walls stop the blast: only players with a clear line to the centre are hit.
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CSGrenadeBlast), false, Grenade);
+	for (TActorIterator<ACSCharacter> It(GetWorld()); It; ++It)
+	{
+		Params.AddIgnoredActor(*It);
+	}
+
+	TArray<TPair<int32, float>> Hits;
+	for (const FCSPlayerCombatRecord& Record : Records)
+	{
+		const ACSCharacter* Pawn = Record.bAlive ? FindPawnForPlayer(this, Record.PlayerId) : nullptr;
+		if (!Pawn)
+		{
+			continue;
+		}
+		// Closest of feet, chest and head decides.
+		float Best = TNumericLimits<float>::Max();
+		for (const float Z : { -60.f, 10.f, 60.f })
+		{
+			const FVector Point = Pawn->GetActorLocation() + FVector(0.f, 0.f, Z);
+			const float Distance = FVector::Dist(Center, Point);
+			if (Distance < Settings->GrenadeRadius && Distance < Best
+				&& !GetWorld()->LineTraceTestByChannel(Center, Point, ECC_WorldStatic, Params))
+			{
+				Best = Distance;
+			}
+		}
+		if (Best < Settings->GrenadeRadius)
+		{
+			const float Falloff = FMath::Pow(1.f - Best / Settings->GrenadeRadius, 1.3f);
+			Hits.Add(TPair<int32, float>(Record.PlayerId, FMath::Max(1.f, Settings->GrenadeMaxDamage * Falloff)));
+		}
+	}
+
+	CombatWeaponOverride = TEXT("HE Grenade");
+	for (const TPair<int32, float>& Hit : Hits)
+	{
+		ApplyDamage(Hit.Key, ThrowerId, Hit.Value, ECSHitZone::Torso);
+	}
+	FlushCombatEvents();
+	CombatWeaponOverride.Reset();
+
+	// Right away here, so the fuse check does not fire again while the RPC
+	// travels back to this peer (the receive handler then finds it done).
+	Grenade->Explode(Center);
+	UE_LOG(LogCSCombat, Log, TEXT("Grenade %d by %d exploded, %d player(s) hit."), Serial, ThrowerId, Hits.Num());
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcGrenadeExploded(Serial, Center);
+	}
+	else
+	{
+		RpcGrenadeExploded_Receive(Serial, Center);
+	}
+}
+
+void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, FVector Location)
+{
+	if (const ACSGrenade* Done = ACSGrenade::FindBySerial(this, Serial, /*bIncludeExploded*/ true); Done && !ACSGrenade::FindBySerial(this, Serial))
+	{
+		return; // already went off here (the authority's own copy)
+	}
+	if (ACSGrenade* Grenade = ACSGrenade::FindBySerial(this, Serial))
+	{
+		Grenade->Explode(Location);
+		return;
+	}
+	// Never saw it fly (joined mid-air): still show the blast.
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	Params.ObjectFlags |= RF_Transient;
+	if (ACSGrenade* Grenade = GetWorld()->SpawnActor<ACSGrenade>(ACSGrenade::StaticClass(), Location, FRotator::ZeroRotator, Params))
+	{
+		Grenade->Explode(Location);
+	}
 }

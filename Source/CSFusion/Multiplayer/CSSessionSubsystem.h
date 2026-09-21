@@ -62,6 +62,14 @@ struct CSFUSION_API FCSSessionRequest
 
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session")
 	ECSBotDifficulty BotDifficulty = ECSBotDifficulty::Normal;
+
+	/** v1.1: game mode of a room this client creates. Joiners follow the room's. */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session")
+	ECSGameModeType Mode = ECSGameModeType::Deathmatch;
+
+	/** v1.1: map id from UCSModeSettings::Maps. Used when InitialWorld is unset. */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session")
+	FName MapId;
 };
 
 /** One row of the session browser, copied out of Photon's lobby room list. */
@@ -146,7 +154,14 @@ public:
 
 	/** Offline match against bots: no Photon, this machine is the authority. */
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
-	void StartOfflinePractice(int32 BotCount, ECSBotDifficulty Difficulty);
+	void StartOfflinePractice(int32 BotCount, ECSBotDifficulty Difficulty,
+		ECSGameModeType Mode = ECSGameModeType::Deathmatch, FName MapId = NAME_None);
+
+	/** Mode for a match this machine creates: the last request's, overridden by -mode=dm|tdm|5v5. */
+	ECSGameModeType GetMatchMode() const;
+
+	/** Map for a request: InitialWorld if set, else the MapId's world, else the default. */
+	static TSoftObjectPtr<UWorld> ResolveWorld(const FCSSessionRequest& Request);
 
 	/**
 	 * Bots for a match this machine creates: the last request's values,
@@ -310,6 +325,15 @@ private:
 	/** Bot settings of the last Play request (see GetMatchBotSettings). */
 	int32 MatchBotCount = 0;
 	ECSBotDifficulty MatchBotDifficulty = ECSBotDifficulty::Normal;
+	ECSGameModeType MatchMode = ECSGameModeType::Deathmatch;
+
+	/**
+	 * Quick Match goes to a room NAMED after mode and map ("QM TDM Depot"), so
+	 * players only ever meet others who asked for the same thing. When that
+	 * room is full the next suffix is tried ("QM TDM Depot #2", ...).
+	 */
+	FString QuickMatchBaseName;
+	int32 QuickMatchAttempt = 0;
 
 	/** Set by LeaveToMainMenu; the poller opens the menu once disconnected. */
 	bool bReturningToMenu = false;

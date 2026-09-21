@@ -5,6 +5,7 @@
 #include "Containers/Ticker.h"
 #include "Core/CSFusionCompat.h"
 #include "Core/CSLog.h"
+#include "Core/CSModeSettings.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
@@ -127,7 +128,49 @@ bool UCSSessionSubsystem::HostOrJoin(const FCSSessionRequest& Request)
 
 bool UCSSessionSubsystem::QuickMatch(const FCSSessionRequest& Request)
 {
-	return StartRoomOperation(Request, EPendingRoomOp::JoinRandomOrCreate);
+	// A named join-or-create rather than a random join: a random join would
+	// drop a Deathmatch player into somebody's 5 vs 5 on another map.
+	FCSSessionRequest Named = Request;
+	const FCSMapInfo* Map = UCSModeSettings::Get()->FindMap(Request.MapId);
+	QuickMatchBaseName = FString::Printf(TEXT("QM %s %s"), *UCSModeSettings::ModeTag(Request.Mode),
+		Map ? *Map->Id.ToString() : TEXT("Warehouse"));
+	QuickMatchAttempt = 0;
+	Named.RoomName = QuickMatchBaseName;
+	if (Map && Named.InitialWorld.IsNull())
+	{
+		Named.InitialWorld = Map->World;
+	}
+	return StartRoomOperation(Named, EPendingRoomOp::JoinOrCreate);
+}
+
+TSoftObjectPtr<UWorld> UCSSessionSubsystem::ResolveWorld(const FCSSessionRequest& Request)
+{
+	if (!Request.InitialWorld.IsNull())
+	{
+		return Request.InitialWorld;
+	}
+	if (!Request.MapId.IsNone())
+	{
+		if (const FCSMapInfo* Map = UCSModeSettings::Get()->FindMap(Request.MapId))
+		{
+			if (!Map->World.IsNull())
+			{
+				return Map->World;
+			}
+		}
+	}
+	return DefaultMatchWorld();
+}
+
+ECSGameModeType UCSSessionSubsystem::GetMatchMode() const
+{
+	ECSGameModeType Mode = MatchMode;
+	FString Tag;
+	if (FParse::Value(FCommandLine::Get(), TEXT("mode="), Tag))
+	{
+		UCSModeSettings::ParseModeTag(Tag, Mode);
+	}
+	return Mode;
 }
 
 bool UCSSessionSubsystem::JoinByName(const FCSSessionRequest& Request)
@@ -174,9 +217,11 @@ bool UCSSessionSubsystem::StartRoomOperation(const FCSSessionRequest& Request, E
 	PendingRequest = Request;
 	MatchBotCount = Request.BotCount;
 	MatchBotDifficulty = Request.BotDifficulty;
-	if (PendingRequest.InitialWorld.IsNull())
+	MatchMode = Request.Mode;
+	PendingRequest.InitialWorld = ResolveWorld(Request);
+	if (Op != EPendingRoomOp::JoinOrCreate || !Request.RoomName.StartsWith(TEXT("QM ")))
 	{
-		PendingRequest.InitialWorld = DefaultMatchWorld();
+		QuickMatchBaseName.Reset();
 	}
 	PendingOp = Op;
 	LastError.Reset();
@@ -556,6 +601,17 @@ void UCSSessionSubsystem::PollSession()
 	{
 		// Back to Connected straight out of JoiningRoom: the room call failed
 		// (full, closed, or no such room for a join-only).
+		if (!QuickMatchBaseName.IsEmpty() && QuickMatchAttempt < 8)
+		{
+			// Quick Match: that room is full - try the next one of the series.
+			++QuickMatchAttempt;
+			PendingRequest.RoomName = FString::Printf(TEXT("%s #%d"), *QuickMatchBaseName, QuickMatchAttempt + 1);
+			PendingOp = EPendingRoomOp::JoinOrCreate;
+			UE_LOG(LogCSNet, Log, TEXT("Quick Match room full; trying '%s'."), *PendingRequest.RoomName);
+			PreviousPolledState = NewState;
+			IssuePendingRoomOp();
+			return;
+		}
 		Fail(PendingRequest.RoomName.IsEmpty()
 			? TEXT("Could not join a room.")
 			: FString::Printf(TEXT("Could not join room '%s' (it may be full or no longer exist)."), *PendingRequest.RoomName));
@@ -620,7 +676,7 @@ void UCSSessionSubsystem::Fail(const FString& Reason)
 // Bots
 // ---------------------------------------------------------------------------
 
-void UCSSessionSubsystem::StartOfflinePractice(int32 BotCount, ECSBotDifficulty Difficulty)
+void UCSSessionSubsystem::StartOfflinePractice(int32 BotCount, ECSBotDifficulty Difficulty, ECSGameModeType Mode, FName MapId)
 {
 	if (bOperationInFlight || bReturningToMenu)
 	{
@@ -628,6 +684,7 @@ void UCSSessionSubsystem::StartOfflinePractice(int32 BotCount, ECSBotDifficulty 
 	}
 	MatchBotCount = FMath::Clamp(BotCount, 0, 8);
 	MatchBotDifficulty = Difficulty;
+	MatchMode = Mode;
 	UE_LOG(LogCSNet, Log, TEXT("Offline practice: %d bot(s), %s."), MatchBotCount, *UEnum::GetValueAsString(Difficulty));
 
 	// No room: every Fusion call in the game falls back to its local path and
@@ -636,7 +693,9 @@ void UCSSessionSubsystem::StartOfflinePractice(int32 BotCount, ECSBotDifficulty 
 	{
 		if (UWorld* World = GI->GetWorld())
 		{
-			UGameplayStatics::OpenLevel(World, FName(*DefaultMatchWorld().ToSoftObjectPath().GetLongPackageName()));
+			FCSSessionRequest Request;
+			Request.MapId = MapId;
+			UGameplayStatics::OpenLevel(World, FName(*ResolveWorld(Request).ToSoftObjectPath().GetLongPackageName()));
 		}
 	}
 }

@@ -58,6 +58,16 @@ const UCSWeaponDefinition* UCSWeaponComponent::GetActiveWeapon() const
 // Local input
 // ---------------------------------------------------------------------------
 
+bool UCSWeaponComponent::IsAiming() const
+{
+	if (!bAiming || !OwnerCharacter)
+	{
+		return false;
+	}
+	const ACSMatchDirector* Director = GetDirector();
+	return !(Director && Director->GetLoadout(OwnerCharacter->GetOwningPlayerId()).bGrenade);
+}
+
 void UCSWeaponComponent::StartFire()
 {
 	bTriggerHeld = true;
@@ -144,6 +154,18 @@ void UCSWeaponComponent::TryFireOnce()
 			return;
 		}
 		const FCSLoadoutView Loadout = Director->GetLoadout(LocalId);
+		// v1.1: a grenade in hand is thrown, one per click.
+		if (Loadout.bGrenade)
+		{
+			const float Interval = UCSCombatSettings::Get()->GrenadeThrowInterval;
+			if (Loadout.RoundsInMag > 0 && (LocalLastFireTime <= 0.0 || Now - LocalLastFireTime >= Interval))
+			{
+				LocalLastFireTime = Now;
+				bTriggerHeld = false;
+				OwnerCharacter->RequestThrowGrenade();
+			}
+			return;
+		}
 		if (Loadout.bReloading)
 		{
 			return;

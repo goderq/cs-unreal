@@ -23,6 +23,8 @@
 #include "UI/CSUIStyle.h"
 #include "UI/SCSInventoryPanel.h"
 #include "UI/SCSPauseMenu.h"
+#include "UI/SCSShopPanel.h"
+#include "Combat/CSMatchDirector.h"
 #include "UnrealClient.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Widgets/Images/SImage.h"
@@ -67,13 +69,17 @@ void ACSPlayerController::HideMenuWidget(const TSharedPtr<SWidget>& Widget)
 
 void ACSPlayerController::RefreshMenuInputMode()
 {
-	if (bPauseOpen || bInventoryOpen)
+	if (bPauseOpen || bInventoryOpen || bShopOpen)
 	{
 		FInputModeUIOnly Mode;
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
 		if (bPauseOpen && PauseMenu.IsValid())
 		{
 			Mode.SetWidgetToFocus(PauseMenu);
+		}
+		else if (bShopOpen && ShopPanel.IsValid())
+		{
+			Mode.SetWidgetToFocus(ShopPanel);
 		}
 		else if (InventoryPanel.IsValid())
 		{
@@ -143,6 +149,75 @@ void ACSPlayerController::ToggleInventoryScreen()
 	ShowMenuWidget(InventoryHost.ToSharedRef(), InventoryPanel.ToSharedRef());
 }
 
+void ACSPlayerController::ToggleShopScreen()
+{
+	if (!IsLocalController() || bPauseOpen)
+	{
+		return;
+	}
+
+	if (bShopOpen)
+	{
+		bShopOpen = false;
+		HideMenuWidget(ShopHost);
+		RefreshMenuInputMode();
+		return;
+	}
+
+	// Only while this player may actually buy; otherwise say why on the HUD.
+	const ACSCharacter* CSPawn = Cast<ACSCharacter>(GetPawn());
+	const ACSMatchDirector* Director = CSPawn ? ACSMatchDirector::Get(CSPawn) : nullptr;
+	if (!Director || !Director->CanBuy(CSPawn->GetOwningPlayerId()))
+	{
+		if (ACSHUD* HUD = GetHUD<ACSHUD>())
+		{
+			HUD->FlashNotice(NSLOCTEXT("CSShop", "ShopClosedNotice", "The shop is closed"));
+		}
+		return;
+	}
+
+	if (bInventoryOpen)
+	{
+		ToggleInventoryScreen();
+	}
+
+	if (!ShopHost.IsValid())
+	{
+		FKey CloseKey = EKeys::B;
+		{
+			const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
+			const UCSInputConfig* Config = GetDefault<UCSInputConfig>();
+			CloseKey = Settings ? Settings->GetKeyFor(TEXT("BuyMenu"), Config->Key_BuyMenu) : Config->Key_BuyMenu;
+		}
+
+		ShopHost = SNew(SOverlay)
+			+ SOverlay::Slot()
+			[
+				SNew(SImage).Image(CSUI::WhiteBrush()).ColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.45f))
+			]
+			+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center).Padding(FMargin(16.f, 32.f))
+			[
+				SNew(SBox).WidthOverride(1240.f).HeightOverride(760.f)
+				[
+					SNew(SBorder)
+					.BorderImage(CSUI::WhiteBrush())
+					.BorderBackgroundColor(CSUI::Panel)
+					.Padding(FMargin(36.f, 30.f))
+					[
+						SAssignNew(ShopPanel, SCSShopPanel)
+						.WorldContext(this)
+						.CloseKey(CloseKey)
+						.OnClose_Lambda([this]() { if (bShopOpen) { ToggleShopScreen(); } })
+					]
+				]
+			];
+	}
+
+	ShopPanel->Refresh();
+	bShopOpen = true;
+	ShowMenuWidget(ShopHost.ToSharedRef(), ShopPanel.ToSharedRef());
+}
+
 void ACSPlayerController::TogglePauseMenu()
 {
 	if (!IsLocalController())
@@ -162,6 +237,11 @@ void ACSPlayerController::TogglePauseMenu()
 	{
 		// ESC on the inventory screen just closes it.
 		ToggleInventoryScreen();
+		return;
+	}
+	if (bShopOpen)
+	{
+		ToggleShopScreen();
 		return;
 	}
 
@@ -187,7 +267,12 @@ void ACSPlayerController::TogglePauseMenu()
 
 void ACSPlayerController::CloseMenus()
 {
-	const bool bWasOpen = bPauseOpen || bInventoryOpen;
+	const bool bWasOpen = bPauseOpen || bInventoryOpen || bShopOpen;
+	if (bShopOpen)
+	{
+		bShopOpen = false;
+		HideMenuWidget(ShopHost);
+	}
 	if (bPauseOpen)
 	{
 		bPauseOpen = false;
@@ -221,8 +306,21 @@ void ACSPlayerController::PlayerTick(float DeltaTime)
 	{
 		return;
 	}
+	// The buy menu closes by itself the moment the shop window ends (the
+	// protection ran out, or the 5 vs 5 buy time is over).
+	if (bShopOpen)
+	{
+		const ACSCharacter* CSPawn = Cast<ACSCharacter>(GetPawn());
+		const ACSMatchDirector* Director = CSPawn ? ACSMatchDirector::Get(CSPawn) : nullptr;
+		if (!Director || !Director->CanBuy(CSPawn->GetOwningPlayerId()))
+		{
+			ToggleShopScreen();
+		}
+	}
+
 	const TSharedPtr<SWidget> Wanted = bPauseOpen ? StaticCastSharedPtr<SWidget>(PauseMenu)
-		: (bInventoryOpen ? StaticCastSharedPtr<SWidget>(InventoryPanel) : nullptr);
+		: (bInventoryOpen ? StaticCastSharedPtr<SWidget>(InventoryPanel)
+		: (bShopOpen ? StaticCastSharedPtr<SWidget>(ShopPanel) : nullptr));
 	if (Wanted.IsValid())
 	{
 		const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();

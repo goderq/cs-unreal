@@ -53,6 +53,12 @@ public:
 	/** Region code picked on the Play page; empty = best ping. */
 	FString GetSelectedRegion() const;
 
+	// v1.1 mode and map choice (Play page).
+	ECSGameModeType GetSelectedMode() const { return SelectedMode; }
+	FName GetSelectedMap() const;
+	void SelectMode(ECSGameModeType Mode) { SelectedMode = Mode; }
+	void SelectMap(int32 Index);
+
 private:
 	UCSSessionSubsystem* GetSession() const;
 	FCSSessionRequest MakeRequest() const;
@@ -64,6 +70,9 @@ private:
 	TSharedRef<SWidget> MakeJoinPage();
 	TSharedRef<SWidget> MakeBrowserPage();
 	TSharedRef<SWidget> MakeBusyOverlay();
+	/** Big selectable card for a mode or a map. */
+	TSharedRef<SWidget> MakeChoiceTile(const FText& Title, const FText& TagText, const FText& Body, const FLinearColor& Color,
+		TFunction<bool()> IsSelected, TFunction<void()> OnPick, float Height);
 
 	void RebuildRoomList();
 
@@ -87,4 +96,7 @@ private:
 
 	FDelegateHandle RoomListHandle;
 	FString LocalMessage;
+
+	ECSGameModeType SelectedMode = ECSGameModeType::Deathmatch;
+	int32 SelectedMapIndex = 0;
 };

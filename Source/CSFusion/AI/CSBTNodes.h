@@ -40,12 +40,15 @@ protected:
 
 private:
 	void TryFire(ACSBotController* Controller, ACSCharacter* Bot, ACSCharacter* Target, double Now);
+	/** v1.1: lob a grenade at the target if one is carried and the range is right. */
+	bool TryThrowGrenade(ACSBotController* Controller, ACSCharacter* Bot, ACSCharacter* Target, class ACSMatchDirector* Director);
 	void UpdateMovement(ACSBotController* Controller, ACSCharacter* Bot, ACSCharacter* Target, double Now);
 
 	double StartTime = 0.0;
 	double NextFireTime = 0.0;
 	double NextMoveTime = 0.0;
 	int32 ShotsInBurst = 0;
+	bool bMayThrowGrenade = false;
 	bool bReloadRequested = false;
 };
 

@@ -4,6 +4,7 @@
 
 #include "Animation/AnimSequence.h"
 #include "Engine/SkeletalMesh.h"
+#include "Materials/MaterialInterface.h"
 
 namespace
 {
@@ -29,6 +30,8 @@ namespace
 			Set.Jog.Add(Anim(FString::Printf(TEXT("%s/Jog/MF_%s_Jog_%s"), *Kind, *Kind, Dir)));
 		}
 		Set.FallLoop = Anim(FString::Printf(TEXT("%s/Jump/MM_%s_Jump_Fall_Loop"), *Kind, *Kind));
+		Set.JumpStart = Anim(FString::Printf(TEXT("%s/Jump/MM_%s_Jump_Start"), *Kind, *Kind));
+		Set.LandRecovery = Anim(FString::Printf(TEXT("%s/Jump/MM_%s_Jump_RecoveryAdditive"), *Kind, *Kind));
 		Set.AimUp = Anim(FString::Printf(TEXT("%s/%s/%s_CU"), *Kind, *AimFolder, *AimPrefix));
 		Set.AimDown = Anim(FString::Printf(TEXT("%s/%s/%s_CD"), *Kind, *AimFolder, *AimPrefix));
 		Set.Fire = Anim(FString::Printf(TEXT("%s/MM_%s_Fire"), *Kind, *Kind));
@@ -56,6 +59,8 @@ UCSAnimationSettings::UCSAnimationSettings()
 		Anim(TEXT("Death/MM_Death_Left_01")),
 		Anim(TEXT("Death/MM_Death_Right_01")),
 	};
+
+	SpawnProtectionMaterial = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/FX/M_SpawnGhost.M_SpawnGhost")));
 
 	CharacterMeshes = {
 		TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"))),

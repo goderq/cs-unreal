@@ -18,6 +18,7 @@
 #include "Combat/CSMatchDirector.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Core/CSAuthority.h"
 #include "Engine/SkeletalMesh.h"
 #include "FX/CSEffects.h"
@@ -379,5 +380,150 @@ void ACSCharacter::HandleCombatEvent(const FCSCombatEvent& Event)
 		{
 			CSAudio::Play2D(this, Audio->HitMarker, 0.7f);
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v1.1 death ragdoll
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::SetRagdoll(bool bEnable)
+{
+	USkeletalMeshComponent* Body = GetMesh();
+	if (!Body || bEnable == bRagdoll)
+	{
+		return;
+	}
+	if (bEnable && !Body->GetPhysicsAsset())
+	{
+		return; // no physics asset: the death clip plays instead
+	}
+	bRagdoll = bEnable;
+
+	if (bEnable)
+	{
+		// Collides with the world, never with shots, cameras or other players.
+		Body->SetCollisionProfileName(TEXT("Ragdoll"));
+		Body->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
+		Body->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+		Body->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+		Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		Body->SetAllBodiesSimulatePhysics(true);
+		Body->SetSimulatePhysics(true);
+		Body->WakeAllRigidBodies();
+		Body->bBlendPhysics = true;
+
+		// Knocked away from where the killing shots came from, keeping the
+		// momentum the body had (a running player keeps sliding forward).
+		FVector Push = GetActorForwardVector() * -1.f;
+		if (bHasLastHitFrom)
+		{
+			Push = (GetActorLocation() - LastHitFrom).GetSafeNormal2D();
+		}
+		const FVector Carry = GetVelocity() * 0.8f;
+		Body->SetAllPhysicsLinearVelocity(Carry);
+		Body->AddImpulse(Push * 260.f + FVector(0.f, 0.f, 60.f), TEXT("spine_03"), /*bVelChange*/ true);
+		return;
+	}
+
+	Body->SetSimulatePhysics(false);
+	Body->SetAllBodiesSimulatePhysics(false);
+	Body->bBlendPhysics = false;
+	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Body->SetCollisionProfileName(TEXT("CharacterMesh"));
+	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	// Simulation detaches the mesh from the capsule; put it back where it lives.
+	Body->AttachToComponent(GetCapsuleComponent(), FAttachmentTransformRules::KeepRelativeTransform);
+	Body->SetRelativeLocationAndRotation(GetBaseTranslationOffset(), GetBaseRotationOffset());
+	bSmoothingInit = false;
+}
+
+// ---------------------------------------------------------------------------
+// v1.1 spawn protection look
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::UpdateProtectionLook(float DeltaSeconds)
+{
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const bool bProtected = Director && Director->IsProtected(GetOwningPlayerId());
+	GhostAlpha = FMath::FInterpConstantTo(GhostAlpha, bProtected ? 1.f : 0.f, DeltaSeconds, 5.f);
+
+	UMaterialInterface* Ghost = UCSAnimationSettings::Get()->SpawnProtectionMaterial.LoadSynchronous();
+	if (!Ghost)
+	{
+		return;
+	}
+
+	TArray<UMeshComponent*, TInlineAllocator<6>> Meshes;
+	Meshes.Add(GetMesh());
+	Meshes.Add(ThirdPersonWeaponModel.Get());
+	Meshes.Add(ThirdPersonWeapon.Get());
+	if (IsLocalPlayerView())
+	{
+		Meshes.Add(FirstPersonMesh.Get());
+		Meshes.Add(FirstPersonWeaponModel.Get());
+		Meshes.Add(FirstPersonWeapon.Get());
+	}
+
+	if (GhostAlpha > 0.f)
+	{
+		// Swap every slot to the ghost material. Re-checked each frame, so a
+		// weapon switched while protected gets the look too.
+		for (UMeshComponent* MeshComp : Meshes)
+		{
+			if (!MeshComp)
+			{
+				continue;
+			}
+			TArray<TObjectPtr<UMaterialInterface>>& Saved = GhostOriginals.FindOrAdd(MeshComp);
+			for (int32 Slot = 0; Slot < MeshComp->GetNumMaterials(); ++Slot)
+			{
+				UMaterialInterface* Current = MeshComp->GetMaterial(Slot);
+				if (!Current || Current->GetBaseMaterial() != Ghost->GetBaseMaterial())
+				{
+					if (Saved.Num() <= Slot)
+					{
+						Saved.SetNum(Slot + 1);
+					}
+					Saved[Slot] = Current;
+					GhostKeepAlive.AddUnique(Current);
+					UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Ghost, this);
+					GhostMaterials.Add(MID);
+					MeshComp->SetMaterial(Slot, MID);
+				}
+			}
+		}
+		for (UMaterialInstanceDynamic* MID : GhostMaterials)
+		{
+			if (MID)
+			{
+				MID->SetScalarParameterValue(TEXT("Fade"), GhostAlpha);
+			}
+		}
+		bGhostMaterials = true;
+		return;
+	}
+
+	if (bGhostMaterials)
+	{
+		// Protection over: every slot back to what it had.
+		for (TPair<TWeakObjectPtr<UMeshComponent>, TArray<TObjectPtr<UMaterialInterface>>>& Pair : GhostOriginals)
+		{
+			if (UMeshComponent* MeshComp = Pair.Key.Get())
+			{
+				for (int32 Slot = 0; Slot < Pair.Value.Num() && Slot < MeshComp->GetNumMaterials(); ++Slot)
+				{
+					UMaterialInterface* Now = MeshComp->GetMaterial(Slot);
+					if (Now && Now->GetBaseMaterial() == Ghost->GetBaseMaterial())
+					{
+						MeshComp->SetMaterial(Slot, Pair.Value[Slot]);
+					}
+				}
+			}
+		}
+		GhostOriginals.Reset();
+		GhostMaterials.Reset();
+		GhostKeepAlive.Reset();
+		bGhostMaterials = false;
 	}
 }

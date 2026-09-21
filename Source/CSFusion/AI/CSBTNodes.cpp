@@ -94,6 +94,11 @@ EBTNodeResult::Type UCSBTTask_Engage::ExecuteTask(UBehaviorTreeComponent& OwnerC
 	NextMoveTime = StartTime;
 	ShotsInBurst = 0;
 	bReloadRequested = false;
+	if (ACSBotController* Controller = BotController(OwnerComp))
+	{
+		bMayThrowGrenade = FMath::FRand() < Controller->GetTuning().GrenadeChance;
+		Controller->PickAimPart();
+	}
 	return EBTNodeResult::InProgress;
 }
 
@@ -155,13 +160,22 @@ void UCSBTTask_Engage::TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMe
 
 void UCSBTTask_Engage::TryFire(ACSBotController* Controller, ACSCharacter* Bot, ACSCharacter* Target, double T)
 {
-	const ACSMatchDirector* Director = ACSMatchDirector::Get(Bot);
+	ACSMatchDirector* Director = ACSMatchDirector::Get(Bot);
 	if (!Director || T < NextFireTime)
 	{
 		return;
 	}
+
+	// v1.1: now and then a grenade instead, at a sensible range.
+	if (bMayThrowGrenade && TryThrowGrenade(Controller, Bot, Target, Director))
+	{
+		bMayThrowGrenade = false;
+		NextFireTime = T + 0.9;
+		return;
+	}
+
 	const FCSLoadoutView Loadout = Director->GetLoadout(Bot->GetOwningPlayerId());
-	if (!Loadout.Weapon || Loadout.bReloading)
+	if (!Loadout.Weapon || Loadout.bReloading || Loadout.bGrenade)
 	{
 		return;
 	}
@@ -178,30 +192,89 @@ void UCSBTTask_Engage::TryFire(ACSBotController* Controller, ACSCharacter* Bot, 
 	bReloadRequested = false;
 
 	const FCSBotTuning& Tuning = Controller->GetTuning();
+
+	// The view turns smoothly toward the chosen body part (see the controller);
+	// the trigger is only pulled once it is actually there.
+	if (Controller->GetAimErrorTo(Target) > Tuning.FireConeDegrees)
+	{
+		return;
+	}
+
 	FVector Eye;
 	FVector Unused;
 	Bot->GetAimRay(Eye, Unused);
+	const FVector View = Controller->GetControlRotation().Vector();
 
-	// Chest, or now and then the head. Capsule half height 88: head ~ +60.
-	const bool bHead = FMath::FRand() < Tuning.HeadshotChance;
-	const FVector AimPoint = Target->GetActorLocation() + FVector(0.f, 0.f, bHead ? 62.f : 22.f);
-	const FVector Ideal = (AimPoint - Eye).GetSafeNormal();
-
-	// Human-like error, a bit worse while moving.
-	const float Error = FMath::DegreesToRadians(Tuning.AimErrorDegrees * (Bot->GetVelocity().Size2D() > 50.f ? 1.3f : 1.f));
-	const FVector Direction = FMath::VRandCone(Ideal, Error);
-
-	Bot->BotFire(Eye, Direction);
+	// Human-like error around where it looks, a bit worse while moving.
+	const float Error = FMath::DegreesToRadians(Tuning.AimErrorDegrees * (Bot->GetVelocity().Size2D() > 50.f ? 1.35f : 1.f));
+	Bot->BotFire(Eye, FMath::VRandCone(View, Error));
 
 	// Pace to the weapon's rate (the authority enforces it anyway), with
-	// bursts and pauses so bots do not hold the trigger like a machine.
+	// bursts and pauses; each burst goes for a newly chosen body part.
 	const float Interval = Loadout.Weapon->GetFireInterval();
 	NextFireTime = T + Interval * FMath::FRandRange(1.05f, 1.3f);
-	if (++ShotsInBurst >= Tuning.BurstShots)
+	if (!Loadout.Weapon->bAutomatic || ++ShotsInBurst >= Tuning.BurstShots)
 	{
 		ShotsInBurst = 0;
-		NextFireTime += Tuning.BurstPause * FMath::FRandRange(0.7f, 1.3f);
+		if (Loadout.Weapon->bAutomatic)
+		{
+			NextFireTime += Tuning.BurstPause * FMath::FRandRange(0.7f, 1.3f);
+		}
+		Controller->PickAimPart();
 	}
+}
+
+bool UCSBTTask_Engage::TryThrowGrenade(ACSBotController* Controller, ACSCharacter* Bot, ACSCharacter* Target, ACSMatchDirector* Director)
+{
+	const int32 Id = Bot->GetOwningPlayerId();
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(Bot, Id);
+	if (!Inventory)
+	{
+		return false;
+	}
+	const float Distance = FVector::Dist2D(Bot->GetActorLocation(), Target->GetActorLocation());
+	if (Distance < 700.f || Distance > 1900.f)
+	{
+		return false;
+	}
+	int32 GrenadeSlot = INDEX_NONE;
+	const TArray<FCSInventorySlot>& Slots = Inventory->GetSlots();
+	for (int32 i = 0; i < Slots.Num(); ++i)
+	{
+		const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(Slots[i].ItemIndex);
+		if (!Slots[i].IsEmpty() && Item && Item->ItemType == ECSItemType::Grenade)
+		{
+			GrenadeSlot = i;
+			break;
+		}
+	}
+	if (GrenadeSlot == INDEX_NONE)
+	{
+		return false;
+	}
+
+	const int32 Previous = Inventory->GetEquippedSlot();
+	Inventory->SetEquippedSlot(GrenadeSlot);
+
+	// Lob: aim at the feet, raised more the farther away the target is.
+	FVector Eye;
+	FVector Unused;
+	Bot->GetAimRay(Eye, Unused);
+	FRotator Lob = (Target->GetActorLocation() - FVector(0.f, 0.f, 60.f) - Eye).Rotation();
+	Lob.Pitch += FMath::Clamp(6.f + Distance / 130.f, 8.f, 24.f);
+	const bool bThrown = Director->TryThrowGrenade(Id, Eye, Lob.Vector(), Eye, Bot->GetVelocity());
+
+	// Back to the gun (TryThrowGrenade already switched to the pistol if that was the last one).
+	if (Previous != GrenadeSlot && Previous != INDEX_NONE)
+	{
+		Inventory->SetEquippedSlot(Previous);
+	}
+	if (bThrown)
+	{
+		Bot->PlayThrowPresentation(/*bFromRelease*/ true);
+		UE_LOG(LogCSAI, Log, TEXT("Bot %d threw a grenade at %d (%.0f cm)."), Id, Target->GetOwningPlayerId(), Distance);
+	}
+	return bThrown;
 }
 
 void UCSBTTask_Engage::UpdateMovement(ACSBotController* Controller, ACSCharacter* Bot, ACSCharacter* Target, double T)

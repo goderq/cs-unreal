@@ -42,6 +42,13 @@ ACSWorldPickup* ACSPickupSpawnPoint::SpawnPickup() const
 		return nullptr;
 	}
 
+	// v1.1: weapons are bought in the shop, never lying around the map.
+	// -mapweapons brings them back for the self-tests that pick weapons up.
+	if (Item->IsWeapon() && !FParse::Param(FCommandLine::Get(), TEXT("mapweapons")))
+	{
+		return nullptr;
+	}
+
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 

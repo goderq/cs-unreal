@@ -201,6 +201,22 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestUITimer, this, &ACSPlayerController::CSTestUI, 10.f, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstesttour")))
+	{
+		GetWorldTimerManager().SetTimer(TestModesTimer, this, &ACSPlayerController::CSTestTour, 8.f, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestmodes")))
+	{
+		GetWorldTimerManager().SetTimer(TestModesTimer, this, &ACSPlayerController::CSTestModes, 8.f, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestposes")))
+	{
+		GetWorldTimerManager().SetTimer(TestModesTimer, this, &ACSPlayerController::CSTestPoses, 12.f, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestcomp")))
+	{
+		GetWorldTimerManager().SetTimer(TestModesTimer, this, &ACSPlayerController::CSTestComp, 4.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestcontest")))
 	{
 		GetWorldTimerManager().SetTimer(TestContestTimer, this, &ACSPlayerController::CSTestContest, 12.f, false);
@@ -632,6 +648,26 @@ void ACSPlayerController::TestFireCheck()
 void ACSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	CloseMenus();
+
+	// The timer manager belongs to the game instance and outlives this
+	// controller across a map change; a self-test lambda still pending when the
+	// player leaves the match would run on a destroyed object (crashed the bot
+	// test after "Leave match").
+	if (UWorld* World = GetWorld())
+	{
+		FTimerManager& Timers = World->GetTimerManager();
+		for (FTimerHandle* Handle : { &TestBotsTimer, &TestCheatTimer, &TestContestTimer, &TestInputTimer, &TestKillTimer,
+			&TestLeaveTimer, &TestLootTimer, &TestModesTimer, &TestMoveTimer, &TestPerfTimer, &TestRoundTimer, &TestShootTimer,
+			&TestStepTimer, &TestUITimer, &TestVisualTimer, &TestWalkTimer, &TestWeaponsTimer })
+		{
+			Timers.ClearTimer(*Handle);
+		}
+		for (FTimerHandle& Handle : Stage4ArmTimers)
+		{
+			Timers.ClearTimer(Handle);
+		}
+		Timers.ClearAllTimersForObject(this);
+	}
 	FCoreDelegates::OnEndFrame.Remove(TestPerfTickHandle);
 
 	if (UCSSessionSubsystem* Session = GetSessionSubsystem())

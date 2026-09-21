@@ -7,6 +7,7 @@
 #include "Combat/CSMatchDirector.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
+#include "Core/CSModeSettings.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -44,8 +45,8 @@ ACSBotManager* ACSBotManager::Get(const UObject* WorldContextObject)
 
 FString ACSBotManager::GetBotName(int32 BotId)
 {
-	static const TCHAR* Names[] = { TEXT("Alpha"), TEXT("Bravo"), TEXT("Charlie"), TEXT("Delta"),
-		TEXT("Echo"), TEXT("Foxtrot"), TEXT("Golf"), TEXT("Hotel"), TEXT("India"), TEXT("Juliet") };
+	static const TCHAR* Names[] = { TEXT("Charlie"), TEXT("Delta"), TEXT("Echo"), TEXT("Foxtrot"),
+		TEXT("Golf"), TEXT("Hotel"), TEXT("India"), TEXT("Juliet"), TEXT("Kilo"), TEXT("Lima") };
 	const int32 Index = FMath::Max(0, BotId - CSBots::FirstBotId) % UE_ARRAY_COUNT(Names);
 	return FString::Printf(TEXT("Bot %s"), Names[Index]);
 }
@@ -116,7 +117,18 @@ void ACSBotManager::Maintain()
 		EnsureController(Bot, GS->GetBotDifficulty());
 	}
 
-	const int32 Wanted = GS->GetBotCount();
+	int32 Wanted = GS->GetBotCount();
+	const FCSModeRules& Rules = GS->GetRules();
+	if (Rules.bBotsFillTeams)
+	{
+		// 5 vs 5: bots fill both teams up to TeamSize, whatever the menu said.
+		int32 Humans = 0;
+		for (const FCSPlayerCombatRecord& Record : ACSMatchDirector::Get(this)->GetAllRecords())
+		{
+			Humans += CSBots::IsBotId(Record.PlayerId) ? 0 : 1;
+		}
+		Wanted = FMath::Clamp(Rules.TeamSize * 2 - Humans, 0, 12);
+	}
 	if (Bots.Num() < Wanted)
 	{
 		// One per tick: spreads the spawn cost and the network burst.
@@ -124,7 +136,15 @@ void ACSBotManager::Maintain()
 	}
 	else if (Bots.Num() > Wanted)
 	{
-		Bots.Sort([](const ACSCharacter& A, const ACSCharacter& B) { return A.GetOwningPlayerId() > B.GetOwningPlayerId(); });
+		// From the bigger team, newest first.
+		const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+		const ECSTeam Bigger = Director->CountMembers(ECSTeam::Alpha) >= Director->CountMembers(ECSTeam::Bravo) ? ECSTeam::Alpha : ECSTeam::Bravo;
+		Bots.Sort([Director, Bigger](const ACSCharacter& A, const ACSCharacter& B)
+		{
+			const bool bA = Director->GetTeam(A.GetOwningPlayerId()) == Bigger;
+			const bool bB = Director->GetTeam(B.GetOwningPlayerId()) == Bigger;
+			return bA != bB ? bA : A.GetOwningPlayerId() > B.GetOwningPlayerId();
+		});
 		RemoveBot(Bots[0]);
 	}
 }

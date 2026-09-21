@@ -15,8 +15,15 @@ UCSCharacterMovementComponent::UCSCharacterMovementComponent()
 	MaxAcceleration = 2400.f;
 	BrakingDecelerationWalking = 2400.f;
 	GroundFriction = 8.f;
-	JumpZVelocity = 480.f;
-	AirControl = 0.25f;
+	// v1.1 jumps: a quicker, heavier arc (apex ~0.7 m, ~0.65 s in the air)
+	// and little steering once airborne, instead of the floaty default.
+	JumpZVelocity = 430.f;
+	GravityScale = 1.35f;
+	AirControl = 0.12f;
+	AirControlBoostMultiplier = 1.f;
+	AirControlBoostVelocityThreshold = 0.f;
+	BrakingDecelerationFalling = 0.f;
+	FallingLateralFriction = 0.f;
 	bUseControllerDesiredRotation = false;
 	bOrientRotationToMovement = false;
 	RotationRate = FRotator(0.f, 720.f, 0.f);
@@ -70,11 +77,18 @@ float UCSCharacterMovementComponent::GetMaxSpeed() const
 		{
 			return WalkSpeed * 0.6f;
 		}
+		// v1.1: the first steps after a hard landing are slower.
+		float Scale = 1.f;
+		if (CSOwner && GetWorld() && GetWorld()->GetTimeSeconds() - CSOwner->GetLastLandedTime() < 0.25
+			&& CSOwner->GetLastLandingImpact() > 450.f)
+		{
+			Scale = 0.7f;
+		}
 		if (IsSprinting())
 		{
-			return SprintSpeed;
+			return SprintSpeed * Scale;
 		}
-		return WalkSpeed;
+		return WalkSpeed * Scale;
 	}
 
 	return Super::GetMaxSpeed();

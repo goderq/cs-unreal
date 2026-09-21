@@ -22,16 +22,33 @@ class STextBlock;
 namespace CSUI
 {
 	// --- Palette -------------------------------------------------------------
-	inline const FLinearColor Backdrop    = FLinearColor(0.012f, 0.014f, 0.018f, 0.92f);
-	inline const FLinearColor Panel       = FLinearColor(0.035f, 0.040f, 0.050f, 0.94f);
-	inline const FLinearColor PanelRaised = FLinearColor(0.060f, 0.068f, 0.082f, 1.00f);
-	inline const FLinearColor Hover       = FLinearColor(0.110f, 0.125f, 0.150f, 1.00f);
-	inline const FLinearColor Accent      = FLinearColor(0.180f, 0.800f, 0.450f, 1.00f);
-	inline const FLinearColor AccentDim   = FLinearColor(0.110f, 0.420f, 0.250f, 1.00f);
-	inline const FLinearColor Danger      = FLinearColor(0.900f, 0.260f, 0.240f, 1.00f);
-	inline const FLinearColor Text        = FLinearColor(0.930f, 0.940f, 0.950f, 1.00f);
-	inline const FLinearColor TextDim     = FLinearColor(0.560f, 0.590f, 0.630f, 1.00f);
-	inline const FLinearColor Warning     = FLinearColor(1.000f, 0.780f, 0.300f, 1.00f);
+	inline const FLinearColor Backdrop    = FLinearColor(0.008f, 0.011f, 0.018f, 0.93f);
+	inline const FLinearColor Panel       = FLinearColor(0.020f, 0.026f, 0.038f, 0.95f);
+	inline const FLinearColor PanelRaised = FLinearColor(0.038f, 0.048f, 0.068f, 1.00f);
+	inline const FLinearColor Hover       = FLinearColor(0.070f, 0.090f, 0.125f, 1.00f);
+	inline const FLinearColor Accent      = FLinearColor(1.000f, 0.580f, 0.120f, 1.00f);
+	inline const FLinearColor AccentDim   = FLinearColor(0.420f, 0.220f, 0.040f, 1.00f);
+	inline const FLinearColor Danger      = FLinearColor(0.950f, 0.270f, 0.230f, 1.00f);
+	inline const FLinearColor Text        = FLinearColor(0.940f, 0.950f, 0.965f, 1.00f);
+	inline const FLinearColor TextDim     = FLinearColor(0.520f, 0.570f, 0.650f, 1.00f);
+	inline const FLinearColor Warning     = FLinearColor(1.000f, 0.820f, 0.300f, 1.00f);
+	// v1.1
+	inline const FLinearColor TeamAlpha   = FLinearColor(0.250f, 0.620f, 1.000f, 1.00f);
+	inline const FLinearColor TeamBravo   = FLinearColor(1.000f, 0.360f, 0.260f, 1.00f);
+	inline const FLinearColor Money       = FLinearColor(0.420f, 0.920f, 0.450f, 1.00f);
+	inline const FLinearColor Stroke      = FLinearColor(1.000f, 1.000f, 1.000f, 0.07f);
+
+	/** Team colour; free-for-all (None) is the accent. */
+	FLinearColor TeamColor(uint8 Team);
+
+	/** "$2,500". */
+	FText MoneyText(int32 Amount);
+
+	/** "1:05" for seconds. */
+	FText ClockText(float Seconds);
+
+	/** Thin horizontal bar, Fraction 0..1, for item stats. */
+	TSharedRef<SWidget> MakeStatBar(const TAttribute<float>& Fraction, const FLinearColor& Color, float Height = 5.f);
 
 	/** Roboto (the engine font, always cooked). */
 	FSlateFontInfo Font(int32 Size, bool bBold = false);

@@ -81,8 +81,17 @@ bool FCSUnitBotTuningTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("reaction ordered"), Easy.ReactionTime > Normal.ReactionTime && Normal.ReactionTime > Hard.ReactionTime);
 	TestTrue(TEXT("aim error ordered"), Easy.AimErrorDegrees > Normal.AimErrorDegrees && Normal.AimErrorDegrees > Hard.AimErrorDegrees);
 	TestTrue(TEXT("sight ordered"), Easy.SightRadius < Normal.SightRadius && Normal.SightRadius < Hard.SightRadius);
-	TestTrue(TEXT("headshots ordered"), Easy.HeadshotChance <= Normal.HeadshotChance && Normal.HeadshotChance < Hard.HeadshotChance);
-	TestTrue(TEXT("even hard bots are human-like"), Hard.ReactionTime >= 0.15f && Hard.AimErrorDegrees > 0.f && Hard.HeadshotChance < 0.5f);
+	// v1.1: head share of the body-part weights, turn speed.
+	auto HeadShare = [](const FCSBotTuning& T)
+	{
+		float Total = 0.f;
+		for (const float W : T.PartWeights) { Total += W; }
+		return Total > 0.f ? T.PartWeights[static_cast<int32>(ECSBotAimPart::Head)] / Total : 0.f;
+	};
+	TestTrue(TEXT("headshots ordered"), HeadShare(Easy) < HeadShare(Normal) && HeadShare(Normal) < HeadShare(Hard));
+	TestTrue(TEXT("turning ordered"), Easy.TurnSpeed < Normal.TurnSpeed && Normal.TurnSpeed < Hard.TurnSpeed);
+	TestTrue(TEXT("never only the head"), HeadShare(Hard) < 0.35f);
+	TestTrue(TEXT("even hard bots are human-like"), Hard.ReactionTime >= 0.15f && Hard.AimErrorDegrees > 0.f && Hard.SwayDegrees > 0.f);
 	return true;
 }
 
