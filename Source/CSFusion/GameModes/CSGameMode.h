@@ -72,6 +72,9 @@ public:
 protected:
 	/** Authority creates the single MatchDirector if the world has none. */
 	void EnsureMatchDirector();
+
+	/** Authority turns every ACSPickupSpawnPoint in the level into a pickup. */
+	void SpawnMapPickups();
 	/** Authority-only match-phase driver, ticked from Tick(). */
 	void UpdateMatchFlow();
 

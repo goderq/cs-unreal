@@ -64,6 +64,16 @@ UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer)
 	Map(IA_ToggleInventory, Key_ToggleInventory, {});
 	Map(IA_PauseMenu,       Key_PauseMenu,       {});
 	Map(IA_Scoreboard,      Key_Scoreboard,      {});
+	Map(IA_Drop,            Key_Drop,            {});
+
+	// Every number key drives the same action; a Scalar modifier turns the
+	// digital 1.0 into the key's own number, which Input_EquipSlot decodes.
+	for (int32 i = 0; i < SlotKeys.Num(); ++i)
+	{
+		UInputModifierScalar* Scalar = NewObject<UInputModifierScalar>(Context);
+		Scalar->Scalar = FVector(static_cast<double>(i + 1));
+		Map(IA_EquipSlot, SlotKeys[i], { Scalar });
+	}
 
 	UE_LOG(LogCS, Log, TEXT("Built runtime mapping context with %d mappings."), Count);
 	return Context;

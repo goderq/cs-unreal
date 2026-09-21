@@ -80,6 +80,20 @@ protected:
 
 	void ArmSelfTest();
 
+	/** Contested-pickup self-test, enabled with -cstestcontest on two clients. */
+	UFUNCTION(Exec)
+	void CSTestContest();
+	FTimerHandle TestContestTimer;
+	int32 TestContestItem = INDEX_NONE;
+
+	/** Stage 3 self-test, enabled with -cstestloot: pickup, equip, fire, drop. */
+	UFUNCTION(Exec)
+	void CSTestLoot();
+	void PressKey(const FKey& Key);
+	FTimerHandle TestLootTimer;
+	int32 TestLootItemIndex = INDEX_NONE;
+	int32 TestPickupsBefore = 0;
+
 	/** Two-client combat self-test, enabled with -cstestshoot. */
 	UFUNCTION(Exec)
 	void CSTestShoot();

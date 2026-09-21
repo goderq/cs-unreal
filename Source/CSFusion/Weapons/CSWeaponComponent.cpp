@@ -36,8 +36,19 @@ const UCSWeaponDefinition* UCSWeaponComponent::GetStarterWeapon() const
 
 const UCSWeaponDefinition* UCSWeaponComponent::GetActiveWeapon() const
 {
-	// Stage 3 will consult the inventory's equipped weapon first and fall back
-	// to the starter pistol, which is always available by design.
+	// The equipped inventory weapon if any, else the starter pistol, which is
+	// always available by design. Resolved from authoritative state, so the
+	// client and the authority agree on what is in hand.
+	if (OwnerCharacter)
+	{
+		if (const ACSMatchDirector* Director = GetDirector())
+		{
+			if (const UCSWeaponDefinition* Weapon = Director->GetLoadout(OwnerCharacter->GetOwningPlayerId()).Weapon)
+			{
+				return Weapon;
+			}
+		}
+	}
 	return GetStarterWeapon();
 }
 
@@ -120,7 +131,12 @@ void UCSWeaponComponent::TryFireOnce()
 		{
 			return;
 		}
-		if (Director->GetStarterRoundsInMag(LocalId) <= 0)
+		const FCSLoadoutView Loadout = Director->GetLoadout(LocalId);
+		if (Loadout.bReloading)
+		{
+			return;
+		}
+		if (Loadout.RoundsInMag <= 0)
 		{
 			// Dry fire: ask for a reload rather than spamming the server.
 			RequestReload();
@@ -140,7 +156,7 @@ void UCSWeaponComponent::TryFireOnce()
 		CurrentBloomDegrees + Weapon->SpreadPerShot);
 
 	// Authoritative request. The result comes back as replicated director state.
-	OwnerCharacter->RequestFire(Origin, Direction);
+	OwnerCharacter->RequestFire(Origin, Direction, bAiming);
 }
 
 void UCSWeaponComponent::RequestReload()

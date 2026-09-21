@@ -95,6 +95,8 @@ ACTION_SPEC = [
     ("IA_ToggleInventory", BOOL, "ia_toggle_inventory"),
     ("IA_PauseMenu", BOOL, "ia_pause_menu"),
     ("IA_Scoreboard", BOOL, "ia_scoreboard"),
+    ("IA_EquipSlot", unreal.InputActionValueType.AXIS1D, "ia_equip_slot"),
+    ("IA_Drop", BOOL, "ia_drop"),
 ]
 
 
@@ -322,6 +324,148 @@ def make_starter_pistol():
     return pistol
 
 
+# ---------------------------------------------------------------------------
+# Stage 3: weapons, items, loot placement
+# ---------------------------------------------------------------------------
+
+ITEMS_DIR = "/Game/Items"
+
+# name: (display, stats). Anything not listed keeps the UCSWeaponDefinition
+# C++ default. reserve_ammo = 0 because inventory weapons reload from ammo
+# items in the inventory, not from a built-in reserve.
+WEAPONS = {
+    "AK47": ("AK-47", dict(
+        base_damage=32.0, headshot_multiplier=4.0, range=15000.0,
+        falloff_start_distance=2500.0, falloff_end_distance=9000.0, min_damage_multiplier=0.5,
+        rounds_per_minute=600.0, automatic=True, magazine_size=30, reserve_ammo=0, reload_seconds=2.4,
+        hip_spread_degrees=2.2, aim_spread_degrees=0.35, spread_per_shot=0.6, max_bloom_spread_degrees=5.0,
+        recoil_pitch=1.2, recoil_yaw=0.35)),
+    "M4": ("M4", dict(
+        base_damage=28.0, headshot_multiplier=4.0, range=15000.0,
+        falloff_start_distance=2500.0, falloff_end_distance=9000.0, min_damage_multiplier=0.5,
+        rounds_per_minute=720.0, automatic=True, magazine_size=30, reserve_ammo=0, reload_seconds=2.1,
+        hip_spread_degrees=1.8, aim_spread_degrees=0.25, spread_per_shot=0.45, max_bloom_spread_degrees=4.0,
+        recoil_pitch=0.9, recoil_yaw=0.25)),
+    "SMG": ("SMG", dict(
+        base_damage=20.0, headshot_multiplier=3.0, range=8000.0,
+        falloff_start_distance=800.0, falloff_end_distance=3500.0, min_damage_multiplier=0.4,
+        rounds_per_minute=900.0, automatic=True, magazine_size=25, reserve_ammo=0, reload_seconds=1.8,
+        hip_spread_degrees=2.5, aim_spread_degrees=0.9, spread_per_shot=0.35, max_bloom_spread_degrees=4.5,
+        recoil_pitch=0.5, recoil_yaw=0.3)),
+    "Shotgun": ("Shotgun", dict(
+        base_damage=14.0, headshot_multiplier=2.0, range=3000.0, pellets_per_shot=8,
+        falloff_start_distance=400.0, falloff_end_distance=1500.0, min_damage_multiplier=0.2,
+        rounds_per_minute=70.0, automatic=False, magazine_size=6, reserve_ammo=0, reload_seconds=3.0,
+        hip_spread_degrees=5.0, aim_spread_degrees=3.5, spread_per_shot=0.0, max_bloom_spread_degrees=5.0,
+        recoil_pitch=3.0, recoil_yaw=0.5)),
+    "Sniper": ("Sniper Rifle", dict(
+        base_damage=95.0, headshot_multiplier=2.5, range=30000.0,
+        falloff_start_distance=20000.0, falloff_end_distance=30000.0, min_damage_multiplier=0.9,
+        rounds_per_minute=45.0, automatic=False, magazine_size=5, reserve_ammo=0, reload_seconds=3.2,
+        hip_spread_degrees=7.0, aim_spread_degrees=0.0, spread_per_shot=0.0, max_bloom_spread_degrees=7.0,
+        recoil_pitch=4.0, recoil_yaw=0.2)),
+}
+
+CUBE = "/Engine/BasicShapes/Cube.Cube"
+SPHERE = "/Engine/BasicShapes/Sphere.Sphere"
+CYL = "/Engine/BasicShapes/Cylinder.Cylinder"
+
+# ItemId: (asset suffix, display, type, stackable, max_stack, pickup_count,
+#          weapon key, ammo item id, armor, heal, mesh, scale, color)
+T = unreal.CSItemType
+ITEMS = [
+    ("ak47", "AK47", "AK-47", T.WEAPON, False, 1, 1, "AK47", "ammo_rifle", 0, 0, CUBE, (0.9, 0.12, 0.22), (1.0, 0.45, 0.1)),
+    ("m4", "M4", "M4", T.WEAPON, False, 1, 1, "M4", "ammo_rifle", 0, 0, CUBE, (0.85, 0.12, 0.22), (0.15, 0.4, 0.15)),
+    ("smg", "SMG", "SMG", T.WEAPON, False, 1, 1, "SMG", "ammo_smg", 0, 0, CUBE, (0.55, 0.12, 0.2), (0.5, 0.5, 0.55)),
+    ("shotgun", "Shotgun", "Shotgun", T.WEAPON, False, 1, 1, "Shotgun", "ammo_shells", 0, 0, CUBE, (0.95, 0.14, 0.2), (0.45, 0.25, 0.1)),
+    ("sniper", "Sniper", "Sniper Rifle", T.WEAPON, False, 1, 1, "Sniper", "ammo_sniper", 0, 0, CUBE, (1.2, 0.1, 0.2), (0.08, 0.08, 0.1)),
+    ("ammo_rifle", "AmmoRifle", "Rifle Ammo", T.AMMO, True, 120, 30, None, "", 0, 0, CUBE, (0.25, 0.18, 0.15), (0.95, 0.8, 0.2)),
+    ("ammo_smg", "AmmoSMG", "SMG Ammo", T.AMMO, True, 150, 50, None, "", 0, 0, CUBE, (0.25, 0.18, 0.15), (0.8, 0.8, 0.3)),
+    ("ammo_shells", "AmmoShells", "Shotgun Shells", T.AMMO, True, 32, 8, None, "", 0, 0, CUBE, (0.25, 0.18, 0.15), (0.9, 0.3, 0.2)),
+    ("ammo_sniper", "AmmoSniper", "Sniper Ammo", T.AMMO, True, 20, 5, None, "", 0, 0, CUBE, (0.25, 0.18, 0.15), (0.6, 0.6, 0.9)),
+    ("grenade", "Grenade", "Grenade", T.GRENADE, True, 3, 1, None, "", 0, 0, SPHERE, (0.18, 0.18, 0.22), (0.25, 0.3, 0.15)),
+    ("armor", "Armor", "Armor Vest", T.ARMOR, True, 2, 1, None, "", 50.0, 0, CUBE, (0.5, 0.45, 0.14), (0.2, 0.45, 1.0)),
+    ("medkit", "Medkit", "Medkit", T.MEDKIT, True, 3, 1, None, "", 0, 50.0, CUBE, (0.35, 0.3, 0.15), (1.0, 0.15, 0.15)),
+]
+
+# ItemId, x, y. Floor top is z = 0. Player starts are at x = -2500 / +2500.
+LOOT_LAYOUT = [
+    ("ak47", -2150, -150), ("m4", -2150, 150),
+    ("ammo_rifle", -2150, -450), ("ammo_rifle", -2150, 450),
+    ("armor", -2150, 750), ("medkit", -2150, -750),
+    ("smg", 2150, -150), ("shotgun", 2150, 150),
+    ("ammo_smg", 2150, -450), ("ammo_shells", 2150, 450),
+    ("armor", 2150, 750), ("medkit", 2150, -750),
+    ("sniper", 0, 650), ("ammo_sniper", 0, -650),
+    ("grenade", 650, 0), ("grenade", -650, 0),
+]
+
+
+def make_weapons():
+    ensure_dir(WEAPONS_DIR)
+    factory = data_asset_factory(unreal.CSWeaponDefinition)
+    out = {}
+    for key, (display, stats) in WEAPONS.items():
+        asset = create_asset("DA_Weapon_" + key, WEAPONS_DIR, unreal.CSWeaponDefinition, factory)
+        asset.set_editor_property("weapon_id", key.lower())
+        asset.set_editor_property("display_name", unreal.Text(display))
+        asset.set_editor_property("is_starter_weapon", False)
+        for prop, value in stats.items():
+            asset.set_editor_property(prop, value)
+        EDITOR_ASSET.save_loaded_asset(asset)
+        out[key] = asset
+    return out
+
+
+def make_items(weapons):
+    ensure_dir(ITEMS_DIR)
+    factory = data_asset_factory(unreal.CSItemDefinition)
+    paths = []
+    for (item_id, suffix, display, item_type, stackable, max_stack, count,
+         weapon_key, ammo_id, armor, heal, mesh, scale, color) in ITEMS:
+        asset = create_asset("DA_Item_" + suffix, ITEMS_DIR, unreal.CSItemDefinition, factory)
+        asset.set_editor_property("item_id", item_id)
+        asset.set_editor_property("display_name", unreal.Text(display))
+        asset.set_editor_property("item_type", item_type)
+        asset.set_editor_property("stackable", stackable)
+        asset.set_editor_property("max_stack", max_stack)
+        asset.set_editor_property("default_pickup_count", count)
+        if weapon_key:
+            asset.set_editor_property("weapon", weapons[weapon_key])
+            asset.set_editor_property("ammo_item_id", ammo_id)
+        asset.set_editor_property("armor_amount", float(armor))
+        asset.set_editor_property("heal_amount", float(heal))
+        asset.set_editor_property("world_mesh", EDITOR_ASSET.load_asset(mesh))
+        asset.set_editor_property("world_mesh_scale", unreal.Vector(*scale))
+        asset.set_editor_property("placeholder_color", unreal.LinearColor(color[0], color[1], color[2], 1.0))
+        EDITOR_ASSET.save_loaded_asset(asset)
+        paths.append("{0}/DA_Item_{1}.DA_Item_{1}".format(ITEMS_DIR, suffix))
+    return paths
+
+
+def place_loot():
+    """Adds ACSPickupSpawnPoint markers to the test map if it has none yet."""
+    level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+
+    level_subsystem.load_level(MAP_PATH)
+
+    existing = [a for a in actor_subsystem.get_all_level_actors()
+                if isinstance(a, unreal.CSPickupSpawnPoint)]
+    if existing:
+        log("map already has {0} loot markers".format(len(existing)))
+        return
+
+    for item_id, x, y in LOOT_LAYOUT:
+        marker = actor_subsystem.spawn_actor_from_class(
+            unreal.CSPickupSpawnPoint, unreal.Vector(x, y, 30), unreal.Rotator(0, 0, 0))
+        marker.set_actor_label("Loot_{0}_{1}_{2}".format(item_id, x, y))
+        marker.set_editor_property("item_id", item_id)
+
+    level_subsystem.save_current_level()
+    log("placed {0} loot markers".format(len(LOOT_LAYOUT)))
+
+
 def main():
     log("Stage 1 content bootstrap starting")
     actions = make_input_actions()
@@ -331,6 +475,13 @@ def main():
     gamemode_bp = make_gamemode_blueprint(character_bp)
     make_test_map(gamemode_bp)
     make_starter_pistol()
+
+    weapons = make_weapons()
+    item_paths = make_items(weapons)
+    place_loot()
+    log("ITEM REGISTRY ORDER (must match DefaultGame.ini):")
+    for p in item_paths:
+        log("  " + p)
     unreal.EditorAssetLibrary.save_directory("/Game", only_if_is_dirty=True, recursive=True)
     log("done")
 

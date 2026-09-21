@@ -107,7 +107,7 @@ public:
 	// --- Combat wire contract ----------------------------------------------
 
 	/** Client entry point. Sends the request, or runs it locally when offline. */
-	void RequestFire(const FVector& Origin, const FVector& Direction);
+	void RequestFire(const FVector& Origin, const FVector& Direction, bool bAiming);
 
 	/** Client entry point for reloading. */
 	void RequestReload();
@@ -118,10 +118,50 @@ public:
 	 * Delivered on this same networked object on the Master Client, which is
 	 * what lets the authority identify the sender through Fusion ownership
 	 * rather than trusting a player id in the payload.
+	 *
+	 * bAiming is the one client claim the authority accepts unchecked: it can
+	 * only tighten the spread cone the authority applies, and aiming is a
+	 * legitimate player choice.
 	 */
 	SEND_FUSIONRPC(TargetMasterClient)
-	void RpcRequestFire(FVector Origin, FVector Direction);
-	void RpcRequestFire_Receive(FVector Origin, FVector Direction);
+	void RpcRequestFire(FVector Origin, FVector Direction, bool bAiming);
+	void RpcRequestFire_Receive(FVector Origin, FVector Direction, bool bAiming);
+
+	// --- Inventory wire contract -------------------------------------------
+
+	/** Picks up whatever the player is looking at, if anything. */
+	void RequestPickupFocused();
+
+	/**
+	 * Slot key pressed. INDEX_NONE selects the starter pistol. A weapon slot
+	 * equips; a medkit/armor slot uses the item.
+	 */
+	void RequestSlot(int32 Slot);
+
+	/** Drops the equipped inventory weapon into the world. */
+	void RequestDropEquipped();
+
+	/**
+	 * Pickup request. The pickup travels as an actor reference; the
+	 * authority re-validates everything about it - that it still exists, is
+	 * unclaimed, is within reach of where IT believes this pawn is, and that
+	 * the inventory has room.
+	 */
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestPickup(AActor* Pickup);
+	void RpcRequestPickup_Receive(AActor* Pickup);
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestSlot(int32 Slot);
+	void RpcRequestSlot_Receive(int32 Slot);
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestDrop(int32 Slot);
+	void RpcRequestDrop_Receive(int32 Slot);
+
+	/** The pickup under the crosshair within reach, for the HUD prompt. Local. */
+	UFUNCTION(BlueprintPure, Category = "CS|Character")
+	class ACSWorldPickup* GetFocusedPickup() const { return FocusedPickup.Get(); }
 
 	SEND_FUSIONRPC(TargetMasterClient)
 	void RpcRequestReload();
@@ -147,6 +187,12 @@ protected:
 	void Input_AimStart(const FInputActionValue& Value);
 	void Input_AimStop(const FInputActionValue& Value);
 	void Input_Reload(const FInputActionValue& Value);
+	void Input_Interact(const FInputActionValue& Value);
+	void Input_EquipSlot(const FInputActionValue& Value);
+	void Input_Drop(const FInputActionValue& Value);
+
+	/** Local: choose the pickup nearest the crosshair within reach and in sight. */
+	void UpdateFocusedPickup();
 
 	/** Push the mapping context onto the local player. Safe to call twice. */
 	void ApplyInputMappings();
@@ -237,6 +283,9 @@ private:
 
 	/** Last respawn counter seen, so one respawn teleports exactly once. */
 	int32 LastRespawnCounter = 0;
+
+	/** Local only; recomputed every frame for the owning client. */
+	TWeakObjectPtr<class ACSWorldPickup> FocusedPickup;
 
 	/** Mapping context built in C++ by UCSInputConfig, cached per pawn. */
 	UPROPERTY(Transient)

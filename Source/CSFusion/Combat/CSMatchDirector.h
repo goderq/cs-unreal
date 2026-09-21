@@ -108,7 +108,34 @@ struct CSFUSION_API FCSPlayerCombatRecord
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
 	int32 RespawnCounter = 0;
 
+	/** Which weapon the running reload belongs to: INDEX_NONE = starter pistol, else an inventory slot. */
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
+	int32 ReloadSlot = INDEX_NONE;
+
 	bool IsValidRecord() const { return PlayerId != 0; }
+};
+
+/**
+ * The weapon a player is holding right now and its ammunition, resolved from
+ * authoritative state only (director record + Master-Client-owned inventory).
+ * Valid on every peer, which is how the HUD and the local fire gate agree with
+ * the authority about what is in hand.
+ */
+struct FCSLoadoutView
+{
+	const UCSWeaponDefinition* Weapon = nullptr;
+
+	/** INDEX_NONE = starter pistol, otherwise the inventory slot. */
+	int32 Slot = INDEX_NONE;
+
+	int32 RoundsInMag = 0;
+
+	/** Rounds available to reload from. -1 means unlimited (starter pistol). */
+	int32 Reserve = 0;
+
+	bool bReloading = false;
+
+	bool IsStarter() const { return Slot == INDEX_NONE; }
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FCSPlayerKilled, int32, VictimId, int32, KillerId, ECSHitZone, Zone);
@@ -163,15 +190,27 @@ public:
 	 * Full authority-side validation of a fire request.
 	 * Returns Accepted only when the shot may proceed.
 	 */
-	ECSFireRejection ValidateFire(int32 PlayerId, const UCSWeaponDefinition* Weapon,
+	ECSFireRejection ValidateFire(int32 PlayerId, const FCSLoadoutView& Loadout,
 		const FVector& ClaimedOrigin, const FVector& ClaimedDirection,
 		const FVector& AuthoritativePawnLocation) const;
 
-	/** Consumes one round and stamps the fire time. Call only after Accepted. */
+	/** Consumes one round from the weapon in hand and stamps the fire time. Call only after Accepted. */
 	void CommitFire(int32 PlayerId);
 
-	/** Begins a reload if one is warranted. */
-	bool BeginReload(int32 PlayerId, const UCSWeaponDefinition* Weapon);
+	/** Begins a reload of the weapon in hand, if one is warranted and ammo exists. */
+	bool BeginReload(int32 PlayerId);
+
+	/** Aborts a running reload, e.g. when the player switches weapons. */
+	void CancelReload(int32 PlayerId);
+
+	/** Health restored, capped at max. Returns what was actually applied. */
+	float Heal(int32 PlayerId, float Amount);
+
+	/** Armor added, capped at max. Returns what was actually applied. */
+	float AddArmor(int32 PlayerId, float Amount);
+
+	/** What the player holds and how much it can shoot. Any peer. */
+	FCSLoadoutView GetLoadout(int32 PlayerId) const;
 
 	/**
 	 * Applies damage with armor absorption, and kills the victim if health
@@ -193,6 +232,9 @@ public:
 protected:
 	/** Authority-side respawn timer and reload completion. */
 	void TickAuthority();
+
+	/** Refills the magazine the reload was started for. */
+	void CompleteReload(FCSPlayerCombatRecord& Record);
 
 	int32 FindRecordIndex(int32 PlayerId) const;
 	FCSPlayerCombatRecord* FindRecordMutable(int32 PlayerId);

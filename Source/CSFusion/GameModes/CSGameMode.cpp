@@ -13,6 +13,7 @@
 #include "Player/CSPlayerController.h"
 #include "Player/CSPlayerState.h"
 #include "UI/CSHUD.h"
+#include "Pickups/CSPickupSpawnPoint.h"
 
 ACSGameMode::ACSGameMode()
 {
@@ -42,6 +43,7 @@ void ACSGameMode::BeginPlay()
 	if (UCSAuthority::IsGameAuthority(this))
 	{
 		EnsureMatchDirector();
+		SpawnMapPickups();
 
 		if (ACSGameState* GS = GetCSGameState())
 		{
@@ -70,6 +72,24 @@ void ACSGameMode::EnsureMatchDirector()
 		ACSMatchDirector::StaticClass(), FTransform::Identity, Params);
 
 	UE_LOG(LogCSAuth, Log, TEXT("Authority spawned MatchDirector: %s"), *GetNameSafe(Director));
+}
+
+void ACSGameMode::SpawnMapPickups()
+{
+	CS_AUTHORITY_ONLY(this);
+
+	// Markers are plain level actors present on every peer; only the authority
+	// turns them into Master-Client-owned pickups, which then replicate.
+	int32 Spawned = 0;
+	for (TActorIterator<ACSPickupSpawnPoint> It(GetWorld()); It; ++It)
+	{
+		if (It->SpawnPickup())
+		{
+			++Spawned;
+		}
+	}
+
+	UE_LOG(LogCSInventory, Log, TEXT("Authority spawned %d map pickups."), Spawned);
 }
 
 AActor* ACSGameMode::GetPlayerStartByIndex(int32 Index) const

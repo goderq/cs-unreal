@@ -23,6 +23,11 @@
 #include "GameFramework/PlayerController.h"
 #include "GameModes/CSGameMode.h"
 #include "Input/CSInputConfig.h"
+#include "Inventory/CSPlayerInventory.h"
+#include "Items/CSItemDefinition.h"
+#include "Items/CSItemSettings.h"
+#include "Pickups/CSWorldPickup.h"
+#include "EngineUtils.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Net/UnrealNetwork.h"
@@ -228,6 +233,7 @@ void ACSCharacter::Tick(float DeltaSeconds)
 	if (IsLocallyControlled())
 	{
 		UpdateStance();
+		UpdateFocusedPickup();
 	}
 
 	SyncWithDirector();
@@ -308,20 +314,19 @@ void ACSCharacter::PlayLocalFireEffects(const UCSWeaponDefinition* Weapon)
 // ---------------------------------------------------------------------------
 // Combat wire contract
 // ---------------------------------------------------------------------------
-
-void ACSCharacter::RequestFire(const FVector& Origin, const FVector& Direction)
+void ACSCharacter::RequestFire(const FVector& Origin, const FVector& Direction, bool bAiming)
 {
 	if (UCSAuthority::IsSessionActive(this))
 	{
-		RpcRequestFire(Origin, Direction);
+		RpcRequestFire(Origin, Direction, bAiming);
 		return;
 	}
 
 	// Offline: same handler, no wire.
-	RpcRequestFire_Receive(Origin, Direction);
+	RpcRequestFire_Receive(Origin, Direction, bAiming);
 }
 
-void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction)
+void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, bool bAiming)
 {
 	// Runs on the Master Client. `this` is the shooter's pawn, so the sender
 	// cannot be spoofed: the id comes from Fusion ownership, not the payload.
@@ -334,7 +339,11 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction)
 	}
 
 	const int32 ShooterId = UCSAuthority::GetOwningPlayerId(this);
-	const UCSWeaponDefinition* Weapon = WeaponComponent->GetActiveWeapon();
+
+	// What is in hand is decided by the authority's own state (director record
+	// plus the Master-Client-owned inventory), never by the client.
+	const FCSLoadoutView Loadout = Director->GetLoadout(ShooterId);
+	const UCSWeaponDefinition* Weapon = Loadout.Weapon;
 
 	// The authority traces from where IT believes the pawn is, never from the
 	// client's claimed origin. The claim is only checked for plausibility.
@@ -343,7 +352,7 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction)
 	GetAimRay(AuthoritativeOrigin, IgnoredDirection);
 
 	const ECSFireRejection Verdict =
-		Director->ValidateFire(ShooterId, Weapon, Origin, Direction, AuthoritativeOrigin);
+		Director->ValidateFire(ShooterId, Loadout, Origin, Direction, AuthoritativeOrigin);
 
 	if (Verdict != ECSFireRejection::Accepted)
 	{
@@ -357,16 +366,43 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction)
 
 	Director->CommitFire(ShooterId);
 
-	const FCSShotResolution Shot =
-		WeaponComponent->ResolveShotOnAuthority(AuthoritativeOrigin, Direction, Weapon);
+	// Spread is applied HERE, by the authority, so a client cannot shoot a
+	// perfectly accurate shotgun by sending a clean direction. Each pellet of
+	// a multi-pellet weapon gets its own random offset inside the cone.
+	const float SpreadDeg = bAiming ? Weapon->AimSpreadDegrees : Weapon->HipSpreadDegrees;
+	const float SpreadRad = FMath::DegreesToRadians(SpreadDeg);
+	const FVector AimDir = Direction.GetSafeNormal();
 
-	if (Shot.VictimPlayerId != 0 && Shot.VictimPlayerId != ShooterId)
+	FVector FirstImpact = AuthoritativeOrigin + AimDir * Weapon->Range;
+	bool bAnyPlayerHit = false;
+
+	for (int32 Pellet = 0; Pellet < FMath::Max(1, Weapon->PelletsPerShot); ++Pellet)
 	{
-		Director->ApplyDamage(Shot.VictimPlayerId, ShooterId, Shot.Damage, Shot.Zone);
+		const FVector PelletDir = SpreadRad > 0.f ? FMath::VRandCone(AimDir, SpreadRad) : AimDir;
+		const FCSShotResolution Shot =
+			WeaponComponent->ResolveShotOnAuthority(AuthoritativeOrigin, PelletDir, Weapon);
+
+		if (Pellet == 0)
+		{
+			FirstImpact = Shot.ImpactPoint;
+		}
+
+		if (Shot.VictimPlayerId != 0 && Shot.VictimPlayerId != ShooterId)
+		{
+			Director->ApplyDamage(Shot.VictimPlayerId, ShooterId, Shot.Damage, Shot.Zone);
+			bAnyPlayerHit = true;
+		}
 	}
 
 	// Cosmetic only; the damage already happened in replicated state.
-	RpcConfirmShot(AuthoritativeOrigin, Shot.ImpactPoint, Shot.VictimPlayerId != 0);
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcConfirmShot(AuthoritativeOrigin, FirstImpact, bAnyPlayerHit);
+	}
+	else
+	{
+		RpcConfirmShot_Receive(AuthoritativeOrigin, FirstImpact, bAnyPlayerHit);
+	}
 }
 
 void ACSCharacter::RpcConfirmShot_Receive(FVector Origin, FVector Impact, bool bHitPlayer)
@@ -390,14 +426,280 @@ void ACSCharacter::RpcRequestReload_Receive()
 {
 	CS_AUTHORITY_ONLY(this);
 
-	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
-	if (!Director || !WeaponComponent)
+	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+	{
+		Director->BeginReload(UCSAuthority::GetOwningPlayerId(this));
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Inventory wire contract
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::UpdateFocusedPickup()
+{
+	FocusedPickup = nullptr;
+
+	if (!IsAliveAuthoritative())
 	{
 		return;
 	}
 
-	Director->BeginReload(UCSAuthority::GetOwningPlayerId(this), WeaponComponent->GetActiveWeapon());
+	FVector Eye;
+	FVector Forward;
+	GetAimRay(Eye, Forward);
+
+	const float Reach = UCSItemSettings::Get()->InteractReach;
+	const float ReachSq = FMath::Square(Reach);
+
+	// Choose the pickup closest to the crosshair among those within reach.
+	// Pickups have no collision on purpose (they must never stop a bullet),
+	// so this is a proximity + view-cone query, followed by a line-of-sight
+	// check so items behind walls are not offered.
+	ACSWorldPickup* Best = nullptr;
+	float BestDot = 0.93f; // ~21 degree cone
+
+	for (TActorIterator<ACSWorldPickup> It(GetWorld()); It; ++It)
+	{
+		ACSWorldPickup* Pickup = *It;
+		if (!Pickup->IsAvailable())
+		{
+			continue;
+		}
+
+		const FVector ToPickup = Pickup->GetActorLocation() - Eye;
+		if (ToPickup.SizeSquared() > ReachSq)
+		{
+			continue;
+		}
+
+		const float Dot = FVector::DotProduct(Forward, ToPickup.GetSafeNormal());
+		if (Dot > BestDot)
+		{
+			BestDot = Dot;
+			Best = Pickup;
+		}
+	}
+
+	if (Best)
+	{
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(CSPickupSight), false, this);
+		FHitResult Hit;
+		const bool bBlocked = GetWorld()->LineTraceSingleByChannel(
+			Hit, Eye, Best->GetActorLocation(), ECC_Visibility, Params);
+		if (!bBlocked)
+		{
+			FocusedPickup = Best;
+		}
+	}
 }
+
+void ACSCharacter::RequestPickupFocused()
+{
+	ACSWorldPickup* Pickup = FocusedPickup.Get();
+	if (!Pickup)
+	{
+		return;
+	}
+
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcRequestPickup(Pickup);
+		return;
+	}
+	RpcRequestPickup_Receive(Pickup);
+}
+
+void ACSCharacter::RpcRequestPickup_Receive(AActor* PickupActor)
+{
+	CS_AUTHORITY_ONLY(this);
+
+	const int32 PlayerId = UCSAuthority::GetOwningPlayerId(this);
+	ACSWorldPickup* Pickup = Cast<ACSWorldPickup>(PickupActor);
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+
+	auto Reject = [PlayerId](const TCHAR* Reason)
+	{
+		UE_LOG(LogCSAuth, Warning, TEXT("Pickup by player %d rejected: %s"), PlayerId, Reason);
+	};
+
+	if (!Pickup || !Inventory || !Director)
+	{
+		return Reject(TEXT("pickup or inventory missing"));
+	}
+	if (!Director->IsPlayerAlive(PlayerId))
+	{
+		return Reject(TEXT("player is dead"));
+	}
+	// Already claimed means another player's request arrived first: the
+	// authority handles requests one at a time, so exactly one wins.
+	if (!Pickup->IsAvailable())
+	{
+		return Reject(TEXT("already taken"));
+	}
+
+	// Distance from where the AUTHORITY believes this pawn is.
+	const float MaxDistance = UCSItemSettings::Get()->MaxPickupDistance;
+	if (FVector::DistSquared(GetActorLocation(), Pickup->GetActorLocation()) > FMath::Square(MaxDistance))
+	{
+		return Reject(TEXT("too far"));
+	}
+
+	const int32 ItemIndex = Pickup->GetItemIndex();
+	const int32 Offered = Pickup->GetCount();
+	if (!Inventory->CanAccept(ItemIndex, Offered))
+	{
+		return Reject(TEXT("inventory full"));
+	}
+
+	const int32 Leftover = Inventory->AddItem(ItemIndex, Offered, Pickup->GetAmmoInMag());
+	if (Leftover > 0)
+	{
+		// Partial stack: the rest stays on the ground.
+		Pickup->SetRemainingCount(Leftover);
+	}
+	else
+	{
+		Pickup->Claim();
+	}
+
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d picked up item %d x%d"), PlayerId, ItemIndex, Offered - Leftover);
+}
+
+void ACSCharacter::RequestSlot(int32 Slot)
+{
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcRequestSlot(Slot);
+		return;
+	}
+	RpcRequestSlot_Receive(Slot);
+}
+
+void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
+{
+	CS_AUTHORITY_ONLY(this);
+
+	const int32 PlayerId = UCSAuthority::GetOwningPlayerId(this);
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!Inventory || !Director || !Director->IsPlayerAlive(PlayerId))
+	{
+		return;
+	}
+
+	// Starter pistol: always selectable, never in the inventory.
+	if (Slot == INDEX_NONE)
+	{
+		if (Inventory->GetEquippedSlot() != INDEX_NONE)
+		{
+			Director->CancelReload(PlayerId);
+			Inventory->SetEquippedSlot(INDEX_NONE);
+		}
+		return;
+	}
+
+	const UCSItemDefinition* Item = Inventory->GetItemInSlot(Slot);
+	if (!Item)
+	{
+		return;
+	}
+
+	switch (Item->ItemType)
+	{
+	case ECSItemType::Weapon:
+		if (Inventory->GetEquippedSlot() != Slot)
+		{
+			Director->CancelReload(PlayerId);
+			Inventory->SetEquippedSlot(Slot);
+		}
+		break;
+
+	case ECSItemType::Medkit:
+		// Only consumed if it actually does something.
+		if (Director->Heal(PlayerId, Item->HealAmount) > 0.f)
+		{
+			Inventory->RemoveFromSlot(Slot, 1);
+		}
+		break;
+
+	case ECSItemType::Armor:
+		if (Director->AddArmor(PlayerId, Item->ArmorAmount) > 0.f)
+		{
+			Inventory->RemoveFromSlot(Slot, 1);
+		}
+		break;
+
+	default:
+		// Ammo is used by reloading; grenades are thrown in a later stage.
+		break;
+	}
+}
+
+void ACSCharacter::RequestDropEquipped()
+{
+	const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, GetOwningPlayerId());
+	const int32 Slot = Inventory ? Inventory->GetEquippedSlot() : INDEX_NONE;
+	if (Slot == INDEX_NONE)
+	{
+		// The starter pistol can never be dropped.
+		return;
+	}
+
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcRequestDrop(Slot);
+		return;
+	}
+	RpcRequestDrop_Receive(Slot);
+}
+
+void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
+{
+	CS_AUTHORITY_ONLY(this);
+
+	const int32 PlayerId = UCSAuthority::GetOwningPlayerId(this);
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!Inventory || !Director || !Director->IsPlayerAlive(PlayerId))
+	{
+		return;
+	}
+
+	if (ACSWorldPickup::CountAlive(this) >= UCSItemSettings::Get()->MaxWorldPickups)
+	{
+		UE_LOG(LogCSInventory, Warning, TEXT("Drop refused: world pickup cap reached."));
+		return;
+	}
+
+	FCSInventorySlot SlotData;
+	if (!Inventory->GetSlot(Slot, SlotData) || SlotData.IsEmpty())
+	{
+		return;
+	}
+
+	// Whole stack goes; a weapon keeps the rounds it was dropped with.
+	const FCSInventorySlot Removed = Inventory->RemoveFromSlot(Slot, SlotData.Count);
+	if (Removed.IsEmpty())
+	{
+		return;
+	}
+
+	const FVector Where = GetActorLocation() + GetActorForwardVector() * 90.f - FVector(0.f, 0.f, 60.f);
+
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	if (ACSWorldPickup* Pickup = GetWorld()->SpawnActor<ACSWorldPickup>(
+			ACSWorldPickup::StaticClass(), Where, FRotator::ZeroRotator, Params))
+	{
+		Pickup->InitializeItem(Removed.ItemIndex, Removed.Count, Removed.AmmoInMag, /*bDropped*/ true);
+	}
+
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d dropped item %d x%d"), PlayerId, Removed.ItemIndex, Removed.Count);
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Alive state, driven by the authority
@@ -627,6 +929,21 @@ void ACSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(InputConfig->IA_Reload, ETriggerEvent::Started, this, &ACSCharacter::Input_Reload);
 		++Bound;
 	}
+	if (InputConfig->IA_Interact)
+	{
+		Input->BindAction(InputConfig->IA_Interact, ETriggerEvent::Started, this, &ACSCharacter::Input_Interact);
+		++Bound;
+	}
+	if (InputConfig->IA_EquipSlot)
+	{
+		Input->BindAction(InputConfig->IA_EquipSlot, ETriggerEvent::Started, this, &ACSCharacter::Input_EquipSlot);
+		++Bound;
+	}
+	if (InputConfig->IA_Drop)
+	{
+		Input->BindAction(InputConfig->IA_Drop, ETriggerEvent::Started, this, &ACSCharacter::Input_Drop);
+		++Bound;
+	}
 
 	UE_LOG(LogCS, Log, TEXT("%s: bound %d input actions."), *GetName(), Bound);
 
@@ -745,4 +1062,27 @@ void ACSCharacter::Input_Reload(const FInputActionValue& /*Value*/)
 	{
 		WeaponComponent->RequestReload();
 	}
+}
+
+void ACSCharacter::Input_Interact(const FInputActionValue& /*Value*/)
+{
+	RequestPickupFocused();
+}
+
+void ACSCharacter::Input_EquipSlot(const FInputActionValue& Value)
+{
+	// One action for all slot keys: each key carries a Scalar modifier equal
+	// to its number (see UCSInputConfig::BuildRuntimeMappingContext).
+	// Key 1 is the starter pistol, keys 2..N are inventory slots 0..N-2.
+	const int32 KeyNumber = FMath::RoundToInt(Value.Get<float>());
+	if (KeyNumber <= 0)
+	{
+		return;
+	}
+	RequestSlot(KeyNumber == 1 ? INDEX_NONE : KeyNumber - 2);
+}
+
+void ACSCharacter::Input_Drop(const FInputActionValue& /*Value*/)
+{
+	RequestDropEquipped();
 }

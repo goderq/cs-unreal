@@ -30,6 +30,8 @@ protected:
 	void DrawStatusPanel();
 	void DrawMatchInfo();
 	void DrawDeathOverlay(float SecondsToRespawn);
+	void DrawInteractionPrompt();
+	void DrawQuickSlots();
 
 	void DrawShadowedText(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale = 1.f);
 

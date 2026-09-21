@@ -8,6 +8,9 @@
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "EngineUtils.h"
+#include "Inventory/CSPlayerInventory.h"
+#include "Items/CSItemDefinition.h"
+#include "Items/CSItemSettings.h"
 #include "Net/UnrealNetwork.h"
 #include "Weapons/CSWeaponDefinition.h"
 
@@ -163,6 +166,19 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 
 	Records.Add(Record);
 
+	// Every player gets a Master-Client-owned inventory, created empty: per
+	// the design a player starts with the starter pistol and nothing else.
+	if (!ACSPlayerInventory::Find(this, PlayerId))
+	{
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		if (ACSPlayerInventory* Inventory = GetWorld()->SpawnActor<ACSPlayerInventory>(
+				ACSPlayerInventory::StaticClass(), FTransform::Identity, Params))
+		{
+			Inventory->InitializeFor(PlayerId);
+		}
+	}
+
 	UE_LOG(LogCSAuth, Log, TEXT("Registered player %d (hp %.0f, %d rounds)."),
 		PlayerId, Record.Health, Record.StarterRoundsInMag);
 
@@ -188,13 +204,61 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 
 	Records.RemoveAt(Index);
 	LastKnownAlive.Remove(PlayerId);
+
+	if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
+	{
+		Inventory->Destroy();
+	}
+
 	OnRecordsChanged.Broadcast(PlayerId);
 }
 
-ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const UCSWeaponDefinition* Weapon,
+FCSLoadoutView ACSMatchDirector::GetLoadout(int32 PlayerId) const
+{
+	FCSLoadoutView View;
+
+	const int32 Index = FindRecordIndex(PlayerId);
+	const FCSPlayerCombatRecord* Record = Index != INDEX_NONE ? &Records[Index] : nullptr;
+	if (Record)
+	{
+		const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+		View.bReloading = Record->ReloadCompleteNetworkTime > 0.0 && Now < Record->ReloadCompleteNetworkTime;
+	}
+
+	// An equipped inventory weapon takes precedence ...
+	if (const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
+	{
+		const int32 Slot = Inventory->GetEquippedSlot();
+		if (const UCSWeaponDefinition* Weapon = Inventory->GetEquippedWeapon())
+		{
+			FCSInventorySlot SlotData;
+			Inventory->GetSlot(Slot, SlotData);
+
+			View.Weapon = Weapon;
+			View.Slot = Slot;
+			View.RoundsInMag = SlotData.AmmoInMag;
+
+			const UCSItemSettings* ItemSettings = UCSItemSettings::Get();
+			const UCSItemDefinition* Item = ItemSettings->GetItem(SlotData.ItemIndex);
+			const int32 AmmoIndex = Item ? ItemSettings->FindItemIndex(Item->AmmoItemId) : INDEX_NONE;
+			View.Reserve = AmmoIndex != INDEX_NONE ? Inventory->CountItem(AmmoIndex) : 0;
+			return View;
+		}
+	}
+
+	// ... otherwise the starter pistol, which is always there.
+	View.Weapon = UCSCombatSettings::Get()->StarterWeapon.LoadSynchronous();
+	View.Slot = INDEX_NONE;
+	View.RoundsInMag = Record ? Record->StarterRoundsInMag : 0;
+	View.Reserve = -1;
+	return View;
+}
+
+ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const FCSLoadoutView& Loadout,
 	const FVector& ClaimedOrigin, const FVector& ClaimedDirection,
 	const FVector& AuthoritativePawnLocation) const
 {
+	const UCSWeaponDefinition* Weapon = Loadout.Weapon;
 	if (!Weapon)
 	{
 		return ECSFireRejection::NoWeapon;
@@ -228,7 +292,9 @@ ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const UCSWeaponD
 		return ECSFireRejection::Reloading;
 	}
 
-	if (Record.StarterRoundsInMag <= 0)
+	// The magazine comes from the loadout the AUTHORITY resolved - the starter
+	// record or the inventory slot - never from anything the client claims.
+	if (Loadout.RoundsInMag <= 0)
 	{
 		return ECSFireRejection::OutOfAmmo;
 	}
@@ -257,22 +323,29 @@ void ACSMatchDirector::CommitFire(int32 PlayerId)
 {
 	CS_AUTHORITY_ONLY(this);
 
-	if (FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId))
+	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	if (!Record)
+	{
+		return;
+	}
+
+	const FCSLoadoutView Loadout = GetLoadout(PlayerId);
+	if (Loadout.IsStarter())
 	{
 		Record->StarterRoundsInMag = FMath::Max(0, Record->StarterRoundsInMag - 1);
-		Record->LastFireNetworkTime = UCSAuthority::GetNetworkTimeSeconds(this);
-		OnRecordsChanged.Broadcast(PlayerId);
 	}
+	else if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
+	{
+		Inventory->SetSlotAmmo(Loadout.Slot, Loadout.RoundsInMag - 1);
+	}
+
+	Record->LastFireNetworkTime = UCSAuthority::GetNetworkTimeSeconds(this);
+	OnRecordsChanged.Broadcast(PlayerId);
 }
 
-bool ACSMatchDirector::BeginReload(int32 PlayerId, const UCSWeaponDefinition* Weapon)
+bool ACSMatchDirector::BeginReload(int32 PlayerId)
 {
 	CS_AUTHORITY_ONLY_RET(this, false);
-
-	if (!Weapon)
-	{
-		return false;
-	}
 
 	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
 	if (!Record || !Record->bAlive)
@@ -280,20 +353,106 @@ bool ACSMatchDirector::BeginReload(int32 PlayerId, const UCSWeaponDefinition* We
 		return false;
 	}
 
-	if (Record->StarterRoundsInMag >= Weapon->MagazineSize)
+	const FCSLoadoutView Loadout = GetLoadout(PlayerId);
+	if (!Loadout.Weapon || Loadout.bReloading)
 	{
 		return false;
 	}
-
-	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
-	if (Record->ReloadCompleteNetworkTime > 0.0 && Now < Record->ReloadCompleteNetworkTime)
+	if (Loadout.RoundsInMag >= Loadout.Weapon->MagazineSize)
 	{
-		return false; // already reloading
+		return false; // already full
+	}
+	if (Loadout.Reserve == 0)
+	{
+		return false; // nothing to reload from
 	}
 
-	Record->ReloadCompleteNetworkTime = Now + Weapon->ReloadSeconds;
+	Record->ReloadCompleteNetworkTime = UCSAuthority::GetNetworkTimeSeconds(this) + Loadout.Weapon->ReloadSeconds;
+	Record->ReloadSlot = Loadout.Slot;
 	OnRecordsChanged.Broadcast(PlayerId);
 	return true;
+}
+
+void ACSMatchDirector::CancelReload(int32 PlayerId)
+{
+	CS_AUTHORITY_ONLY(this);
+
+	if (FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId))
+	{
+		if (Record->ReloadCompleteNetworkTime > 0.0)
+		{
+			Record->ReloadCompleteNetworkTime = 0.0;
+			Record->ReloadSlot = INDEX_NONE;
+			OnRecordsChanged.Broadcast(PlayerId);
+		}
+	}
+}
+
+void ACSMatchDirector::CompleteReload(FCSPlayerCombatRecord& Record)
+{
+	const int32 Slot = Record.ReloadSlot;
+	Record.ReloadCompleteNetworkTime = 0.0;
+	Record.ReloadSlot = INDEX_NONE;
+
+	if (Slot == INDEX_NONE)
+	{
+		const UCSWeaponDefinition* Starter = UCSCombatSettings::Get()->StarterWeapon.LoadSynchronous();
+		Record.StarterRoundsInMag = Starter ? Starter->MagazineSize : 12;
+		return;
+	}
+
+	// Inventory weapon: move rounds from the matching ammo stack into the
+	// magazine. Re-resolve everything - the weapon may have been dropped or
+	// swapped while the reload ran.
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Record.PlayerId);
+	const UCSItemDefinition* Item = Inventory ? Inventory->GetItemInSlot(Slot) : nullptr;
+	const UCSWeaponDefinition* Weapon = (Item && Item->IsWeapon()) ? Item->Weapon.LoadSynchronous() : nullptr;
+	if (!Weapon)
+	{
+		return;
+	}
+
+	FCSInventorySlot SlotData;
+	Inventory->GetSlot(Slot, SlotData);
+
+	const int32 AmmoIndex = UCSItemSettings::Get()->FindItemIndex(Item->AmmoItemId);
+	const int32 Needed = Weapon->MagazineSize - SlotData.AmmoInMag;
+	const int32 Taken = (AmmoIndex != INDEX_NONE && Needed > 0) ? Inventory->ConsumeItem(AmmoIndex, Needed) : 0;
+
+	// ConsumeItem can compact stacks; the weapon slot itself is untouched.
+	Inventory->SetSlotAmmo(Slot, SlotData.AmmoInMag + Taken);
+}
+
+float ACSMatchDirector::Heal(int32 PlayerId, float Amount)
+{
+	CS_AUTHORITY_ONLY_RET(this, 0.f);
+
+	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	if (!Record || !Record->bAlive || Amount <= 0.f)
+	{
+		return 0.f;
+	}
+
+	const float Before = Record->Health;
+	Record->Health = FMath::Min(UCSCombatSettings::Get()->MaxHealth, Record->Health + Amount);
+	OnRecordsChanged.Broadcast(PlayerId);
+	return Record->Health - Before;
+}
+
+float ACSMatchDirector::AddArmor(int32 PlayerId, float Amount)
+{
+	CS_AUTHORITY_ONLY_RET(this, 0.f);
+
+	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	if (!Record || !Record->bAlive || Amount <= 0.f)
+	{
+		return 0.f;
+	}
+
+	const float Before = Record->Armor;
+	Record->Armor = FMath::Min(UCSCombatSettings::Get()->MaxArmor, Record->Armor + Amount);
+	OnRecordsChanged.Broadcast(PlayerId);
+	return Record->Armor - Before;
 }
 
 float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Damage, ECSHitZone Zone)
@@ -376,6 +535,7 @@ void ACSMatchDirector::RespawnPlayer(int32 PlayerId, int32 SpawnPointIndex)
 	Record->StarterRoundsInMag = Starter ? Starter->MagazineSize : 12;
 	Record->LastFireNetworkTime = 0.0;
 	Record->ReloadCompleteNetworkTime = 0.0;
+	Record->ReloadSlot = INDEX_NONE;
 	Record->RespawnAtNetworkTime = 0.0;
 	Record->RespawnPointIndex = SpawnPointIndex;
 	Record->RespawnCounter += 1;
@@ -401,16 +561,13 @@ void ACSMatchDirector::TickAuthority()
 	CS_AUTHORITY_ONLY(this);
 
 	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
-	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
-	const UCSWeaponDefinition* Starter = Settings->StarterWeapon.LoadSynchronous();
 
 	for (FCSPlayerCombatRecord& Record : Records)
 	{
 		// Complete reloads.
 		if (Record.ReloadCompleteNetworkTime > 0.0 && Now >= Record.ReloadCompleteNetworkTime)
 		{
-			Record.ReloadCompleteNetworkTime = 0.0;
-			Record.StarterRoundsInMag = Starter ? Starter->MagazineSize : 12;
+			CompleteReload(Record);
 			OnRecordsChanged.Broadcast(Record.PlayerId);
 		}
 

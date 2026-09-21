@@ -9,6 +9,10 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "GameModes/CSGameState.h"
+#include "Inventory/CSPlayerInventory.h"
+#include "Items/CSItemDefinition.h"
+#include "Items/CSItemSettings.h"
+#include "Pickups/CSWorldPickup.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
 
@@ -46,9 +50,85 @@ void ACSHUD::DrawHUD()
 	else
 	{
 		DrawCrosshair();
+		DrawInteractionPrompt();
 	}
 
 	DrawStatusPanel();
+	DrawQuickSlots();
+}
+
+void ACSHUD::DrawInteractionPrompt()
+{
+	const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn());
+	const ACSWorldPickup* Pickup = Pawn ? Pawn->GetFocusedPickup() : nullptr;
+	if (!Pickup)
+	{
+		return;
+	}
+
+	const float CX = Canvas->ClipX * 0.5f;
+	const float CY = Canvas->ClipY * 0.5f;
+	const FString Name = Pickup->GetPromptName().ToString();
+
+	DrawShadowedText(Name, CX - Name.Len() * 5.5f, CY + 40.f, FLinearColor(1.f, 0.9f, 0.5f), 1.3f);
+	DrawShadowedText(TEXT("Press E to pick up"), CX - 80.f, CY + 66.f, FLinearColor::White, 1.f);
+}
+
+void ACSHUD::DrawQuickSlots()
+{
+	const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn());
+	if (!Pawn)
+	{
+		return;
+	}
+
+	const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Pawn->GetOwningPlayerId());
+	const int32 Equipped = Inventory ? Inventory->GetEquippedSlot() : INDEX_NONE;
+	const int32 NumSlots = Inventory ? Inventory->GetSlots().Num() : 0;
+
+	const float BoxW = 118.f;
+	const float BoxH = 46.f;
+	const float Gap = 6.f;
+	const int32 Total = NumSlots + 1; // +1 for the starter pistol
+	const float StartX = Canvas->ClipX * 0.5f - (Total * (BoxW + Gap) - Gap) * 0.5f;
+	const float Y = Canvas->ClipY - BoxH - 18.f;
+
+	auto DrawBox = [&](int32 Column, int32 KeyNumber, const FString& Label, const FString& Sub, bool bSelected)
+	{
+		const float X = StartX + Column * (BoxW + Gap);
+		DrawRect(bSelected ? FLinearColor(0.2f, 0.6f, 0.3f, 0.75f) : FLinearColor(0.f, 0.f, 0.f, 0.5f), X, Y, BoxW, BoxH);
+		DrawShadowedText(FString::FromInt(KeyNumber), X + 5.f, Y + 3.f, FLinearColor(0.7f, 0.7f, 0.7f), 0.8f);
+		DrawShadowedText(Label, X + 18.f, Y + 4.f, FLinearColor::White, 0.9f);
+		if (!Sub.IsEmpty())
+		{
+			DrawShadowedText(Sub, X + 18.f, Y + 24.f, FLinearColor(0.8f, 0.8f, 0.8f), 0.8f);
+		}
+	};
+
+	// Slot 1 is always the starter pistol - it lives outside the inventory.
+	DrawBox(0, 1, TEXT("Pistol"), TEXT("starter"), Equipped == INDEX_NONE);
+
+	const UCSItemSettings* Settings = UCSItemSettings::Get();
+	for (int32 i = 0; i < NumSlots; ++i)
+	{
+		const FCSInventorySlot& Slot = Inventory->GetSlots()[i];
+		const UCSItemDefinition* Item = Slot.IsEmpty() ? nullptr : Settings->GetItem(Slot.ItemIndex);
+
+		FString Label = Item ? Item->DisplayName.ToString() : TEXT("-");
+		if (Label.Len() > 12)
+		{
+			Label = Label.Left(11) + TEXT(".");
+		}
+
+		FString Sub;
+		if (Item)
+		{
+			Sub = Item->IsWeapon() ? FString::Printf(TEXT("%d rds"), Slot.AmmoInMag)
+				: (Slot.Count > 1 ? FString::Printf(TEXT("x%d"), Slot.Count) : FString());
+		}
+
+		DrawBox(i + 1, i + 2, Label, Sub, Equipped == i);
+	}
 }
 
 void ACSHUD::DrawShadowedText(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale)
@@ -91,21 +171,20 @@ void ACSHUD::DrawStatusPanel()
 	}
 
 	const float Left = 40.f;
-	const float Bottom = Canvas->ClipY - 60.f;
+	const float Bottom = Canvas->ClipY - 60.f; // HP/ammo sit above the quick-slot bar
 
 	const FLinearColor HealthColor = Record.Health > 50.f
 		? FLinearColor(0.85f, 1.f, 0.85f)
 		: (Record.Health > 25.f ? FLinearColor(1.f, 0.85f, 0.3f) : FLinearColor(1.f, 0.3f, 0.3f));
 
-	DrawShadowedText(FString::Printf(TEXT("HP  %d"), FMath::RoundToInt(Record.Health)), Left, Bottom - 30.f, HealthColor, 1.6f);
-	DrawShadowedText(FString::Printf(TEXT("ARM %d"), FMath::RoundToInt(Record.Armor)), Left + 170.f, Bottom - 30.f, FLinearColor(0.6f, 0.8f, 1.f), 1.6f);
+	DrawShadowedText(FString::Printf(TEXT("HP  %d"), FMath::RoundToInt(Record.Health)), Left, Bottom - 110.f, HealthColor, 1.6f);
+	DrawShadowedText(FString::Printf(TEXT("ARM %d"), FMath::RoundToInt(Record.Armor)), Left + 170.f, Bottom - 110.f, FLinearColor(0.6f, 0.8f, 1.f), 1.6f);
 
-	// Ammo, bottom right. The starter pistol has unlimited reserve by design.
-	const UCSWeaponComponent* WeaponComp = Pawn->GetWeaponComponent();
-	const UCSWeaponDefinition* Weapon = WeaponComp ? WeaponComp->GetActiveWeapon() : nullptr;
-
-	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
-	const bool bReloading = Record.ReloadCompleteNetworkTime > 0.0 && Now < Record.ReloadCompleteNetworkTime;
+	// Ammo, bottom right, from the authoritative loadout: the equipped
+	// inventory weapon or the starter pistol (unlimited reserve by design).
+	const FCSLoadoutView Loadout = Director->GetLoadout(Pawn->GetOwningPlayerId());
+	const UCSWeaponDefinition* Weapon = Loadout.Weapon;
+	const bool bReloading = Loadout.bReloading;
 
 	FString AmmoText;
 	if (bReloading)
@@ -114,25 +193,25 @@ void ACSHUD::DrawStatusPanel()
 	}
 	else if (Weapon)
 	{
-		AmmoText = FString::Printf(TEXT("%d / %s"), Record.StarterRoundsInMag,
-			Weapon->HasUnlimitedReserve() ? TEXT("INF") : *FString::FromInt(Weapon->ReserveAmmo));
+		AmmoText = FString::Printf(TEXT("%d / %s"), Loadout.RoundsInMag,
+			Loadout.Reserve < 0 ? TEXT("INF") : *FString::FromInt(Loadout.Reserve));
 	}
 	else
 	{
 		AmmoText = TEXT("NO WEAPON");
 	}
 
-	const FLinearColor AmmoColor = (Record.StarterRoundsInMag == 0 && !bReloading)
+	const FLinearColor AmmoColor = (Loadout.RoundsInMag == 0 && !bReloading)
 		? FLinearColor(1.f, 0.3f, 0.3f)
 		: FLinearColor::White;
 
-	DrawShadowedText(AmmoText, Canvas->ClipX - 260.f, Bottom - 30.f, AmmoColor, 1.6f);
+	DrawShadowedText(AmmoText, Canvas->ClipX - 260.f, Bottom - 110.f, AmmoColor, 1.6f);
 	if (Weapon)
 	{
-		DrawShadowedText(Weapon->DisplayName.ToString(), Canvas->ClipX - 260.f, Bottom + 5.f, FLinearColor(0.8f, 0.8f, 0.8f));
+		DrawShadowedText(Weapon->DisplayName.ToString(), Canvas->ClipX - 260.f, Bottom - 75.f, FLinearColor(0.8f, 0.8f, 0.8f));
 	}
 
-	DrawShadowedText(FString::Printf(TEXT("K %d   D %d"), Record.Kills, Record.Deaths), Left, Bottom + 5.f, FLinearColor(0.8f, 0.8f, 0.8f));
+	DrawShadowedText(FString::Printf(TEXT("K %d   D %d"), Record.Kills, Record.Deaths), Left, Bottom - 75.f, FLinearColor(0.8f, 0.8f, 0.8f));
 }
 
 void ACSHUD::DrawMatchInfo()

@@ -71,6 +71,16 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|UI")
 	TObjectPtr<UInputAction> IA_Scoreboard;
 
+	/**
+	 * Axis1D. All number keys map here, each with a Scalar modifier equal to
+	 * its number, so one binding handles every slot key.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Inventory")
+	TObjectPtr<UInputAction> IA_EquipSlot;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Inventory")
+	TObjectPtr<UInputAction> IA_Drop;
+
 	// --- Runtime-built mapping context -------------------------------------
 	//
 	// The bindings are constructed in C++ rather than read from the
@@ -129,4 +139,11 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	FKey Key_Scoreboard = EKeys::BackSpace;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
+	FKey Key_Drop = EKeys::G;
+
+	/** Key 1 = starter pistol, keys 2..7 = inventory slots 1..6. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
+	TArray<FKey> SlotKeys = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six, EKeys::Seven };
 };
