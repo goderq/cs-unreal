@@ -230,8 +230,14 @@ void ACSPlayerController::CSTestKill()
 	UE_LOG(LogCS, Log, TEXT("KILL TEST: victim %d carries %d items; world has %d pickups"),
 		TestVictimId, TestVictimItemsBefore, TestPickupsBefore);
 
-	SetTestAim(this, true);
-	GetWorldTimerManager().SetTimer(TestKillTimer, this, &ACSPlayerController::TestKillStep, 0.35f, true);
+	// v1.1: Deathmatch spawns players far apart, often out of sight - walk up first.
+	const FVector ToVictim = TestVictim->GetActorLocation() - Self->GetActorLocation();
+	const FVector Dest = TestVictim->GetActorLocation() - ToVictim.GetSafeNormal2D() * 450.f;
+	TestMoveTo(Dest, [this]()
+	{
+		SetTestAim(this, true);
+		GetWorldTimerManager().SetTimer(TestKillTimer, this, &ACSPlayerController::TestKillStep, 0.35f, true);
+	});
 }
 
 void ACSPlayerController::TestKillStep()
