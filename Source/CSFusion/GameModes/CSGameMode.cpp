@@ -3,6 +3,7 @@
 #include "GameModes/CSGameMode.h"
 
 #include "Characters/CSCharacter.h"
+#include "Combat/CSMatchDirector.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
 #include "EngineUtils.h"
@@ -11,6 +12,7 @@
 #include "Multiplayer/CSGameInstance.h"
 #include "Player/CSPlayerController.h"
 #include "Player/CSPlayerState.h"
+#include "UI/CSHUD.h"
 
 ACSGameMode::ACSGameMode()
 {
@@ -21,6 +23,7 @@ ACSGameMode::ACSGameMode()
 	PlayerStateClass = ACSPlayerState::StaticClass();
 	PlayerControllerClass = ACSPlayerController::StaticClass();
 	DefaultPawnClass = ACSCharacter::StaticClass();
+	HUDClass = ACSHUD::StaticClass();
 
 	bStartPlayersAsSpectators = false;
 }
@@ -38,11 +41,46 @@ void ACSGameMode::BeginPlay()
 
 	if (UCSAuthority::IsGameAuthority(this))
 	{
+		EnsureMatchDirector();
+
 		if (ACSGameState* GS = GetCSGameState())
 		{
 			GS->SetMatchPhase(ECSMatchPhase::WaitingForPlayers);
 		}
 	}
+}
+
+void ACSGameMode::EnsureMatchDirector()
+{
+	CS_AUTHORITY_ONLY(this);
+
+	if (ACSMatchDirector::Get(this))
+	{
+		return;
+	}
+
+	// Spawned rather than map-placed so the map asset stays free of gameplay
+	// singletons. Its UFusionActorComponent uses MasterClient ownership, so it
+	// survives master migration by re-targeting rather than being destroyed.
+	FActorSpawnParameters Params;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	Params.Name = TEXT("CSMatchDirector");
+
+	ACSMatchDirector* Director = GetWorld()->SpawnActor<ACSMatchDirector>(
+		ACSMatchDirector::StaticClass(), FTransform::Identity, Params);
+
+	UE_LOG(LogCSAuth, Log, TEXT("Authority spawned MatchDirector: %s"), *GetNameSafe(Director));
+}
+
+AActor* ACSGameMode::GetPlayerStartByIndex(int32 Index) const
+{
+	if (CachedPlayerStarts.Num() == 0)
+	{
+		return nullptr;
+	}
+
+	const int32 Wrapped = FMath::Abs(Index) % CachedPlayerStarts.Num();
+	return CachedPlayerStarts[Wrapped];
 }
 
 void ACSGameMode::CachePlayerStarts()

@@ -298,6 +298,30 @@ def make_test_map(gamemode_bp):
     return MAP_PATH
 
 
+WEAPONS_DIR = "/Game/Weapons"
+
+
+def make_starter_pistol():
+    """
+    The starter pistol. Referenced from DefaultGame.ini
+    ([/Script/CSFusion.CSCombatSettings] StarterWeapon=...), not from any
+    Blueprint, so the authority always validates against the same asset.
+    Numbers are left at the UCSWeaponDefinition C++ defaults except identity.
+    """
+    ensure_dir(WEAPONS_DIR)
+    factory = data_asset_factory(unreal.CSWeaponDefinition)
+    pistol = create_asset("DA_Weapon_StarterPistol", WEAPONS_DIR, unreal.CSWeaponDefinition, factory)
+
+    pistol.set_editor_property("weapon_id", "starter_pistol")
+    pistol.set_editor_property("display_name", unreal.Text("Starter Pistol"))
+    pistol.set_editor_property("description", unreal.Text(
+        "Always carried. Never dropped, never lost, restored on respawn."))
+    pistol.set_editor_property("is_starter_weapon", True)
+
+    EDITOR_ASSET.save_loaded_asset(pistol)
+    return pistol
+
+
 def main():
     log("Stage 1 content bootstrap starting")
     actions = make_input_actions()
@@ -306,6 +330,7 @@ def main():
     character_bp = make_character_blueprint(config)
     gamemode_bp = make_gamemode_blueprint(character_bp)
     make_test_map(gamemode_bp)
+    make_starter_pistol()
     unreal.EditorAssetLibrary.save_directory("/Game", only_if_is_dirty=True, recursive=True)
     log("done")
 

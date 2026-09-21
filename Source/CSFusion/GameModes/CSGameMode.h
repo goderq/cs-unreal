@@ -58,7 +58,20 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Match", meta = (ClampMin = "1"))
 	int32 MinPlayersToStart = 1;
 
+	/**
+	 * PlayerStart at this index, wrapping. The list is name-sorted, so every
+	 * peer resolves the same index to the same actor - which is what lets the
+	 * authority pick a respawn point and the owning client move itself there.
+	 */
+	UFUNCTION(BlueprintPure, Category = "CS|Match")
+	AActor* GetPlayerStartByIndex(int32 Index) const;
+
+	UFUNCTION(BlueprintPure, Category = "CS|Match")
+	int32 GetNumPlayerStarts() const { return CachedPlayerStarts.Num(); }
+
 protected:
+	/** Authority creates the single MatchDirector if the world has none. */
+	void EnsureMatchDirector();
 	/** Authority-only match-phase driver, ticked from Tick(). */
 	void UpdateMatchFlow();
 

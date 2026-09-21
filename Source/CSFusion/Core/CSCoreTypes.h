@@ -59,3 +59,40 @@ enum class ECSStanceState : uint8
 	Crouching	UMETA(DisplayName = "Crouching"),
 	Sprinting	UMETA(DisplayName = "Sprinting")
 };
+
+/** Where a shot landed. Resolved on the authority from the hit bone. */
+UENUM(BlueprintType)
+enum class ECSHitZone : uint8
+{
+	None	UMETA(DisplayName = "None"),
+	Head	UMETA(DisplayName = "Head"),
+	Torso	UMETA(DisplayName = "Torso"),
+	Limb	UMETA(DisplayName = "Limb")
+};
+
+/** Why a player died. Stage 4 uses this to decide what loot drops. */
+UENUM(BlueprintType)
+enum class ECSDeathReason : uint8
+{
+	Killed			UMETA(DisplayName = "Killed"),
+	Suicide			UMETA(DisplayName = "Suicide"),
+	Disconnected	UMETA(DisplayName = "Disconnected")
+};
+
+/**
+ * Reasons the authority can refuse a fire request. Logged, and sent back to
+ * the requester so the client can stop predicting.
+ */
+UENUM(BlueprintType)
+enum class ECSFireRejection : uint8
+{
+	Accepted			UMETA(DisplayName = "Accepted"),
+	ShooterDead			UMETA(DisplayName = "Shooter Dead"),
+	NoRecord			UMETA(DisplayName = "No Combat Record"),
+	FireRate			UMETA(DisplayName = "Fire Rate Violation"),
+	OutOfAmmo			UMETA(DisplayName = "Out Of Ammo"),
+	Reloading			UMETA(DisplayName = "Reloading"),
+	OriginTooFar		UMETA(DisplayName = "Fire Origin Too Far From Pawn"),
+	BadDirection		UMETA(DisplayName = "Malformed Aim Direction"),
+	NoWeapon			UMETA(DisplayName = "No Weapon Definition")
+};

@@ -75,6 +75,7 @@ public class CSFusion : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
+			"ApplicationCore",
 			"Slate",
 			"SlateCore",
 			"UMG",

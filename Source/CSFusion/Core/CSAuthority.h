@@ -65,6 +65,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "CS|Authority")
 	static bool CanWrite(const AActor* Actor);
 
+	/**
+	 * Photon player id of the peer that OWNS this actor, as resolved by Fusion
+	 * itself - not by anything the actor stores.
+	 *
+	 * This is the only trustworthy way for the authority to answer "who sent
+	 * this?". A Fusion RPC is delivered on the same networked object it was
+	 * sent from, so the receive handler can call this on `this` and learn the
+	 * real sender. Never authorise anything using a player id carried in the
+	 * RPC payload or stored on the PlayerState: both are client-written.
+	 *
+	 * Returns 0 offline or when the actor is not networked.
+	 */
+	UFUNCTION(BlueprintPure, Category = "CS|Authority")
+	static int32 GetOwningPlayerId(const AActor* Actor);
+
 	/** True while a Fusion session is live and this peer is inside a room. */
 	UFUNCTION(BlueprintPure, Category = "CS|Authority", meta = (WorldContext = "WorldContextObject"))
 	static bool IsSessionActive(const UObject* WorldContextObject);

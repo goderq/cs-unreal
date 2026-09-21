@@ -16,8 +16,14 @@
 //
 // Because the pawn is client-owned, NOTHING a cheater must not control lives
 // on it: no health, no ammo, no inventory. Those live on the
-// Master-Client-owned ACSMatchDirector (Stage 2). This class only carries
-// presentation state that is harmless to forge - stance and view pitch.
+// Master-Client-owned ACSMatchDirector. This class only carries presentation
+// state that is harmless to forge - stance and view pitch - and owns the wire
+// contract for combat requests.
+//
+// Trust boundary, in one place:
+//   RequestFire()/RequestReload()  client asks
+//   Rpc*_Receive()                 authority decides, using its own world
+//   ACSMatchDirector records       result, replicated back to everyone
 
 #pragma once
 
@@ -25,21 +31,29 @@
 #include "Core/CSCoreTypes.h"
 #include "Core/CSFusionCompat.h"
 #include "GameFramework/Character.h"
+
+// Must precede the .generated.h include. FUSION_BODY() expands into this.
+#include "CSCharacter.fusion.h"
 #include "CSCharacter.generated.h"
 
+class ACSMatchDirector;
 class UCameraComponent;
 class UCSCharacterMovementComponent;
 class UCSInputConfig;
-class UInputComponent;
-class USkeletalMeshComponent;
-class USpringArmComponent;
+class UCSWeaponComponent;
+class UCSWeaponDefinition;
 class UFusionActorComponent;
+class UInputComponent;
+class UInputMappingContext;
+class USkeletalMeshComponent;
+class UStaticMeshComponent;
 struct FInputActionValue;
 
 UCLASS(Config = Game)
 class CSFUSION_API ACSCharacter : public ACharacter
 {
 	GENERATED_BODY()
+	FUSION_BODY();
 
 public:
 	explicit ACSCharacter(const FObjectInitializer& ObjectInitializer);
@@ -59,6 +73,9 @@ public:
 	UCameraComponent* GetFirstPersonCamera() const { return FirstPersonCamera; }
 
 	UFUNCTION(BlueprintPure, Category = "CS|Character")
+	UCSWeaponComponent* GetWeaponComponent() const { return WeaponComponent; }
+
+	UFUNCTION(BlueprintPure, Category = "CS|Character")
 	UCSCharacterMovementComponent* GetCSMovement() const;
 
 	UFUNCTION(BlueprintPure, Category = "CS|Character")
@@ -72,6 +89,49 @@ public:
 	UFUNCTION(BlueprintPure, Category = "CS|Character")
 	bool IsLocalFirstPersonView() const;
 
+	/** This pawn's Photon player id, resolved from Fusion ownership. */
+	UFUNCTION(BlueprintPure, Category = "CS|Character")
+	int32 GetOwningPlayerId() const;
+
+	/** Alive per the authority. False also when there is no record yet. */
+	UFUNCTION(BlueprintPure, Category = "CS|Character")
+	bool IsAliveAuthoritative() const;
+
+	/** Camera-centre ray used for aiming and for the authority's trace. */
+	UFUNCTION(BlueprintPure, Category = "CS|Character")
+	void GetAimRay(FVector& OutOrigin, FVector& OutDirection) const;
+
+	/** Immediate local feedback for a shot: recoil kick and (Stage 6) FX. */
+	void PlayLocalFireEffects(const UCSWeaponDefinition* Weapon);
+
+	// --- Combat wire contract ----------------------------------------------
+
+	/** Client entry point. Sends the request, or runs it locally when offline. */
+	void RequestFire(const FVector& Origin, const FVector& Direction);
+
+	/** Client entry point for reloading. */
+	void RequestReload();
+
+	/**
+	 * Fire request. Generated body - never define it.
+	 *
+	 * Delivered on this same networked object on the Master Client, which is
+	 * what lets the authority identify the sender through Fusion ownership
+	 * rather than trusting a player id in the payload.
+	 */
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestFire(FVector Origin, FVector Direction);
+	void RpcRequestFire_Receive(FVector Origin, FVector Direction);
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestReload();
+	void RpcRequestReload_Receive();
+
+	/** Cosmetic confirmation of a shot the authority accepted. */
+	SEND_FUSIONRPC(TargetAllClients)
+	void RpcConfirmShot(FVector Origin, FVector Impact, bool bHitPlayer);
+	void RpcConfirmShot_Receive(FVector Origin, FVector Impact, bool bHitPlayer);
+
 protected:
 	// --- Input handlers ----------------------------------------------------
 	void Input_Move(const FInputActionValue& Value);
@@ -82,6 +142,11 @@ protected:
 	void Input_SprintStop(const FInputActionValue& Value);
 	void Input_CrouchToggle(const FInputActionValue& Value);
 	void Input_CrouchRelease(const FInputActionValue& Value);
+	void Input_FireStart(const FInputActionValue& Value);
+	void Input_FireStop(const FInputActionValue& Value);
+	void Input_AimStart(const FInputActionValue& Value);
+	void Input_AimStop(const FInputActionValue& Value);
+	void Input_Reload(const FInputActionValue& Value);
 
 	/** Push the mapping context onto the local player. Safe to call twice. */
 	void ApplyInputMappings();
@@ -93,13 +158,20 @@ protected:
 	void UpdateStance();
 
 	/**
-	 * Bound to UFusionActorComponent::OnObjectReady / OnOwnerChanged, both of
-	 * type FFusionObjectStatusChange (no parameters).
+	 * Mirrors the authority's alive flag into local presentation and collision.
 	 *
-	 * These must stay plain, unguarded UFUNCTIONs. UHT skips unrecognised #if
-	 * blocks entirely, and an unregistered UFUNCTION cannot be bound with
-	 * AddDynamic - it would compile and then fail at runtime.
+	 * Driven by the replicated director record, NOT by anything this client
+	 * decides, so a client that refuses to die still appears dead - and is
+	 * still refused shots - on every other peer.
 	 */
+	void ApplyAliveState(bool bNewAlive);
+
+	/** Owning client moves itself to the authority's chosen respawn point. */
+	void HandleRespawn(int32 SpawnPointIndex);
+
+	/** Polls the director for alive/respawn transitions. */
+	void SyncWithDirector();
+
 	UFUNCTION()
 	void HandleFusionObjectReady();
 
@@ -113,6 +185,16 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USkeletalMeshComponent> FirstPersonMesh;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCSWeaponComponent> WeaponComponent;
+
+	/** Placeholder visuals until Stage 6 meshes. Hidden from the owner. */
+	UPROPERTY(VisibleAnywhere, Category = "CS|Components")
+	TObjectPtr<UStaticMeshComponent> PlaceholderBody;
+
+	UPROPERTY(VisibleAnywhere, Category = "CS|Components")
+	TObjectPtr<UStaticMeshComponent> PlaceholderHead;
 
 	/** Bridge to UFusionClient. Unguarded so UHT keeps it GC-tracked. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
@@ -149,4 +231,14 @@ protected:
 private:
 	/** Set once the Fusion handshake completes; replicated reads are safe after. */
 	bool bNetworkReady = false;
+
+	/** Local mirror of the authority's alive flag, to detect transitions. */
+	bool bLocalAliveState = true;
+
+	/** Last respawn counter seen, so one respawn teleports exactly once. */
+	int32 LastRespawnCounter = 0;
+
+	/** Mapping context built in C++ by UCSInputConfig, cached per pawn. */
+	UPROPERTY(Transient)
+	TObjectPtr<UInputMappingContext> RuntimeMappingContext;
 };

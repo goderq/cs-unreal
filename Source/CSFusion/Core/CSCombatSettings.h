@@ -1,0 +1,83 @@
+// Copyright (c) 2026 CS-Fusion. All Rights Reserved.
+//
+// Project-wide combat tuning, editable at Project Settings > Game > CS Combat
+// and stored in DefaultGame.ini.
+//
+// These are the numbers the AUTHORITY validates against, so they must be the
+// same on every peer. They live in config rather than on a Blueprint so that a
+// modified client cannot ship different limits: the Master Client reads its
+// own copy and ignores whatever the requester believes.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Engine/DeveloperSettings.h"
+#include "CSCombatSettings.generated.h"
+
+class UCSWeaponDefinition;
+
+UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "CS Combat"))
+class CSFUSION_API UCSCombatSettings : public UDeveloperSettings
+{
+	GENERATED_BODY()
+
+public:
+	virtual FName GetCategoryName() const override { return TEXT("Game"); }
+
+	static const UCSCombatSettings* Get() { return GetDefault<UCSCombatSettings>(); }
+
+	/**
+	 * The starter pistol.
+	 *
+	 * Per the design it is NOT an inventory item: every player always has it,
+	 * it is never dropped on death or disconnect, it cannot be taken, and it
+	 * is restored on respawn. Stage 3 inventory never sees this asset.
+	 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Weapons")
+	TSoftObjectPtr<UCSWeaponDefinition> StarterWeapon;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Player", meta = (ClampMin = "1.0"))
+	float MaxHealth = 100.f;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Player", meta = (ClampMin = "0.0"))
+	float MaxArmor = 100.f;
+
+	/**
+	 * Share of incoming damage absorbed by armor while armor remains.
+	 * 0.5 means half the damage hits armor and half hits health.
+	 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Player", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float ArmorAbsorptionRatio = 0.5f;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Player", meta = (ClampMin = "0.0"))
+	float RespawnDelaySeconds = 3.f;
+
+	// --- Anti-cheat tolerances ---------------------------------------------
+
+	/**
+	 * How far a client-reported muzzle position may sit from where the
+	 * authority believes that pawn is, before the shot is rejected.
+	 *
+	 * Has to absorb honest latency and interpolation, so it cannot be tight.
+	 * It exists to stop teleport-shooting, not to be a precise check.
+	 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0.0"))
+	float MaxFireOriginDeviation = 400.f;
+
+	/**
+	 * Fraction of the weapon's fire interval a shot may arrive early.
+	 * Covers jitter; anything faster is a fire-rate hack and is dropped.
+	 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0.0", ClampMax = "0.9"))
+	float FireRateTolerance = 0.15f;
+
+	/** Log every rejected request. Noisy, but the only way to see cheating. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat")
+	bool bLogRejections = true;
+
+	// --- Match ---------------------------------------------------------------
+
+	/** Hard cap on tracked players. Fusion networked arrays cap at 64. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Match", meta = (ClampMin = "2", ClampMax = "64"))
+	int32 MaxTrackedPlayers = 16;
+};

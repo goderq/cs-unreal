@@ -112,6 +112,27 @@ bool UCSAuthority::CanWrite(const AActor* Actor)
 	return Actor->HasAuthority();
 }
 
+int32 UCSAuthority::GetOwningPlayerId(const AActor* Actor)
+{
+	if (!IsValid(Actor))
+	{
+		return 0;
+	}
+
+#if CS_WITH_FUSION
+	if (UFusionOnlineSubsystem* Fusion = GetFusion(Actor))
+	{
+		if (Fusion->IsInRoom() && UFusionOnlineSubsystem::HasOwner(Actor))
+		{
+			return UFusionOnlineSubsystem::GetOwner(Actor);
+		}
+	}
+#endif
+
+	// Offline: the single local player.
+	return GetLocalPlayerId(Actor);
+}
+
 bool UCSAuthority::IsSessionActive(const UObject* WorldContextObject)
 {
 #if CS_WITH_FUSION
@@ -127,10 +148,16 @@ int32 UCSAuthority::GetLocalPlayerId(const UObject* WorldContextObject)
 #if CS_WITH_FUSION
 	if (UFusionOnlineSubsystem* Fusion = GetFusion(WorldContextObject))
 	{
-		return Fusion->GetLocalPlayerId();
+		if (Fusion->IsInRoom())
+		{
+			return Fusion->GetLocalPlayerId();
+		}
 	}
 #endif
-	return 0;
+	// Offline stand-in. Must be non-zero: ACSMatchDirector treats id 0 as an
+	// empty record, so returning 0 here would leave the offline player with no
+	// combat record and every shot rejected as NoRecord.
+	return 1;
 }
 
 int32 UCSAuthority::GetRoomPlayerCount(const UObject* WorldContextObject)
