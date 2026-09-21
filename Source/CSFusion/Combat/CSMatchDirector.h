@@ -29,6 +29,7 @@
 #include "CoreMinimal.h"
 #include "Core/CSCoreTypes.h"
 #include "Core/CSFusionCompat.h"
+#include "Combat/CSCheatGuard.h"
 #include "GameFramework/Actor.h"
 
 // Required because Records uses the FusionArraySize meta tag.
@@ -304,9 +305,21 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components")
 	TObjectPtr<UFusionActorComponent> FusionActor;
 
+public:
+	// --- Anti-cheat (Stage 8) -------------------------------------------------
+
+	/** Authority: rate limit + suspension check for one player request. */
+	bool GuardRequest(int32 PlayerId, ECSRequestKind Kind);
+
+	/** Authority-local cheat state, for logs and tests. */
+	const FCSCheatGuard& GetCheatGuard() const { return CheatGuard; }
+
 private:
 	/** Snapshot of alive flags, so every peer can raise death events locally. */
 	TMap<int32, bool> LastKnownAlive;
+
+	/** Authority only; not replicated. Rebuilt from scratch by a new master. */
+	FCSCheatGuard CheatGuard;
 
 	// --- Authority-local bookkeeping (not replicated) ------------------------
 

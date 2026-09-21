@@ -101,6 +101,20 @@ protected:
 	FTimerHandle TestUITimer;
 	FTimerHandle TestLeaveTimer;
 
+	/** Stage 8 anti-cheat self-test, enabled with -cstestcheat. */
+	UFUNCTION(Exec)
+	void CSTestCheat();
+	FTimerHandle TestCheatTimer;
+	int32 CheatRoundsBefore = 0;
+	TWeakObjectPtr<class ACSWorldPickup> CheatFarPickup;
+
+	/** Stage 8 performance sample, enabled with -cstestperf: 20 s of frame times. */
+	UFUNCTION(Exec)
+	void CSTestPerf();
+	FTimerHandle TestPerfTimer;
+	FDelegateHandle TestPerfTickHandle;
+	TArray<float> PerfFrameMs;
+
 	/** Stage 7 bot self-test, enabled with -cstestbots (use with -bots=N). */
 	UFUNCTION(Exec)
 	void CSTestBots();

@@ -28,6 +28,10 @@ struct CSFUSION_API FCSPlayerPreferences
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
 	bool bInvertY = false;
 
+	/** Stage 8: frame-rate and frame-time counter in the HUD corner. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	bool bShowFps = false;
+
 	/** Horizontal field of view in degrees. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings", meta = (ClampMin = "70.0", ClampMax = "120.0"))
 	float FieldOfView = 100.f;

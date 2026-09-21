@@ -37,6 +37,7 @@
 #include "CSCharacter.generated.h"
 
 class ACSMatchDirector;
+enum class ECSRequestKind : uint8;
 class UCameraComponent;
 class UCSCharacterMovementComponent;
 class UCSInputConfig;
@@ -317,6 +318,9 @@ protected:
 	/** Handlers refuse bots unless the call came through a Bot* function. */
 	bool RefuseBotRpc() const { return bIsBot && !bBotAuthorityCall; }
 
+	/** Authority: rate limit and suspension check for a player's request (Stage 8). */
+	bool PassesCheatGuard(ECSRequestKind Kind) const;
+
 public:
 	int32 GetHeartbeat() const { return Heartbeat; }
 
@@ -348,6 +352,14 @@ private:
 	/** Mapping context built in C++ by UCSInputConfig, cached per pawn. */
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> RuntimeMappingContext;
+
+	/**
+	 * Where RuntimeMappingContext was added. The context is outered to this
+	 * pawn, so EndPlay must remove it: otherwise the subsystem keeps a pointer
+	 * to a collected object and ensures (IsValid(MappingContext)) on its next
+	 * rebuild - which happened when Fusion reloads the map on joining a room.
+	 */
+	TWeakObjectPtr<class UEnhancedInputLocalPlayerSubsystem> MappedInputSubsystem;
 
 	/** Subscription to UCSSettingsSubsystem::OnPreferencesChanged. */
 	FDelegateHandle PreferencesChangedHandle;

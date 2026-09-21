@@ -52,6 +52,8 @@ protected:
 	void DrawDeathOverlay(float SecondsToRespawn);
 	void DrawInteractionPrompt();
 	void DrawQuickSlots();
+	void DrawFpsCounter();
+	double SmoothedFrameMs = 0.0;
 
 	/** Text with a soft shadow. X/Y and Scale are in 1080p units. */
 	void DrawLabel(const FString& Text, float X, float Y, const FLinearColor& Color, float Scale = 1.f,

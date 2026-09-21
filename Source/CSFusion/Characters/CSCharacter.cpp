@@ -7,6 +7,7 @@
 
 #include "Camera/CameraComponent.h"
 #include "Characters/CSCharacterMovementComponent.h"
+#include "Combat/CSCheatGuard.h"
 #include "Combat/CSMatchDirector.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -168,6 +169,14 @@ void ACSCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	{
 		Settings->OnPreferencesChanged.Remove(PreferencesChangedHandle);
 	}
+	if (UEnhancedInputLocalPlayerSubsystem* Input = MappedInputSubsystem.Get())
+	{
+		if (RuntimeMappingContext)
+		{
+			Input->RemoveMappingContext(RuntimeMappingContext);
+		}
+	}
+	MappedInputSubsystem.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -261,6 +270,8 @@ void ACSCharacter::RefreshMeshVisibility()
 	if (FirstPersonMesh)
 	{
 		FirstPersonMesh->SetVisibility(bFirstPerson, /*bPropagateToChildren*/ true);
+		// Stage 8: nobody ever sees another pawn's arms rig, so it does not tick at all.
+		FirstPersonMesh->SetComponentTickEnabled(bFirstPerson);
 	}
 	if (FirstPersonCamera)
 	{
@@ -272,6 +283,16 @@ void ACSCharacter::RefreshMeshVisibility()
 		// shadow so the local player still sees their own silhouette.
 		Body->SetVisibility(true, true);
 		Body->bCastHiddenShadow = true;
+
+		// Stage 8 optimisation. Hits are traced against the capsule (the body
+		// has no collision), so a remote body off screen needs no pose - only
+		// montages keep running so a death plays out correctly. Update rate
+		// optimisation lowers the anim rate of small, distant bodies. The local
+		// body keeps ticking always, because its hidden shadow must follow it.
+		Body->VisibilityBasedAnimTickOption = bFirstPerson
+			? EVisibilityBasedAnimTickOption::AlwaysTickPose
+			: EVisibilityBasedAnimTickOption::OnlyTickMontagesWhenNotRendered;
+		Body->bEnableUpdateRateOptimizations = !bFirstPerson;
 	}
 }
 
@@ -416,7 +437,7 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 	// Runs on the Master Client. `this` is the shooter's pawn, so the sender
 	// cannot be spoofed: the id comes from Fusion ownership, not the payload.
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc())
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
 	{
 		return;
 	}
@@ -528,7 +549,7 @@ void ACSCharacter::RequestReload()
 void ACSCharacter::RpcRequestReload_Receive()
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc())
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Reload))
 	{
 		return;
 	}
@@ -620,7 +641,7 @@ void ACSCharacter::RequestPickupFocused()
 void ACSCharacter::RpcRequestPickup_Receive(AActor* PickupActor)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc())
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Pickup))
 	{
 		return;
 	}
@@ -691,7 +712,7 @@ void ACSCharacter::RequestSlot(int32 Slot)
 void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc())
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Slot))
 	{
 		return;
 	}
@@ -789,7 +810,7 @@ void ACSCharacter::RequestDropSlot(int32 Slot)
 void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc())
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Drop))
 	{
 		return;
 	}
@@ -1031,6 +1052,7 @@ void ACSCharacter::ApplyInputMappings()
 	// do not reliably survive the world change, and a stale duplicate is
 	// harmless because AddMappingContext is idempotent per context object.
 	Input->AddMappingContext(RuntimeMappingContext, InputConfig->MappingPriority);
+	MappedInputSubsystem = Input;
 
 	UE_LOG(LogCS, Log, TEXT("%s: runtime mapping context applied at priority %d (%d mappings)."),
 		*GetName(), InputConfig->MappingPriority, RuntimeMappingContext->GetMappings().Num());

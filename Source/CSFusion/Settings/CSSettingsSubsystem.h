@@ -73,6 +73,9 @@ public:
 	// --- Defaults ------------------------------------------------------------
 
 	static FCSPlayerPreferences DefaultPreferences() { return FCSPlayerPreferences(); }
+
+	/** Clamps every field to its legal range and drops invalid key overrides. */
+	static void SanitizePreferences(FCSPlayerPreferences& InOut);
 	static FCSGraphicsSettings DefaultGraphics();
 
 	/** Name of the save slot, for tests and docs. */

@@ -59,6 +59,7 @@ private:
 	TSharedPtr<SCSSelector> QualitySelector;
 	TSharedPtr<SCSSelector> VSyncSelector;
 	TSharedPtr<SCSSelector> InvertSelector;
+	TSharedPtr<SCSSelector> ShowFpsSelector;
 	TSharedPtr<SVerticalBox> KeyRows;
 
 	FName CapturingBinding;

@@ -5,6 +5,7 @@
 #include UE_INLINE_GENERATED_CPP_BY_NAME(CSMatchDirector.fusion)
 
 #include "Characters/CSCharacter.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
@@ -207,6 +208,8 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 			PlayerId, *UEnum::GetValueAsString(Reason));
 		return;
 	}
+
+	CheatGuard.Forget(PlayerId);
 
 	const int32 Index = FindRecordIndex(PlayerId);
 	if (Index == INDEX_NONE)
@@ -730,6 +733,15 @@ void ACSMatchDirector::TickAuthority()
 			LastKnownLocation.Add(Record.PlayerId, Pawn->GetActorLocation());
 			PawnMissingSince.Remove(Record.PlayerId);
 
+			// Movement sanity: the owning client simulates this pawn, so its
+			// position is only a claim. See FCSCheatGuard.
+			if (Record.bAlive)
+			{
+				const UCharacterMovementComponent* Move = Pawn->GetCharacterMovement();
+				CheatGuard.ObservePosition(Record.PlayerId, Pawn->GetActorLocation(), Now,
+					Move && Move->IsFalling(), Record.RespawnCounter);
+			}
+
 			// Unexpected-disconnect detector that does not wait on the Photon
 			// server's own timeout: the client bumps a counter every second on
 			// its (player-owned, hence replicated) pawn. Frozen for too long
@@ -906,4 +918,22 @@ void ACSMatchDirector::RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId
 		Event.Zone == ECSHitZone::Head ? TEXT(", head") : TEXT(""), *WeaponName);
 
 	OnCombatEvent.Broadcast(Event);
+}
+
+// ---------------------------------------------------------------------------
+// Anti-cheat (Stage 8)
+// ---------------------------------------------------------------------------
+
+bool ACSMatchDirector::GuardRequest(int32 PlayerId, ECSRequestKind Kind)
+{
+	if (!UCSAuthority::IsGameAuthority(this))
+	{
+		return true;
+	}
+	const bool bAllowed = CheatGuard.AllowRequest(PlayerId, Kind, UCSAuthority::GetNetworkTimeSeconds(this));
+	if (!bAllowed && UCSCombatSettings::Get()->bLogRejections)
+	{
+		UE_LOG(LogCSAuth, Verbose, TEXT("Request %d from player %d dropped by the cheat guard."), static_cast<int32>(Kind), PlayerId);
+	}
+	return bAllowed;
 }

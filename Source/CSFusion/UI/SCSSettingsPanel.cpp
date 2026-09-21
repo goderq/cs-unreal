@@ -102,6 +102,12 @@ void SCSSettingsPanel::Construct(const FArguments& InArgs)
 						.Options({ LOCTEXT("Low", "Low"), LOCTEXT("Medium", "Medium"), LOCTEXT("High", "High"), LOCTEXT("Epic", "Epic") })
 						.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.Quality = i; }))
 				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					CSUI::MakeRow(LOCTEXT("ShowFps", "Show FPS"),
+						SAssignNew(ShowFpsSelector, SCSSelector).Options(OffOn)
+						.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bShowFps = i == 1; }))
+				]
 
 				// --- Controls -----------------------------------------------
 				+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("Controls", "CONTROLS")) ]
@@ -268,6 +274,7 @@ void SCSSettingsPanel::SyncSelectors()
 	QualitySelector->SetSelectedIndex(WorkingGfx.Quality);
 	VSyncSelector->SetSelectedIndex(WorkingGfx.bVSync ? 1 : 0);
 	InvertSelector->SetSelectedIndex(WorkingPrefs.bInvertY ? 1 : 0);
+	ShowFpsSelector->SetSelectedIndex(WorkingPrefs.bShowFps ? 1 : 0);
 }
 
 void SCSSettingsPanel::RebuildKeyRows()

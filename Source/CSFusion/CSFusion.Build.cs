@@ -82,6 +82,8 @@ public class CSFusion : ModuleRules
 			"AIModule",
 			"NavigationSystem",
 			"GameplayTasks",
+			"RenderCore", // Stage 8 perf test: game/render thread times
+			"RHI",
 		});
 
 		PublicIncludePaths.Add(ModuleDirectory);

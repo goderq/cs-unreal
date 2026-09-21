@@ -50,18 +50,7 @@ void UCSSettingsSubsystem::LoadPreferences()
 		Preferences = Save->Preferences;
 
 		// A hand-edited file must not be able to produce absurd values.
-		Preferences.MouseSensitivity = FMath::Clamp(Preferences.MouseSensitivity, 0.05f, 5.f);
-		Preferences.FieldOfView = FMath::Clamp(Preferences.FieldOfView, 70.f, 120.f);
-		Preferences.MasterVolume = FMath::Clamp(Preferences.MasterVolume, 0.f, 1.f);
-		Preferences.MusicVolume = FMath::Clamp(Preferences.MusicVolume, 0.f, 1.f);
-		Preferences.EffectsVolume = FMath::Clamp(Preferences.EffectsVolume, 0.f, 1.f);
-		for (auto It = Preferences.KeyOverrides.CreateIterator(); It; ++It)
-		{
-			if (!It->Value.IsValid())
-			{
-				It.RemoveCurrent();
-			}
-		}
+		SanitizePreferences(Preferences);
 	}
 	else
 	{
@@ -86,6 +75,7 @@ void UCSSettingsSubsystem::SavePreferences() const
 void UCSSettingsSubsystem::SetPreferences(const FCSPlayerPreferences& NewPreferences, bool bSave)
 {
 	Preferences = NewPreferences;
+	SanitizePreferences(Preferences);
 	ApplyAudio();
 	if (bSave)
 	{
@@ -209,4 +199,20 @@ const TArray<float>& UCSSettingsSubsystem::GetFrameRateChoices()
 {
 	static const TArray<float> Choices = { 30.f, 60.f, 90.f, 120.f, 144.f, 165.f, 240.f, 0.f };
 	return Choices;
+}
+
+void UCSSettingsSubsystem::SanitizePreferences(FCSPlayerPreferences& InOut)
+{
+	InOut.MouseSensitivity = FMath::Clamp(InOut.MouseSensitivity, 0.05f, 5.f);
+	InOut.FieldOfView = FMath::Clamp(InOut.FieldOfView, 70.f, 120.f);
+	InOut.MasterVolume = FMath::Clamp(InOut.MasterVolume, 0.f, 1.f);
+	InOut.MusicVolume = FMath::Clamp(InOut.MusicVolume, 0.f, 1.f);
+	InOut.EffectsVolume = FMath::Clamp(InOut.EffectsVolume, 0.f, 1.f);
+	for (auto It = InOut.KeyOverrides.CreateIterator(); It; ++It)
+	{
+		if (!It->Value.IsValid())
+		{
+			It.RemoveCurrent();
+		}
+	}
 }

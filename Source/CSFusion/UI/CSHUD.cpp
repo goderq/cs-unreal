@@ -189,6 +189,7 @@ void ACSHUD::DrawHUD()
 
 	DrawMatchInfo();
 	DrawKillFeed();
+	DrawFpsCounter();
 
 	const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn());
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
@@ -222,6 +223,21 @@ void ACSHUD::DrawHUD()
 // ---------------------------------------------------------------------------
 // Elements
 // ---------------------------------------------------------------------------
+
+void ACSHUD::DrawFpsCounter()
+{
+	const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
+	if (!Settings || !Settings->GetPreferences().bShowFps)
+	{
+		return;
+	}
+	// Exponential smoothing so the number is readable, not a flicker.
+	const double FrameMs = FApp::GetDeltaTime() * 1000.0;
+	SmoothedFrameMs = SmoothedFrameMs <= 0.0 ? FrameMs : FMath::Lerp(SmoothedFrameMs, FrameMs, 0.05);
+	const double Fps = SmoothedFrameMs > 0.0 ? 1000.0 / SmoothedFrameMs : 0.0;
+	const FLinearColor Color = Fps >= 60.0 ? FLinearColor(0.4f, 1.f, 0.4f) : (Fps >= 30.0 ? FLinearColor(1.f, 0.85f, 0.3f) : FLinearColor(1.f, 0.35f, 0.3f));
+	DrawLabel(FString::Printf(TEXT("%d FPS  %.1f ms"), FMath::RoundToInt(Fps), SmoothedFrameMs), 16.f, 12.f, Color, 0.8f);
+}
 
 void ACSHUD::DrawCrosshair()
 {

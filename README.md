@@ -3,7 +3,7 @@
 Соревновательный multiplayer FPS на **Unreal Engine 5.8.2** + **Photon Fusion 3
 (Unreal SDK)**. Логика на C++, Blueprint только там, где он реально удобнее.
 
-> **Статус: v0.7.0-alpha — Этапы 1–7 проверены двумя клиентами.**
+> **Статус: v0.8.0-beta — все 8 этапов ТЗ выполнены и проверены двумя клиентами.**
 
 ## Как играть (готовая сборка)
 
@@ -26,13 +26,18 @@
 | `Tab` | экран инвентаря |
 | `Esc` | меню: продолжить, настройки, выйти из матча |
 
-Клавиши, чувствительность, FOV, графику и громкость можно поменять в SETTINGS;
+Клавиши, чувствительность, FOV, графику, громкость и счётчик FPS можно поменять в SETTINGS;
 они сохраняются на этом компьютере.
 
 ---
 
 ## Что сделано по этапам
 
+- **Этап 8** — анти-чит на стороне авторитета: speed hack, телепорт и флуд запросов
+  дают страйки, после трёх игрок блокируется на 10 с. Оптимизация анимации
+  невидимых персонажей, счётчик FPS в настройках, модульные тесты UE Automation,
+  скрипты `run_tests.ps1` (все тесты, сводка PASS/FAIL) и `package_release.ps1`
+  (Shipping/Development + zip). [Подробнее](docs/ARCHITECTURE.md#15-анти-чит-оптимизация-тесты-упаковка-этап-8)
 - **Этап 7** — боты: AIController, Behavior Tree и Blackboard (собираются в C++), зрение и
   слух, навигация, три уровня сложности. Боты стреляют, подбирают и экипируют лут,
   лечатся, переходят к новому хосту при смене Master Client. Офлайн-тренировка против
@@ -94,6 +99,17 @@ git clone https://github.com/goderq/cs-unreal.git "cs unreal"
    ```
 7. Play в режиме **Standalone Game**: стартовая карта — `Lvl_MainMenu`.
    Для быстрого входа без меню: `-room=ИМЯ` в командной строке.
+
+### Тесты и сборка релиза
+
+```powershell
+# все тесты (модульные + самотесты в игре), сводка PASS/FAIL, код выхода 0 = всё прошло
+powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1
+# то же на упакованной Development-сборке, плюс анти-чит на двух клиентах по сети
+powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1 -Packaged -Network
+# релиз: Build\Shipping\Windows + Build\dist\CSFusion-v0.8.0-Win64.zip
+powershell -ExecutionPolicy Bypass -File Scripts\package_release.ps1 -Version 0.8.0
+```
 
 ## Документация
 

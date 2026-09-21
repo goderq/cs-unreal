@@ -23,6 +23,7 @@
 #include "InputKeyEventArgs.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Misc/CoreDelegates.h"
 #include "TimerManager.h"
 #include "Multiplayer/CSSessionSubsystem.h"
 #include "Settings/CSSettingsSubsystem.h"
@@ -148,6 +149,15 @@ void ACSPlayerController::ArmSelfTest()
 				Session->LeaveToMainMenu();
 			}
 		}, LeaveAfter, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestperf")))
+	{
+		// Warm-up (shader/PSO compile, bots spawning) before sampling.
+		GetWorldTimerManager().SetTimer(TestPerfTimer, this, &ACSPlayerController::CSTestPerf, 15.f, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestcheat")))
+	{
+		GetWorldTimerManager().SetTimer(TestCheatTimer, this, &ACSPlayerController::CSTestCheat, 12.f, false);
 	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestbots")))
 	{
@@ -507,6 +517,7 @@ void ACSPlayerController::TestFireCheck()
 void ACSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	CloseMenus();
+	FCoreDelegates::OnEndFrame.Remove(TestPerfTickHandle);
 
 	if (UCSSessionSubsystem* Session = GetSessionSubsystem())
 	{

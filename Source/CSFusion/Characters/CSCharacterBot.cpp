@@ -5,6 +5,8 @@
 
 #include "Characters/CSCharacter.h"
 
+#include "Combat/CSCheatGuard.h"
+#include "Combat/CSMatchDirector.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
 #include "Pickups/CSWorldPickup.h"
@@ -62,4 +64,15 @@ void ACSCharacter::BotSelectSlot(int32 Slot)
 	}
 	TGuardValue<bool> Scope(bBotAuthorityCall, true);
 	RpcRequestSlot_Receive(Slot);
+}
+
+bool ACSCharacter::PassesCheatGuard(ECSRequestKind Kind) const
+{
+	// Bots run on the authority itself; only remote requests are policed.
+	if (bIsBot)
+	{
+		return true;
+	}
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	return !Director || Director->GuardRequest(GetOwningPlayerId(), Kind);
 }
