@@ -35,6 +35,11 @@
 #include "Settings/CSSettingsSubsystem.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
+#include "Animation/CSAnimInstance.h"
+#include "Audio/CSAudio.h"
+#include "Audio/CSAudioSettings.h"
+#include "Engine/SkeletalMesh.h"
+#include "FX/CSEffects.h"
 
 ACSCharacter::ACSCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCSCharacterMovementComponent>(
@@ -53,10 +58,10 @@ ACSCharacter::ACSCharacter(const FObjectInitializer& ObjectInitializer)
 	UCapsuleComponent* Capsule = GetCapsuleComponent();
 	Capsule->InitCapsuleSize(34.f, 88.f);
 
-	// Until real character meshes arrive (Stage 6) the capsule is the hit
-	// volume: the authority's hitscan traces on ECC_Visibility, which the
-	// default Pawn profile ignores, so without this shots pass straight
-	// through players.
+	// The capsule stays the hit volume: the authority's hitscan traces on
+	// ECC_Visibility and resolves head / torso / limb from the impact height
+	// on the capsule. The skinned meshes are visual only, so an animation can
+	// never move a hitbox and make two peers disagree about a hit.
 	Capsule->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 
 	// --- First person camera ----------------------------------------------
@@ -67,53 +72,55 @@ ACSCharacter::ACSCharacter(const FObjectInitializer& ObjectInitializer)
 	FirstPersonCamera->SetFieldOfView(DefaultFieldOfView);
 
 	// --- First person arms -------------------------------------------------
+	// The same Mannequin as the body, attached to the camera so it pitches with
+	// the view, with head and legs hidden (see SetupCharacterMeshes). The
+	// offset puts the Mannequin's eyes at the camera.
 	FirstPersonMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FirstPersonMesh"));
 	FirstPersonMesh->SetupAttachment(FirstPersonCamera);
 	FirstPersonMesh->SetOnlyOwnerSee(true);
 	FirstPersonMesh->bCastDynamicShadow = false;
 	FirstPersonMesh->CastShadow = false;
 	FirstPersonMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	FirstPersonMesh->SetRelativeLocation(FVector(0.f, 0.f, -10.f));
+	FirstPersonMesh->SetRelativeLocation(FirstPersonMeshOffset);
+	FirstPersonMesh->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
+	FirstPersonMesh->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPose;
+	FirstPersonMesh->SetAnimInstanceClass(UCSAnimInstance::StaticClass());
 
 	// --- Third person body -------------------------------------------------
 	USkeletalMeshComponent* Body = GetMesh();
 	Body->SetOwnerNoSee(true);
 	Body->bCastHiddenShadow = true;           // owner still sees their shadow
-	Body->SetCollisionObjectType(ECC_Pawn);
-	Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	Body->SetCollisionResponseToAllChannels(ECR_Block);
-	Body->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
+	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Body->SetRelativeLocation(FVector(0.f, 0.f, -88.f));
 	Body->SetRelativeRotation(FRotator(0.f, -90.f, 0.f));
+	// Keep animating while unseen so the owner's shadow and remote players
+	// behind the camera stay in sync.
+	Body->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPose;
+	Body->SetAnimInstanceClass(UCSAnimInstance::StaticClass());
 
-	// --- Placeholder body (Stage 6 replaces with a skinned character) ---------
-	// Without any visible geometry, remote players are invisible. A cylinder
-	// torso and a sphere head, hidden from the owner, give everyone else
-	// something to see and aim at. Visuals only - no collision.
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> CylinderMesh(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereMesh(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
-
-	PlaceholderBody = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaceholderBody"));
-	PlaceholderBody->SetupAttachment(Capsule);
-	PlaceholderBody->SetRelativeLocation(FVector(0.f, 0.f, -12.f));
-	PlaceholderBody->SetRelativeScale3D(FVector(0.62f, 0.62f, 1.5f));
-	PlaceholderBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	PlaceholderBody->SetOwnerNoSee(true);
-	if (CylinderMesh.Succeeded())
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MannyMesh(
+		TEXT("/Game/Characters/Mannequins/Meshes/SKM_Manny_Simple.SKM_Manny_Simple"));
+	if (MannyMesh.Succeeded())
 	{
-		PlaceholderBody->SetStaticMesh(CylinderMesh.Object);
+		Body->SetSkeletalMesh(MannyMesh.Object);
+		FirstPersonMesh->SetSkeletalMesh(MannyMesh.Object);
 	}
 
-	PlaceholderHead = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PlaceholderHead"));
-	PlaceholderHead->SetupAttachment(Capsule);
-	PlaceholderHead->SetRelativeLocation(FVector(0.f, 0.f, 70.f));
-	PlaceholderHead->SetRelativeScale3D(FVector(0.4f));
-	PlaceholderHead->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	PlaceholderHead->SetOwnerNoSee(true);
-	if (SphereMesh.Succeeded())
+	// --- Weapons in the hands ------------------------------------------------
+	auto MakeWeaponMesh = [this](const TCHAR* Name, USkeletalMeshComponent* Parent) -> USkeletalMeshComponent*
 	{
-		PlaceholderHead->SetStaticMesh(SphereMesh.Object);
-	}
+		USkeletalMeshComponent* Weapon = CreateDefaultSubobject<USkeletalMeshComponent>(Name);
+		Weapon->SetupAttachment(Parent, WeaponSocket);
+		Weapon->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Weapon->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::OnlyTickPoseWhenRendered;
+		return Weapon;
+	};
+	FirstPersonWeapon = MakeWeaponMesh(TEXT("FirstPersonWeapon"), FirstPersonMesh);
+	FirstPersonWeapon->SetOnlyOwnerSee(true);
+	FirstPersonWeapon->CastShadow = false;
+	ThirdPersonWeapon = MakeWeaponMesh(TEXT("ThirdPersonWeapon"), Body);
+	ThirdPersonWeapon->SetOwnerNoSee(true);
+	ThirdPersonWeapon->bCastHiddenShadow = true;
 
 	WeaponComponent = CreateDefaultSubobject<UCSWeaponComponent>(TEXT("WeaponComponent"));
 
@@ -142,6 +149,7 @@ void ACSCharacter::BeginPlay()
 		FusionActor->OnOwnerChanged.AddDynamic(this, &ACSCharacter::HandleFusionOwnerChanged);
 	}
 
+	SetupCharacterMeshes();
 	RefreshMeshVisibility();
 	ApplyInputMappings();
 
@@ -154,6 +162,7 @@ void ACSCharacter::BeginPlay()
 
 void ACSCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	UnbindCombatEvents();
 	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
 	{
 		Settings->OnPreferencesChanged.Remove(PreferencesChangedHandle);
@@ -190,6 +199,8 @@ void ACSCharacter::ApplyLocalPreferences()
 void ACSCharacter::HandleFusionObjectReady()
 {
 	bNetworkReady = true;
+	// The owning player id is known only now: pick Manny or Quinn by it.
+	SetupCharacterMeshes();
 	RefreshMeshVisibility();
 
 	// Ownership is only meaningful now, and the authority needs a record for
@@ -289,6 +300,10 @@ void ACSCharacter::Tick(float DeltaSeconds)
 	}
 
 	SyncWithDirector();
+
+	BindCombatEvents();
+	UpdateWeaponPresentation();
+	UpdateFootsteps(DeltaSeconds);
 }
 
 void ACSCharacter::UpdateStance()
@@ -357,10 +372,22 @@ void ACSCharacter::PlayLocalFireEffects(const UCSWeaponDefinition* Weapon)
 
 	// Purely local prediction: the shot must feel instant even though the
 	// authority has not confirmed anything yet. Nothing here affects gameplay.
+	// The tracer goes to what the crosshair is on right now; the authority's
+	// impact arrives with RpcConfirmShot and gets the impact effect.
+	FVector Origin;
+	FVector Direction;
+	GetAimRay(Origin, Direction);
+	FVector End = Origin + Direction * Weapon->Range;
+	FHitResult Hit;
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(CSLocalTracer), false, this);
+	if (GetWorld()->LineTraceSingleByChannel(Hit, Origin, End, ECC_Visibility, Query))
+	{
+		End = Hit.ImpactPoint;
+	}
+	PlayShotPresentation(End, /*bLocalPrediction*/ true);
+
 	AddControllerPitchInput(-Weapon->RecoilPitch);
 	AddControllerYawInput(FMath::RandRange(-Weapon->RecoilYaw, Weapon->RecoilYaw));
-
-	// Stage 6 attaches muzzle flash, tracer and sound here.
 }
 
 // ---------------------------------------------------------------------------
@@ -459,7 +486,15 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 
 void ACSCharacter::RpcConfirmShot_Receive(FVector Origin, FVector Impact, bool bHitPlayer)
 {
-	// Stage 6 draws the tracer, impact decal and hit marker here.
+	// Runs on every peer. The shooter already showed flash, sound and tracer
+	// when they clicked (PlayLocalFireEffects); everyone else shows them now.
+	// The impact is shown by all, at the point the authority decided.
+	if (!IsLocallyControlled())
+	{
+		PlayShotPresentation(Impact, /*bLocalPrediction*/ false);
+	}
+	CSEffects::Impact(GetWorld(), Impact, (Origin - Impact).GetSafeNormal(), bHitPlayer);
+
 	UE_LOG(LogCSCombat, VeryVerbose, TEXT("%s shot confirmed, hit player: %s"),
 		*GetName(), bHitPlayer ? TEXT("yes") : TEXT("no"));
 }
@@ -806,6 +841,7 @@ void ACSCharacter::SyncWithDirector()
 		{
 			bDepartedHidden = true;
 			ApplyAliveState(false);
+			GetMesh()->SetVisibility(false, true);
 			UE_LOG(LogCSNet, Log, TEXT("%s: player %d departed - hiding pawn."), *GetName(), PlayerId);
 		}
 		return;
@@ -817,6 +853,9 @@ void ACSCharacter::SyncWithDirector()
 	{
 		bLocalAliveState = Record.bAlive;
 		ApplyAliveState(Record.bAlive);
+
+		const UCSAudioSettings* Audio = UCSAudioSettings::Get();
+		CSAudio::PlayAt(this, Record.bAlive ? Audio->Respawn : Audio->Death, GetActorLocation());
 	}
 
 	// First sight of the record is the initial registration, not a respawn:
@@ -846,22 +885,37 @@ void ACSCharacter::ApplyAliveState(bool bNewAlive)
 
 	// Runs on EVERY peer off the authority's replicated flag, so a client that
 	// ignores its own death still looks and behaves dead everywhere else.
-	if (USkeletalMeshComponent* Body = GetMesh())
+	// The body stays visible and plays a death animation; the arms view of the
+	// dead owner goes away (their HUD shows the death screen).
+	if (UCSAnimInstance* BodyAnim = GetBodyAnim())
 	{
-		Body->SetVisibility(bNewAlive, true);
-	}
-	if (PlaceholderBody)
-	{
-		PlaceholderBody->SetVisibility(bNewAlive);
-	}
-	if (PlaceholderHead)
-	{
-		PlaceholderHead->SetVisibility(bNewAlive);
+		if (bNewAlive)
+		{
+			BodyAnim->ResetAlive();
+		}
+		else
+		{
+			// Fall away from where the killing shots came from.
+			int32 Direction = 1; // back
+			if (bHasLastHitFrom)
+			{
+				const FVector Local = GetActorRotation().UnrotateVector(LastHitFrom - GetActorLocation());
+				const float Yaw = FMath::RadiansToDegrees(FMath::Atan2(Local.Y, Local.X));
+				Direction = FMath::Abs(Yaw) <= 45.f ? 0 : (FMath::Abs(Yaw) >= 135.f ? 1 : (Yaw < 0.f ? 2 : 3));
+			}
+			BodyAnim->PlayDeath(Direction);
+		}
 	}
 	if (FirstPersonMesh)
 	{
 		FirstPersonMesh->SetVisibility(bNewAlive && IsLocallyControlled(), true);
 	}
+	if (ThirdPersonWeapon)
+	{
+		// Hide the gun while the body falls; the real one dropped as loot anyway.
+		ThirdPersonWeapon->SetVisibility(bNewAlive);
+	}
+	bHasLastHitFrom = bNewAlive ? false : bHasLastHitFrom;
 
 	if (UCapsuleComponent* Capsule = GetCapsuleComponent())
 	{

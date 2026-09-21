@@ -25,6 +25,7 @@
 #include "Misc/Parse.h"
 #include "TimerManager.h"
 #include "Multiplayer/CSSessionSubsystem.h"
+#include "Settings/CSSettingsSubsystem.h"
 
 ACSPlayerController::ACSPlayerController()
 {
@@ -76,6 +77,11 @@ void ACSPlayerController::BeginPlay()
 	}
 
 	SetUIInputMode(false);
+
+	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		Settings->ReapplyAudio();
+	}
 
 	if (UCSSessionSubsystem* Session = GetSessionSubsystem())
 	{
@@ -142,6 +148,31 @@ void ACSPlayerController::ArmSelfTest()
 				Session->LeaveToMainMenu();
 			}
 		}, LeaveAfter, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestwalk")))
+	{
+		TestWalkTime = 0.f;
+		GetWorldTimerManager().SetTimer(TestWalkTimer, [this]()
+		{
+			APawn* Walker = GetPawn();
+			TestWalkTime += 0.05f;
+			if (!Walker || TestWalkTime < 8.f || TestWalkTime > 60.f)
+			{
+				TestWalkDir = FVector::ZeroVector;
+				return;
+			}
+			// Forward, right, back, left - 1.5 s each, relative to the view.
+			const int32 Leg = FMath::FloorToInt((TestWalkTime - 8.f) / 1.5f) % 4;
+			const FRotator Yaw(0.f, GetControlRotation().Yaw, 0.f);
+			const FVector Forward = FRotationMatrix(Yaw).GetUnitAxis(EAxis::X);
+			const FVector Right = FRotationMatrix(Yaw).GetUnitAxis(EAxis::Y);
+			const FVector Dir[] = { Forward, Right, -Forward, -Right };
+			TestWalkDir = Dir[Leg];
+		}, 0.05f, true);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestvisual")))
+	{
+		GetWorldTimerManager().SetTimer(TestVisualTimer, this, &ACSPlayerController::CSTestVisual, 12.f, false);
 	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestui")))
 	{

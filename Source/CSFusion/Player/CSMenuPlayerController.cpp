@@ -2,7 +2,11 @@
 
 #include "Player/CSMenuPlayerController.h"
 
+#include "Audio/CSAudio.h"
+#include "Audio/CSAudioSettings.h"
+#include "Components/AudioComponent.h"
 #include "Core/CSLog.h"
+#include "Settings/CSSettingsSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
@@ -41,6 +45,12 @@ void ACSMenuPlayerController::BeginPlay()
 	SetShowMouseCursor(true);
 
 	UE_LOG(LogCS, Log, TEXT("Main menu shown."));
+
+	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		Settings->ReapplyAudio();
+	}
+	MenuMusic = CSAudio::PlayMusic(this, UCSAudioSettings::Get()->MenuMusic);
 
 	// Self-tests run on the first visit only; a later visit (after leaving a
 	// match) can test entering a second match with -cstestrejoin=NAME.

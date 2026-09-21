@@ -101,6 +101,15 @@ protected:
 	FTimerHandle TestUITimer;
 	FTimerHandle TestLeaveTimer;
 
+	/** Stage 6 visual self-test, enabled with -cstestvisual. */
+	UFUNCTION(Exec)
+	void CSTestVisual();
+	FTimerHandle TestVisualTimer;
+	/** -cstestwalk: the pawn walks a square (forward, right, back, left) for the animation tests. */
+	FTimerHandle TestWalkTimer;
+	float TestWalkTime = 0.f;
+	FVector TestWalkDir = FVector::ZeroVector;
+
 	/** Writes a screenshot to Saved/CSTest/<Name>.png (used by the UI tests). */
 	void TestScreenshot(const FString& Name);
 

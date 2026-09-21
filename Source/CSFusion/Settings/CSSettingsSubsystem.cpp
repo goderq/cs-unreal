@@ -3,6 +3,7 @@
 #include "Settings/CSSettingsSubsystem.h"
 
 #include "AudioDevice.h"
+#include "Audio/CSAudio.h"
 #include "Core/CSLog.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -107,8 +108,9 @@ FKey UCSSettingsSubsystem::GetKeyFor(FName BindingId, const FKey& Default) const
 
 void UCSSettingsSubsystem::ApplyAudio() const
 {
-	// Master volume scales the whole mix. Music and effects are stored now and
-	// applied per sound once Stage 6 routes sounds through sound classes.
+	// Master volume scales the whole mix; music and effects go through the
+	// sound classes every generated sound is assigned to (see CSAudioSettings).
+	CSAudio::ApplyVolumes(GetGameInstance(), Preferences.MusicVolume, Preferences.EffectsVolume);
 	if (GEngine)
 	{
 		if (FAudioDeviceHandle Device = GEngine->GetMainAudioDevice())

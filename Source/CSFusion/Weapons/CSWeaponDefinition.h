@@ -22,6 +22,14 @@ class USkeletalMesh;
 class USoundBase;
 class UTexture2D;
 
+/** Which animation set the character uses while holding the weapon. */
+UENUM(BlueprintType)
+enum class ECSWeaponStance : uint8
+{
+	Pistol	UMETA(DisplayName = "Pistol"),
+	Rifle	UMETA(DisplayName = "Rifle")
+};
+
 UCLASS(BlueprintType)
 class CSFUSION_API UCSWeaponDefinition : public UDataAsset
 {
@@ -124,7 +132,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling")
 	float RecoilYaw = 0.18f;
 
-	// --- Presentation (filled in Stage 6) ----------------------------------
+	// --- Presentation -------------------------------------------------------
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> Icon;
@@ -143,6 +151,27 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<USoundBase> ReloadSound;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	TSoftObjectPtr<USoundBase> EquipSound;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	ECSWeaponStance Stance = ECSWeaponStance::Rifle;
+
+	/** Uniform scale of the weapon mesh in the hand (lets one mesh stand in for several guns). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation", meta = (ClampMin = "0.1"))
+	float MeshScale = 1.f;
+
+	/** Socket on the weapon mesh where muzzle flash and tracers start. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	FName MuzzleSocket = TEXT("Muzzle");
+
+	/** Muzzle flash size multiplier (shotguns and snipers flash bigger). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation", meta = (ClampMin = "0.1"))
+	float MuzzleFlashScale = 1.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	FLinearColor TracerColor = FLinearColor(1.f, 0.75f, 0.35f);
 
 	// --- Derived -----------------------------------------------------------
 

@@ -39,6 +39,9 @@ protected:
 
 	TSharedPtr<SCSMainMenu> Menu;
 
+	UPROPERTY(Transient)
+	TObjectPtr<class UAudioComponent> MenuMusic;
+
 	FTimerHandle MenuTestTimer;
 	int32 MenuTestStage = 0;
 	float MenuTestWaited = 0.f;

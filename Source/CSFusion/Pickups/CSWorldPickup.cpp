@@ -234,14 +234,19 @@ void ACSWorldPickup::ApplyVisuals()
 		return;
 	}
 
-	if (UStaticMesh* WorldMesh = Item->WorldMesh.LoadSynchronous())
+	UStaticMesh* WorldMesh = Item->WorldMesh.LoadSynchronous();
+	if (WorldMesh)
 	{
 		Mesh->SetStaticMesh(WorldMesh);
 	}
 	Mesh->SetRelativeScale3D(Item->WorldMeshScale);
 
-	// Tint the engine's basic shape material so item types read at a glance
-	// until real meshes arrive in Stage 6.
+	// Weapons show their real, textured model. Other items use simple shapes
+	// tinted by type so they read at a glance.
+	if (WorldMesh && Item->IsWeapon())
+	{
+		return;
+	}
 	if (UMaterialInterface* Base = Mesh->GetMaterial(0))
 	{
 		UMaterialInstanceDynamic* Tinted = Cast<UMaterialInstanceDynamic>(Base);

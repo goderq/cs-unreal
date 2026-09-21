@@ -27,3 +27,14 @@ Content/**/*.uasset.tmp
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Epic Games template content (Mannequins, template weapons, prototype grid).
+# Licensed under the Unreal Engine EULA, which does not allow redistributing
+# it in source form publicly. It is copied from YOUR engine install by
+# Scripts/copy_epic_content.py - see docs/ASSETS.md. Cooked into builds, as
+# the EULA permits.
+Content/Characters/Mannequins/
+Content/Weapons/Pistol/
+Content/Weapons/Rifle/
+Content/Weapons/GrenadeLauncher/
+Content/LevelPrototyping/

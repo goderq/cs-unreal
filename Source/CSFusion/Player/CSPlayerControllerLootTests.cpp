@@ -177,6 +177,9 @@ void ACSPlayerController::TestKillStep()
 	{
 		GetWorldTimerManager().ClearTimer(TestKillTimer);
 		UE_LOG(LogCS, Log, TEXT("KILL TEST: victim %d died after %d shots"), TestVictimId, TestShotsFired);
+		// Stage 6: the victim should be playing a death animation now.
+		FTimerHandle DeathShot;
+		GetWorldTimerManager().SetTimer(DeathShot, [this]() { TestScreenshot(TEXT("tp_death")); }, 0.8f, false);
 		GetWorldTimerManager().SetTimer(TestLootTimer, this, &ACSPlayerController::TestKillVerifyLoot, 1.2f, false);
 		return;
 	}

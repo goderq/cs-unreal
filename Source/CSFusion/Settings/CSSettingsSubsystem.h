@@ -54,6 +54,9 @@ public:
 	/** Key for a rebindable binding: the player's override, else Default. */
 	FKey GetKeyFor(FName BindingId, const FKey& Default) const;
 
+	/** Re-applies volumes to the current world (call when a map starts). */
+	void ReapplyAudio() const { ApplyAudio(); }
+
 	FCSPreferencesChanged OnPreferencesChanged;
 
 	// --- Graphics (UGameUserSettings) ---------------------------------------

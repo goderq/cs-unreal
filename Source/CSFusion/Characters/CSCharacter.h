@@ -246,13 +246,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCSWeaponComponent> WeaponComponent;
 
-	/** Placeholder visuals until Stage 6 meshes. Hidden from the owner. */
-	UPROPERTY(VisibleAnywhere, Category = "CS|Components")
-	TObjectPtr<UStaticMeshComponent> PlaceholderBody;
+	/** Weapon in the first-person hands. Owner only. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USkeletalMeshComponent> FirstPersonWeapon;
 
-	UPROPERTY(VisibleAnywhere, Category = "CS|Components")
-	TObjectPtr<UStaticMeshComponent> PlaceholderHead;
-
+	/** Weapon in the third-person hands. Everyone except the owner (shadow for the owner). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USkeletalMeshComponent> ThirdPersonWeapon;
 	/** Bridge to UFusionClient. Unguarded so UHT keeps it GC-tracked. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "CS|Components", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UFusionActorComponent> FusionActor;
@@ -268,6 +268,14 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Camera", meta = (ClampMin = "60.0", ClampMax = "130.0"))
 	float DefaultFieldOfView = 100.f;
+
+	/** First-person Mannequin offset from the camera: puts its eyes at the camera. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Camera")
+	FVector FirstPersonMeshOffset = FVector(6.f, 2.f, -161.f);
+
+	/** Hand socket on the Mannequin that holds the weapon. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Weapon")
+	FName WeaponSocket = TEXT("HandGrip_R");
 
 	/** Multiplier applied to raw look input before sensitivity settings. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Camera", meta = (ClampMin = "0.01"))
@@ -330,4 +338,48 @@ private:
 
 	/** Subscription to UCSSettingsSubsystem::OnPreferencesChanged. */
 	FDelegateHandle PreferencesChangedHandle;
+
+	// --- Presentation (Stage 6): animation, sound, effects -------------------
+	//
+	// Everything below is cosmetic and runs on every peer from replicated
+	// state: the loadout in the director record drives the weapon mesh and
+	// stance, the record's reload state drives the reload animation, shot
+	// confirmations drive fire effects, combat events drive hit reactions.
+
+public:
+	class UCSAnimInstance* GetBodyAnim() const;
+	class UCSAnimInstance* GetArmsAnim() const;
+
+	/** Weapon mesh currently shown in the local view (tests read this). */
+	const UCSWeaponDefinition* GetDisplayedWeapon() const { return DisplayedWeapon.Get(); }
+
+private:
+	/** Sets Manny/Quinn and the C++ anim instance on both meshes. */
+	void SetupCharacterMeshes();
+
+	/** Follows the authoritative loadout: weapon meshes, stance, equip, reload. */
+	void UpdateWeaponPresentation();
+
+	void UpdateFootsteps(float DeltaSeconds);
+
+	/** Fire animation, muzzle flash, sound and tracer from this pawn's gun. */
+	void PlayShotPresentation(const FVector& TracerEnd, bool bLocalPrediction);
+
+	/** World transform of the muzzle of the weapon mesh the viewer sees. */
+	FTransform GetMuzzleTransform(bool bFirstPersonView) const;
+
+	void BindCombatEvents();
+	void UnbindCombatEvents();
+	void HandleCombatEvent(const struct FCSCombatEvent& Event);
+
+	TWeakObjectPtr<const UCSWeaponDefinition> DisplayedWeapon;
+	bool bShownReloading = false;
+	/** Total items in this player's inventory last frame; a rise means a pickup. */
+	int32 LastInventoryItems = -1;
+	bool bWasFalling = false;
+	float StepAccumulator = 0.f;
+	FVector LastHitFrom = FVector::ZeroVector;
+	bool bHasLastHitFrom = false;
+	TWeakObjectPtr<ACSMatchDirector> BoundDirector;
+	FDelegateHandle CombatEventHandle;
 };

@@ -2,7 +2,9 @@
 
 #include "UI/CSUIStyle.h"
 
+#include "Audio/CSAudioSettings.h"
 #include "Brushes/SlateColorBrush.h"
+#include "Sound/SoundBase.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -36,6 +38,20 @@ namespace CSUI
 			Style.SetDisabled(FSlateColorBrush(FLinearColor(0.03f, 0.03f, 0.035f, 0.8f)));
 			Style.SetNormalPadding(FMargin(0.f));
 			Style.SetPressedPadding(FMargin(0.f));
+			// Generated UI sounds (see CSAudioSettings); null-safe if missing.
+			const UCSAudioSettings* Audio = UCSAudioSettings::Get();
+			if (USoundBase* Click = Audio->UIClick.LoadSynchronous())
+			{
+				FSlateSound Sound;
+				Sound.SetResourceObject(Click);
+				Style.SetPressedSound(Sound);
+			}
+			if (USoundBase* HoverSound = Audio->UIHover.LoadSynchronous())
+			{
+				FSlateSound Sound;
+				Sound.SetResourceObject(HoverSound);
+				Style.SetHoveredSound(Sound);
+			}
 			return Style;
 		};
 

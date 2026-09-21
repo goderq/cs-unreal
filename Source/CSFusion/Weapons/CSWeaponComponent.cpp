@@ -2,6 +2,7 @@
 
 #include "Weapons/CSWeaponComponent.h"
 
+#include "Audio/CSAudio.h"
 #include "Characters/CSCharacter.h"
 #include "Combat/CSMatchDirector.h"
 #include "Components/CapsuleComponent.h"
@@ -139,6 +140,10 @@ void UCSWeaponComponent::TryFireOnce()
 		if (Loadout.RoundsInMag <= 0)
 		{
 			// Dry fire: ask for a reload rather than spamming the server.
+			if (Loadout.Weapon)
+			{
+				CSAudio::Play2D(this, Loadout.Weapon->EmptySound, 0.8f);
+			}
 			RequestReload();
 			return;
 		}

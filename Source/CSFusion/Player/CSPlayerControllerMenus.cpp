@@ -208,6 +208,12 @@ void ACSPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 
+	// -cstestwalk: movement input has to be given every frame.
+	if (!TestWalkDir.IsNearlyZero() && GetPawn())
+	{
+		GetPawn()->AddMovementInput(TestWalkDir, 1.f);
+	}
+
 	// Keyboard focus can be lost to a click on empty space or a widget being
 	// rebuilt; without it ESC/TAB would no longer reach the open menu (game
 	// input is off while a menu is up). Put it back.
