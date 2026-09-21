@@ -142,7 +142,30 @@ FCSSessionRequest SCSMainMenu::MakeRequest() const
 	Request.Region = GetSelectedRegion();
 	Request.bSelectRegion = !Request.Region.IsEmpty();
 	Request.InitialWorld = UCSSessionSubsystem::DefaultMatchWorld();
+	Request.BotCount = GetSelectedBotCount();
+	Request.BotDifficulty = GetSelectedBotDifficulty();
 	return Request;
+}
+
+int32 SCSMainMenu::GetSelectedBotCount() const
+{
+	return BotCountSelector.IsValid() ? BotCountSelector->GetSelectedIndex() : 3;
+}
+
+ECSBotDifficulty SCSMainMenu::GetSelectedBotDifficulty() const
+{
+	const int32 Index = BotDifficultySelector.IsValid() ? BotDifficultySelector->GetSelectedIndex() : 1;
+	return static_cast<ECSBotDifficulty>(FMath::Clamp(Index, 0, 2));
+}
+
+void SCSMainMenu::StartPractice()
+{
+	LocalMessage.Reset();
+	if (UCSSessionSubsystem* Session = GetSession())
+	{
+		UE_LOG(LogCSNet, Log, TEXT("Menu: offline practice with %d bot(s)."), GetSelectedBotCount());
+		Session->StartOfflinePractice(FMath::Max(1, GetSelectedBotCount()), GetSelectedBotDifficulty());
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +333,21 @@ TSharedRef<SWidget> SCSMainMenu::MakePlayPage()
 		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
+			CSUI::MakeRow(LOCTEXT("Bots", "Bots (if you create the match)"),
+				SAssignNew(BotCountSelector, SCSSelector)
+				.Options({ FText::AsNumber(0), FText::AsNumber(1), FText::AsNumber(2), FText::AsNumber(3), FText::AsNumber(4),
+					FText::AsNumber(5), FText::AsNumber(6), FText::AsNumber(7), FText::AsNumber(8) })
+				.SelectedIndex(3))
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 10.f)
+		[
+			CSUI::MakeRow(LOCTEXT("BotDifficulty", "Bot difficulty"),
+				SAssignNew(BotDifficultySelector, SCSSelector)
+				.Options({ LOCTEXT("Easy", "Easy"), LOCTEXT("Normal", "Normal"), LOCTEXT("Hard", "Hard") })
+				.SelectedIndex(1))
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
 			Card(LOCTEXT("Quick", "QUICK MATCH"), LOCTEXT("QuickBody", "Join any open match. If there is none, a new one is created and others will join you."),
 				FOnClicked::CreateLambda([this]() { QuickMatch(); return FReply::Handled(); }), true)
 		]
@@ -327,6 +365,11 @@ TSharedRef<SWidget> SCSMainMenu::MakePlayPage()
 		[
 			Card(LOCTEXT("Browser", "SESSION BROWSER"), LOCTEXT("BrowserBody", "See every open match in the region and pick one."),
 				FOnClicked::CreateLambda([this]() { ShowPage(EPage::Browser); return FReply::Handled(); }), false)
+		]
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			Card(LOCTEXT("Practice", "PRACTICE VS BOTS"), LOCTEXT("PracticeBody", "Offline match against bots - no internet needed."),
+				FOnClicked::CreateLambda([this]() { StartPractice(); return FReply::Handled(); }), false)
 		];
 }
 

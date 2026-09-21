@@ -149,6 +149,11 @@ void ACSPlayerController::ArmSelfTest()
 			}
 		}, LeaveAfter, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestbots")))
+	{
+		// Bots start spawning 3 s after the map loads, one per second.
+		GetWorldTimerManager().SetTimer(TestBotsTimer, this, &ACSPlayerController::CSTestBots, 14.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestwalk")))
 	{
 		TestWalkTime = 0.f;

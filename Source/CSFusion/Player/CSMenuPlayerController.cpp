@@ -152,6 +152,14 @@ void ACSMenuPlayerController::MenuTestStep()
 			Session && Session->IsBusy() ? TEXT("REQUEST OK") : TEXT("REQUEST BROKEN"));
 		return;
 	}
+	if (MenuTestAction == TEXT("practice"))
+	{
+		GetWorldTimerManager().ClearTimer(MenuTestTimer);
+		Menu->ShowPage(SCSMainMenu::EPage::Play);
+		UE_LOG(LogCS, Log, TEXT("MENU TEST RESULT: practice vs %d bot(s) requested."), Menu->GetSelectedBotCount());
+		Menu->StartPractice();
+		return;
+	}
 	if (MenuTestAction.StartsWith(TEXT("create:")))
 	{
 		GetWorldTimerManager().ClearTimer(MenuTestTimer);

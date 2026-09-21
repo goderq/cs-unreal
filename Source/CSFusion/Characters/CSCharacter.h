@@ -304,6 +304,19 @@ protected:
 	UPROPERTY(Replicated)
 	int32 Heartbeat = 0;
 
+	/** Set once by the authority when the pawn is spawned as a bot. */
+	UPROPERTY(Replicated)
+	bool bIsBot = false;
+
+	UPROPERTY(Replicated)
+	int32 BotId = 0;
+
+	/** True only while a Bot* function is running a handler for the bot. */
+	bool bBotAuthorityCall = false;
+
+	/** Handlers refuse bots unless the call came through a Bot* function. */
+	bool RefuseBotRpc() const { return bIsBot && !bBotAuthorityCall; }
+
 public:
 	int32 GetHeartbeat() const { return Heartbeat; }
 
@@ -347,6 +360,31 @@ private:
 	// confirmations drive fire effects, combat events drive hit reactions.
 
 public:
+	// --- Bots (Stage 7) -----------------------------------------------------
+	//
+	// A bot pawn is the same character, owned by the Master Client (Fusion
+	// MasterClient ownership instead of PlayerAttached) and possessed by an
+	// ACSBotController there. Its combat identity is BotId, not the Fusion
+	// owner, so the director keeps a separate record for every bot.
+	//
+	// Bots act through the same authority handlers as players (fire, reload,
+	// pickup, slot), called directly on the Master Client via the Bot*
+	// functions. The RPC versions of those handlers refuse bot pawns, so a
+	// client cannot puppet a bot by sending RPCs to it.
+
+	/** Authority, before FinishSpawning: turn this pawn into bot BotId. */
+	void InitAsBot(int32 InBotId);
+
+	bool IsBot() const { return bIsBot; }
+
+	/** Local human view: the pawn this machine's player looks through. False for bots. */
+	bool IsLocalPlayerView() const { return IsLocallyControlled() && IsPlayerControlled(); }
+
+	void BotFire(const FVector& Origin, const FVector& Direction);
+	void BotReload();
+	void BotPickup(class ACSWorldPickup* Pickup);
+	void BotSelectSlot(int32 Slot);
+
 	class UCSAnimInstance* GetBodyAnim() const;
 	class UCSAnimInstance* GetArmsAnim() const;
 

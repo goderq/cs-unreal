@@ -96,3 +96,22 @@ enum class ECSFireRejection : uint8
 	BadDirection		UMETA(DisplayName = "Malformed Aim Direction"),
 	NoWeapon			UMETA(DisplayName = "No Weapon Definition")
 };
+
+/**
+ * Bot identities. Photon numbers human players from 1 upwards; bots take ids
+ * from FirstBotId so the two can never collide in the director's records.
+ */
+namespace CSBots
+{
+	constexpr int32 FirstBotId = 1000;
+
+	inline bool IsBotId(int32 PlayerId) { return PlayerId >= FirstBotId; }
+}
+
+UENUM(BlueprintType)
+enum class ECSBotDifficulty : uint8
+{
+	Easy	UMETA(DisplayName = "Easy"),
+	Normal	UMETA(DisplayName = "Normal"),
+	Hard	UMETA(DisplayName = "Hard")
+};

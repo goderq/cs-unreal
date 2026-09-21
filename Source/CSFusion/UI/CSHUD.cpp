@@ -2,6 +2,7 @@
 
 #include "UI/CSHUD.h"
 
+#include "AI/CSBotManager.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Characters/CSCharacter.h"
 #include "Combat/CSMatchDirector.h"
@@ -159,7 +160,11 @@ void ACSHUD::DrawLabel(const FString& Text, float X, float Y, const FLinearColor
 
 FString ACSHUD::PlayerLabel(int32 PlayerId) const
 {
-	return PlayerId == GetLocalPlayerId() ? TEXT("You") : FString::Printf(TEXT("Player %d"), PlayerId);
+	if (PlayerId == GetLocalPlayerId())
+	{
+		return TEXT("You");
+	}
+	return CSBots::IsBotId(PlayerId) ? ACSBotManager::GetBotName(PlayerId) : FString::Printf(TEXT("Player %d"), PlayerId);
 }
 
 // ---------------------------------------------------------------------------

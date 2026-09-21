@@ -4,6 +4,7 @@
 
 #include "Characters/CSCharacter.h"
 #include "Combat/CSMatchDirector.h"
+#include "AI/CSBotManager.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
 #include "EngineUtils.h"
@@ -40,6 +41,15 @@ void ACSGameMode::BeginPlay()
 		TEXT("CSGameMode BeginPlay. Authority: %s. PlayerStarts found: %d"),
 		UCSAuthority::IsGameAuthority(this) ? TEXT("YES") : TEXT("no"),
 		CachedPlayerStarts.Num());
+
+	// Every peer gets a local bot manager; only the current authority's acts,
+	// so bots survive a master migration (Stage 7).
+	if (!ACSBotManager::Get(this))
+	{
+		FActorSpawnParameters Params;
+		Params.ObjectFlags |= RF_Transient;
+		GetWorld()->SpawnActor<ACSBotManager>(ACSBotManager::StaticClass(), FTransform::Identity, Params);
+	}
 
 	if (UCSAuthority::IsGameAuthority(this))
 	{

@@ -78,6 +78,8 @@ void UCSGameInstance::AutoConnectFromCommandLine()
 	Request.InitialWorld = UCSSessionSubsystem::DefaultMatchWorld();
 
 	Request.EmptyTtlSeconds = 0;
+	// Scripted rooms start without bots unless -bots=N asks for them.
+	Request.BotCount = 0;
 	Request.bVisible = true;
 
 	UE_LOG(LogCSNet, Log,

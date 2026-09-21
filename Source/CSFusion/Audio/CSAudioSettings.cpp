@@ -5,7 +5,6 @@
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundClass.h"
-#include "Sound/SoundMix.h"
 
 namespace
 {
@@ -23,7 +22,6 @@ UCSAudioSettings::UCSAudioSettings()
 
 	MusicClass = At<USoundClass>(TEXT("/Game/Audio/Mix/SC_Music"));
 	EffectsClass = At<USoundClass>(TEXT("/Game/Audio/Mix/SC_Effects"));
-	VolumeMix = At<USoundMix>(TEXT("/Game/Audio/Mix/SMX_Volumes"));
 	WorldAttenuation = At<USoundAttenuation>(TEXT("/Game/Audio/Mix/ATT_World"));
 
 	Footsteps = {

@@ -101,6 +101,18 @@ protected:
 	FTimerHandle TestUITimer;
 	FTimerHandle TestLeaveTimer;
 
+	/** Stage 7 bot self-test, enabled with -cstestbots (use with -bots=N). */
+	UFUNCTION(Exec)
+	void CSTestBots();
+	FTimerHandle TestBotsTimer;
+	TMap<int32, FVector> BotTestStart;
+	TMap<int32, float> BotTestMoved;
+	TMap<int32, int32> BotTestMaxItems;
+	int32 BotTestHits = 0;
+	int32 BotTestKills = 0;
+	float BotTestElapsed = 0.f;
+	FDelegateHandle BotTestEventHandle;
+
 	/** Stage 6 visual self-test, enabled with -cstestvisual. */
 	UFUNCTION(Exec)
 	void CSTestVisual();

@@ -139,7 +139,7 @@ void ACSCharacter::UpdateWeaponPresentation()
 		}
 		if (!bFirstTime && Weapon)
 		{
-			CSAudio::PlayAt(this, Weapon->EquipSound, GetActorLocation(), IsLocallyControlled() ? 0.8f : 0.6f);
+			CSAudio::PlayAt(this, Weapon->EquipSound, GetActorLocation(), IsLocalPlayerView() ? 0.8f : 0.6f);
 		}
 	}
 
@@ -153,7 +153,7 @@ void ACSCharacter::UpdateWeaponPresentation()
 		}
 		if (LastInventoryItems >= 0 && Items > LastInventoryItems)
 		{
-			CSAudio::PlayAt(this, UCSAudioSettings::Get()->Pickup, GetActorLocation(), IsLocallyControlled() ? 0.8f : 0.6f);
+			CSAudio::PlayAt(this, UCSAudioSettings::Get()->Pickup, GetActorLocation(), IsLocalPlayerView() ? 0.8f : 0.6f);
 		}
 		LastInventoryItems = Items;
 	}
@@ -178,7 +178,7 @@ void ACSCharacter::UpdateWeaponPresentation()
 		}
 		if (Weapon)
 		{
-			CSAudio::PlayAt(this, Weapon->ReloadSound, GetActorLocation(), IsLocallyControlled() ? 0.9f : 0.7f);
+			CSAudio::PlayAt(this, Weapon->ReloadSound, GetActorLocation(), IsLocalPlayerView() ? 0.9f : 0.7f);
 		}
 	}
 	else if (!Loadout.bReloading)
@@ -201,7 +201,7 @@ void ACSCharacter::UpdateFootsteps(float DeltaSeconds)
 
 	if (bWasFalling && !bFalling)
 	{
-		CSAudio::PlayAt(this, Audio->JumpLand, Feet, IsLocallyControlled() ? 0.7f : 1.f);
+		CSAudio::PlayAt(this, Audio->JumpLand, Feet, IsLocalPlayerView() ? 0.7f : 1.f);
 		StepAccumulator = 0.f;
 	}
 	bWasFalling = bFalling;
@@ -228,7 +228,7 @@ void ACSCharacter::UpdateFootsteps(float DeltaSeconds)
 	{
 		StepAccumulator = 0.f;
 		const int32 Pick = FMath::RandRange(0, Audio->Footsteps.Num() - 1);
-		const float Volume = (IsLocallyControlled() ? 0.45f : 0.9f) * FMath::GetMappedRangeValueClamped(
+		const float Volume = (IsLocalPlayerView() ? 0.45f : 0.9f) * FMath::GetMappedRangeValueClamped(
 			FVector2D(150.f, 620.f), FVector2D(0.6f, 1.f), Speed);
 		CSAudio::PlayAt(this, Audio->Footsteps[Pick], Feet, Volume, FMath::FRandRange(0.92f, 1.08f));
 	}
@@ -237,7 +237,7 @@ void ACSCharacter::UpdateFootsteps(float DeltaSeconds)
 void ACSCharacter::PlayShotPresentation(const FVector& TracerEnd, bool bLocalPrediction)
 {
 	const UCSWeaponDefinition* Weapon = DisplayedWeapon.Get();
-	const bool bFirstPersonView = IsLocallyControlled();
+	const bool bFirstPersonView = IsLocalPlayerView();
 
 	for (UCSAnimInstance* Anim : { GetBodyAnim(), GetArmsAnim() })
 	{
@@ -308,14 +308,14 @@ void ACSCharacter::HandleCombatEvent(const FCSCombatEvent& Event)
 				}
 			}
 		}
-		if (IsLocallyControlled())
+		if (IsLocalPlayerView())
 		{
 			CSAudio::Play2D(this, Audio->Hurt, 0.8f);
 		}
 	}
 
 	// Shooter feedback, only on the shooter's own screen.
-	if (Event.InstigatorId == Me && Event.VictimId != Me && IsLocallyControlled())
+	if (Event.InstigatorId == Me && Event.VictimId != Me && IsLocalPlayerView())
 	{
 		if (Event.bKilled)
 		{

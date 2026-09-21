@@ -23,6 +23,8 @@
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Pickups/CSWorldPickup.h"
 #include "TimerManager.h"
 #include "Weapons/CSWeaponDefinition.h"
@@ -137,12 +139,18 @@ void ACSPlayerController::CSTestKill()
 		return;
 	}
 
+	// First alive other character; with -cstestkillbot, a bot if there is one.
+	const bool bPreferBot = FParse::Param(FCommandLine::Get(), TEXT("cstestkillbot"));
+	TestVictim.Reset();
 	for (TActorIterator<ACSCharacter> It(GetWorld()); It; ++It)
 	{
-		if (*It != Self)
+		if (*It == Self || !It->IsAliveAuthoritative())
+		{
+			continue;
+		}
+		if (!TestVictim.IsValid() || (bPreferBot && It->IsBot() && !TestVictim->IsBot()))
 		{
 			TestVictim = *It;
-			break;
 		}
 	}
 	if (!TestVictim.IsValid())

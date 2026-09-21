@@ -8,6 +8,8 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 namespace
 {
@@ -170,6 +172,8 @@ bool UCSSessionSubsystem::StartRoomOperation(const FCSSessionRequest& Request, E
 	}
 
 	PendingRequest = Request;
+	MatchBotCount = Request.BotCount;
+	MatchBotDifficulty = Request.BotDifficulty;
 	if (PendingRequest.InitialWorld.IsNull())
 	{
 		PendingRequest.InitialWorld = DefaultMatchWorld();
@@ -603,4 +607,47 @@ void UCSSessionSubsystem::Fail(const FString& Reason)
 	LastError = Reason;
 	UE_LOG(LogCSNet, Error, TEXT("Session failure: %s"), *Reason);
 	OnSessionFailed.Broadcast(Reason);
+}
+
+// ---------------------------------------------------------------------------
+// Bots
+// ---------------------------------------------------------------------------
+
+void UCSSessionSubsystem::StartOfflinePractice(int32 BotCount, ECSBotDifficulty Difficulty)
+{
+	if (bOperationInFlight || bReturningToMenu)
+	{
+		return;
+	}
+	MatchBotCount = FMath::Clamp(BotCount, 0, 8);
+	MatchBotDifficulty = Difficulty;
+	UE_LOG(LogCSNet, Log, TEXT("Offline practice: %d bot(s), %s."), MatchBotCount, *UEnum::GetValueAsString(Difficulty));
+
+	// No room: every Fusion call in the game falls back to its local path and
+	// this machine is the authority, exactly as in the offline self-tests.
+	if (UGameInstance* GI = GetGameInstance())
+	{
+		if (UWorld* World = GI->GetWorld())
+		{
+			UGameplayStatics::OpenLevel(World, FName(*DefaultMatchWorld().ToSoftObjectPath().GetLongPackageName()));
+		}
+	}
+}
+
+void UCSSessionSubsystem::GetMatchBotSettings(int32& OutCount, ECSBotDifficulty& OutDifficulty) const
+{
+	OutCount = MatchBotCount;
+	OutDifficulty = MatchBotDifficulty;
+
+	int32 CommandLineBots = 0;
+	if (FParse::Value(FCommandLine::Get(), TEXT("bots="), CommandLineBots))
+	{
+		OutCount = FMath::Clamp(CommandLineBots, 0, 8);
+	}
+	FString Level;
+	if (FParse::Value(FCommandLine::Get(), TEXT("botdifficulty="), Level))
+	{
+		OutDifficulty = Level.Equals(TEXT("easy"), ESearchCase::IgnoreCase) ? ECSBotDifficulty::Easy
+			: (Level.Equals(TEXT("hard"), ESearchCase::IgnoreCase) ? ECSBotDifficulty::Hard : ECSBotDifficulty::Normal);
+	}
 }

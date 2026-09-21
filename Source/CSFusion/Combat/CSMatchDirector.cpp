@@ -714,6 +714,17 @@ void ACSMatchDirector::TickAuthority()
 	TArray<int32> Vanished;
 	for (const FCSPlayerCombatRecord& Record : Records)
 	{
+		if (CSBots::IsBotId(Record.PlayerId))
+		{
+			// Bots are not room members and have no client to lose; the bot
+			// manager owns their lifetime. Only their position is tracked.
+			if (const ACSCharacter* BotPawn = FindPawnForPlayer(this, Record.PlayerId))
+			{
+				LastKnownLocation.Add(Record.PlayerId, BotPawn->GetActorLocation());
+			}
+			continue;
+		}
+
 		if (const ACSCharacter* Pawn = FindPawnForPlayer(this, Record.PlayerId))
 		{
 			LastKnownLocation.Add(Record.PlayerId, Pawn->GetActorLocation());
@@ -759,7 +770,7 @@ void ACSMatchDirector::TickAuthority()
 	{
 		for (const FCSPlayerCombatRecord& Record : Records)
 		{
-			if (!Active.Contains(Record.PlayerId) && !Vanished.Contains(Record.PlayerId))
+			if (!CSBots::IsBotId(Record.PlayerId) && !Active.Contains(Record.PlayerId) && !Vanished.Contains(Record.PlayerId))
 			{
 				UE_LOG(LogCSAuth, Log, TEXT("Room membership: player %d is %s."),
 					Record.PlayerId, Inactive.Contains(Record.PlayerId) ? TEXT("INACTIVE (connection lost)") : TEXT("no longer in the room"));

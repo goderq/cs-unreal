@@ -276,7 +276,7 @@ FCSShotResolution UCSWeaponComponent::ResolveShotOnAuthority(const FVector& Auth
 	}
 
 	// Identity comes from Fusion ownership, never from anything on the pawn.
-	Result.VictimPlayerId = UCSAuthority::GetOwningPlayerId(Victim);
+	Result.VictimPlayerId = Victim->GetOwningPlayerId();
 
 	const float Distance = FVector::Dist(AuthoritativeOrigin, Hit.ImpactPoint);
 	Result.Damage = Weapon->ComputeDamage(Result.Zone, Distance);

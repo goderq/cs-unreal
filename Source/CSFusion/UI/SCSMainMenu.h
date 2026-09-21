@@ -45,6 +45,11 @@ public:
 	void JoinSession(const FString& RoomName);
 	void Quit();
 
+	/** Offline match against the selected number of bots. */
+	void StartPractice();
+	int32 GetSelectedBotCount() const;
+	ECSBotDifficulty GetSelectedBotDifficulty() const;
+
 	/** Region code picked on the Play page; empty = best ping. */
 	FString GetSelectedRegion() const;
 
@@ -71,6 +76,8 @@ private:
 
 	TSharedPtr<SWidgetSwitcher> Switcher;
 	TSharedPtr<SCSSelector> RegionSelector;
+	TSharedPtr<SCSSelector> BotCountSelector;
+	TSharedPtr<SCSSelector> BotDifficultySelector;
 	TSharedPtr<SCSSelector> MaxPlayersSelector;
 	TSharedPtr<SEditableTextBox> CreateNameBox;
 	TSharedPtr<SEditableTextBox> JoinNameBox;

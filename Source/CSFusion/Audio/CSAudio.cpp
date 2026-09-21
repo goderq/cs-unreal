@@ -3,6 +3,7 @@
 #include "Audio/CSAudio.h"
 
 #include "Audio/CSAudioSettings.h"
+#include "AudioDevice.h"
 #include "Components/AudioComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -10,7 +11,6 @@
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundClass.h"
-#include "Sound/SoundMix.h"
 
 namespace CSAudio
 {
@@ -69,21 +69,21 @@ namespace CSAudio
 			return;
 		}
 		const UCSAudioSettings* Settings = UCSAudioSettings::Get();
-		USoundMix* Mix = Settings->VolumeMix.LoadSynchronous();
 		USoundClass* Music = Settings->MusicClass.LoadSynchronous();
 		USoundClass* Effects = Settings->EffectsClass.LoadSynchronous();
-		if (!Mix)
-		{
-			return;
-		}
+
+		// Volume is set on the sound classes themselves (every generated sound
+		// belongs to one of them); the audio device re-reads class properties
+		// every frame. A SoundMix class override was tried first and dropped: on
+		// a class the device had not registered it logs "RecursiveApplyAdjuster
+		// failed" every frame, tens of thousands of lines a minute.
 		if (Music)
 		{
-			UGameplayStatics::SetSoundMixClassOverride(WorldContext, Mix, Music, MusicVolume, 1.f, 0.f, true);
+			Music->Properties.Volume = FMath::Clamp(MusicVolume, 0.f, 1.f);
 		}
 		if (Effects)
 		{
-			UGameplayStatics::SetSoundMixClassOverride(WorldContext, Mix, Effects, EffectsVolume, 1.f, 0.f, true);
+			Effects->Properties.Volume = FMath::Clamp(EffectsVolume, 0.f, 1.f);
 		}
-		UGameplayStatics::PushSoundMixModifier(WorldContext, Mix);
 	}
 }

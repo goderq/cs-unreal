@@ -59,6 +59,18 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "CS|Match")
 	FCSMatchPhaseChanged OnMatchPhaseChanged;
 
+	// --- Bots (Stage 7) -----------------------------------------------------
+	// Kept here, in replicated match state, rather than on the creating
+	// client: after a master migration the new Master Client reads them and
+	// keeps the same number of bots at the same difficulty.
+
+	/** Authority: configure bots once per match. */
+	void SetBotSettings(int32 Count, ECSBotDifficulty Difficulty);
+
+	/** -1 until the authority has configured the match. */
+	int32 GetBotCount() const { return BotCount; }
+	ECSBotDifficulty GetBotDifficulty() const { return BotDifficulty; }
+
 protected:
 	/**
 	 * Fusion discovers replicated properties by scanning for Replicated /
@@ -81,6 +93,12 @@ protected:
 
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Match")
 	int32 ScoreBravo = 0;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Bots")
+	int32 BotCount = -1;
+
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Bots")
+	ECSBotDifficulty BotDifficulty = ECSBotDifficulty::Normal;
 
 	UFUNCTION()
 	void OnRep_MatchPhase();

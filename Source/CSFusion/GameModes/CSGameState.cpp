@@ -28,6 +28,8 @@ void ACSGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ACSGameState, PhaseEndNetworkTime);
 	DOREPLIFETIME(ACSGameState, ScoreAlpha);
 	DOREPLIFETIME(ACSGameState, ScoreBravo);
+	DOREPLIFETIME(ACSGameState, BotCount);
+	DOREPLIFETIME(ACSGameState, BotDifficulty);
 }
 
 void ACSGameState::SetMatchPhase(ECSMatchPhase NewPhase)
@@ -89,4 +91,12 @@ void ACSGameState::OnRep_MatchPhase()
 {
 	UE_LOG(LogCS, Log, TEXT("Match phase -> %s"), *UEnum::GetValueAsString(MatchPhase));
 	OnMatchPhaseChanged.Broadcast(MatchPhase);
+}
+
+void ACSGameState::SetBotSettings(int32 Count, ECSBotDifficulty Difficulty)
+{
+	CS_AUTHORITY_ONLY(this);
+	BotCount = FMath::Clamp(Count, 0, 8);
+	BotDifficulty = Difficulty;
+	UE_LOG(LogCSAI, Log, TEXT("Match bots: %d, difficulty %s."), BotCount, *UEnum::GetValueAsString(BotDifficulty));
 }

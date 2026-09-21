@@ -31,6 +31,7 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Net/UnrealNetwork.h"
+#include "Perception/AISense_Hearing.h"
 #include "Player/CSPlayerController.h"
 #include "Settings/CSSettingsSubsystem.h"
 #include "Weapons/CSWeaponComponent.h"
@@ -209,13 +210,13 @@ void ACSCharacter::HandleFusionObjectReady()
 	{
 		if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
 		{
-			Director->EnsurePlayer(UCSAuthority::GetOwningPlayerId(this));
+			Director->EnsurePlayer(GetOwningPlayerId());
 		}
 	}
 
 	UE_LOG(LogCSNet, Log, TEXT("%s: Fusion object ready. CanWrite=%s owner=%d"),
 		*GetName(), UCSAuthority::CanWrite(this) ? TEXT("yes") : TEXT("no"),
-		UCSAuthority::GetOwningPlayerId(this));
+		GetOwningPlayerId());
 }
 
 void ACSCharacter::HandleFusionOwnerChanged()
@@ -244,7 +245,7 @@ bool ACSCharacter::IsLocalFirstPersonView() const
 
 int32 ACSCharacter::GetOwningPlayerId() const
 {
-	return UCSAuthority::GetOwningPlayerId(this);
+	return bIsBot ? BotId : UCSAuthority::GetOwningPlayerId(this);
 }
 
 bool ACSCharacter::IsAliveAuthoritative() const
@@ -255,7 +256,7 @@ bool ACSCharacter::IsAliveAuthoritative() const
 
 void ACSCharacter::RefreshMeshVisibility()
 {
-	const bool bFirstPerson = IsLocallyControlled();
+	const bool bFirstPerson = IsLocalPlayerView();
 
 	if (FirstPersonMesh)
 	{
@@ -279,6 +280,8 @@ void ACSCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ACSCharacter, Stance);
 	DOREPLIFETIME(ACSCharacter, Heartbeat);
+	DOREPLIFETIME(ACSCharacter, bIsBot);
+	DOREPLIFETIME(ACSCharacter, BotId);
 }
 
 void ACSCharacter::Tick(float DeltaSeconds)
@@ -288,7 +291,10 @@ void ACSCharacter::Tick(float DeltaSeconds)
 	if (IsLocallyControlled())
 	{
 		UpdateStance();
-		UpdateFocusedPickup();
+		if (!bIsBot)
+		{
+			UpdateFocusedPickup();
+		}
 
 		// Liveness beacon: see Heartbeat in the header. Only the owner writes it.
 		HeartbeatAccumulator += DeltaSeconds;
@@ -410,6 +416,10 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 	// Runs on the Master Client. `this` is the shooter's pawn, so the sender
 	// cannot be spoofed: the id comes from Fusion ownership, not the payload.
 	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc())
+	{
+		return;
+	}
 
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	if (!Director || !WeaponComponent)
@@ -417,7 +427,7 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 		return;
 	}
 
-	const int32 ShooterId = UCSAuthority::GetOwningPlayerId(this);
+	const int32 ShooterId = GetOwningPlayerId();
 
 	// What is in hand is decided by the authority's own state (director record
 	// plus the Master-Client-owned inventory), never by the client.
@@ -489,11 +499,17 @@ void ACSCharacter::RpcConfirmShot_Receive(FVector Origin, FVector Impact, bool b
 	// Runs on every peer. The shooter already showed flash, sound and tracer
 	// when they clicked (PlayLocalFireEffects); everyone else shows them now.
 	// The impact is shown by all, at the point the authority decided.
-	if (!IsLocallyControlled())
+	if (!IsLocalPlayerView())
 	{
 		PlayShotPresentation(Impact, /*bLocalPrediction*/ false);
 	}
 	CSEffects::Impact(GetWorld(), Impact, (Origin - Impact).GetSafeNormal(), bHitPlayer);
+
+	// Bots hear gunshots (Stage 7). Only the authority runs bot perception.
+	if (UCSAuthority::IsGameAuthority(this))
+	{
+		UAISense_Hearing::ReportNoiseEvent(GetWorld(), Origin, 1.f, this, 3000.f);
+	}
 
 	UE_LOG(LogCSCombat, VeryVerbose, TEXT("%s shot confirmed, hit player: %s"),
 		*GetName(), bHitPlayer ? TEXT("yes") : TEXT("no"));
@@ -512,10 +528,14 @@ void ACSCharacter::RequestReload()
 void ACSCharacter::RpcRequestReload_Receive()
 {
 	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc())
+	{
+		return;
+	}
 
 	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
 	{
-		Director->BeginReload(UCSAuthority::GetOwningPlayerId(this));
+		Director->BeginReload(GetOwningPlayerId());
 	}
 }
 
@@ -600,8 +620,12 @@ void ACSCharacter::RequestPickupFocused()
 void ACSCharacter::RpcRequestPickup_Receive(AActor* PickupActor)
 {
 	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc())
+	{
+		return;
+	}
 
-	const int32 PlayerId = UCSAuthority::GetOwningPlayerId(this);
+	const int32 PlayerId = GetOwningPlayerId();
 	ACSWorldPickup* Pickup = Cast<ACSWorldPickup>(PickupActor);
 	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
@@ -667,8 +691,12 @@ void ACSCharacter::RequestSlot(int32 Slot)
 void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
 {
 	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc())
+	{
+		return;
+	}
 
-	const int32 PlayerId = UCSAuthority::GetOwningPlayerId(this);
+	const int32 PlayerId = GetOwningPlayerId();
 	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	if (!Inventory || !Director || !Director->IsPlayerAlive(PlayerId))
@@ -761,8 +789,12 @@ void ACSCharacter::RequestDropSlot(int32 Slot)
 void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 {
 	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc())
+	{
+		return;
+	}
 
-	const int32 PlayerId = UCSAuthority::GetOwningPlayerId(this);
+	const int32 PlayerId = GetOwningPlayerId();
 	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	if (!Inventory || !Director || !Director->IsPlayerAlive(PlayerId))
@@ -908,7 +940,7 @@ void ACSCharacter::ApplyAliveState(bool bNewAlive)
 	}
 	if (FirstPersonMesh)
 	{
-		FirstPersonMesh->SetVisibility(bNewAlive && IsLocallyControlled(), true);
+		FirstPersonMesh->SetVisibility(bNewAlive && IsLocalPlayerView(), true);
 	}
 	if (ThirdPersonWeapon)
 	{

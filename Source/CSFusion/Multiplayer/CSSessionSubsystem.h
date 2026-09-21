@@ -55,6 +55,13 @@ struct CSFUSION_API FCSSessionRequest
 	/** Map loaded on join. Unset = UCSSessionSubsystem::DefaultMatchWorld(). */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session")
 	TSoftObjectPtr<UWorld> InitialWorld;
+
+	/** Bots the match starts with, if this client ends up creating the room. */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session", meta = (ClampMin = "0", ClampMax = "8"))
+	int32 BotCount = 3;
+
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session")
+	ECSBotDifficulty BotDifficulty = ECSBotDifficulty::Normal;
 };
 
 /** One row of the session browser, copied out of Photon's lobby room list. */
@@ -128,6 +135,16 @@ public:
 	/** Full teardown of the Photon connection. */
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
 	void Disconnect();
+
+	/** Offline match against bots: no Photon, this machine is the authority. */
+	UFUNCTION(BlueprintCallable, Category = "CS|Session")
+	void StartOfflinePractice(int32 BotCount, ECSBotDifficulty Difficulty);
+
+	/**
+	 * Bots for a match this machine creates: the last request's values,
+	 * overridden by -bots=N and -botdifficulty=easy|normal|hard.
+	 */
+	void GetMatchBotSettings(int32& OutCount, ECSBotDifficulty& OutDifficulty) const;
 
 	// --- Session browser ---------------------------------------------------
 
@@ -281,6 +298,10 @@ private:
 
 	bool bBrowsing = false;
 	bool bLobbyJoinIssued = false;
+
+	/** Bot settings of the last Play request (see GetMatchBotSettings). */
+	int32 MatchBotCount = 0;
+	ECSBotDifficulty MatchBotDifficulty = ECSBotDifficulty::Normal;
 
 	/** Set by LeaveToMainMenu; the poller opens the menu once disconnected. */
 	bool bReturningToMenu = false;

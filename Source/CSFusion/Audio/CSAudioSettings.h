@@ -34,10 +34,6 @@ public:
 	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
 	TSoftObjectPtr<USoundClass> EffectsClass;
 
-	/** Pushed once; its class overrides carry the music / effects volumes. */
-	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
-	TSoftObjectPtr<USoundMix> VolumeMix;
-
 	/** Distance falloff for every 3D gameplay sound. */
 	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
 	TSoftObjectPtr<USoundAttenuation> WorldAttenuation;

@@ -40,15 +40,20 @@ namespace CSUI
 			Style.SetPressedPadding(FMargin(0.f));
 			// Generated UI sounds (see CSAudioSettings); null-safe if missing.
 			const UCSAudioSettings* Audio = UCSAudioSettings::Get();
+			// The style is static and outlives every world: root the sounds so the
+			// garbage collector cannot free them under Slate (that crashed the
+			// ESC menu after a map change).
 			if (USoundBase* Click = Audio->UIClick.LoadSynchronous())
 			{
 				FSlateSound Sound;
+				Click->AddToRoot();
 				Sound.SetResourceObject(Click);
 				Style.SetPressedSound(Sound);
 			}
 			if (USoundBase* HoverSound = Audio->UIHover.LoadSynchronous())
 			{
 				FSlateSound Sound;
+				HoverSound->AddToRoot();
 				Sound.SetResourceObject(HoverSound);
 				Style.SetHoveredSound(Sound);
 			}
