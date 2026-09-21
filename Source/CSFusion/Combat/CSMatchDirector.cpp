@@ -612,6 +612,7 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 	const float Before = Victim->Health;
 	Victim->Health = FMath::Max(0.f, Victim->Health - ToHealth);
 	const float Applied = Before - Victim->Health;
+	const bool bKilledNow = Victim->Health <= 0.f;
 
 	UE_LOG(LogCSCombat, Verbose,
 		TEXT("Player %d hit by %d for %.1f (%s), health %.0f -> %.0f"),
@@ -651,6 +652,8 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 
 		OnPlayerKilled.Broadcast(VictimId, InstigatorId, Zone);
 	}
+
+	QueueCombatEvent(VictimId, InstigatorId, Applied, bKilledNow, Zone);
 
 	OnRecordsChanged.Broadcast(VictimId);
 	return Applied;
@@ -696,6 +699,7 @@ void ACSMatchDirector::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 	TickAuthority();
+	FlushCombatEvents();
 }
 
 void ACSMatchDirector::TickAuthority()
@@ -805,4 +809,90 @@ void ACSMatchDirector::OnRep_Records()
 
 		OnRecordsChanged.Broadcast(Record.PlayerId);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Cosmetic combat events (kill feed, hit marker, damage direction)
+// ---------------------------------------------------------------------------
+
+void ACSMatchDirector::QueueCombatEvent(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, ECSHitZone Zone)
+{
+	// Merge pellets of one blast: same victim and shooter within this frame.
+	for (FCSCombatEvent& Pending : PendingCombatEvents)
+	{
+		if (Pending.VictimId == VictimId && Pending.InstigatorId == InstigatorId)
+		{
+			Pending.Damage += Damage;
+			Pending.bKilled |= bKilled;
+			if (Zone == ECSHitZone::Head)
+			{
+				Pending.Zone = Zone;
+			}
+			return;
+		}
+	}
+
+	FCSCombatEvent& Event = PendingCombatEvents.AddDefaulted_GetRef();
+	Event.VictimId = VictimId;
+	Event.InstigatorId = InstigatorId;
+	Event.Damage = Damage;
+	Event.bKilled = bKilled;
+	Event.Zone = Zone;
+
+	const FCSLoadoutView Loadout = GetLoadout(InstigatorId);
+	Event.WeaponName = Loadout.Weapon ? Loadout.Weapon->DisplayName.ToString() : FString();
+
+	if (const ACSCharacter* Shooter = FindPawnForPlayer(this, InstigatorId))
+	{
+		Event.FromLocation = Shooter->GetActorLocation();
+	}
+	else
+	{
+		GetLastKnownLocation(InstigatorId, Event.FromLocation);
+	}
+}
+
+void ACSMatchDirector::FlushCombatEvents()
+{
+	if (PendingCombatEvents.Num() == 0)
+	{
+		return;
+	}
+
+	TArray<FCSCombatEvent> Events = MoveTemp(PendingCombatEvents);
+	PendingCombatEvents.Reset();
+
+	const bool bInSession = UCSAuthority::IsSessionActive(this);
+	for (FCSCombatEvent& Event : Events)
+	{
+		const int32 Zone = static_cast<int32>(Event.Zone);
+		// TargetAllClients also dispatches to the sender, so the authority's own
+		// HUD is fed through the same receive handler as everyone else's.
+		if (bInSession)
+		{
+			RpcCombatEvent(Event.VictimId, Event.InstigatorId, Event.Damage, Event.bKilled, Zone, Event.WeaponName, Event.FromLocation);
+		}
+		else
+		{
+			RpcCombatEvent_Receive(Event.VictimId, Event.InstigatorId, Event.Damage, Event.bKilled, Zone, Event.WeaponName, Event.FromLocation);
+		}
+	}
+}
+
+void ACSMatchDirector::RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation)
+{
+	FCSCombatEvent Event;
+	Event.VictimId = VictimId;
+	Event.InstigatorId = InstigatorId;
+	Event.Damage = Damage;
+	Event.bKilled = bKilled;
+	Event.Zone = static_cast<ECSHitZone>(FMath::Clamp(Zone, 0, 255));
+	Event.WeaponName = WeaponName;
+	Event.FromLocation = FromLocation;
+
+	UE_LOG(LogCSCombat, Log, TEXT("Combat event: %d -> %d, %.0f dmg%s%s (%s)"),
+		InstigatorId, VictimId, Damage, bKilled ? TEXT(", KILL") : TEXT(""),
+		Event.Zone == ECSHitZone::Head ? TEXT(", head") : TEXT(""), *WeaponName);
+
+	OnCombatEvent.Broadcast(Event);
 }

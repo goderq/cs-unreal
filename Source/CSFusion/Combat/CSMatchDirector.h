@@ -141,6 +141,23 @@ struct FCSLoadoutView
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FCSPlayerKilled, int32, VictimId, int32, KillerId, ECSHitZone, Zone);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSRecordsChanged, int32, PlayerId);
 
+/**
+ * Cosmetic combat notification, delivered to every peer: feeds the kill feed,
+ * the shooter's hit marker and the victim's damage-direction indicator.
+ * Carries no authority - health and kills are already in Records.
+ */
+struct FCSCombatEvent
+{
+	int32 VictimId = 0;
+	int32 InstigatorId = 0;
+	float Damage = 0.f;
+	bool bKilled = false;
+	ECSHitZone Zone = ECSHitZone::None;
+	FString WeaponName;
+	FVector FromLocation = FVector::ZeroVector;
+};
+DECLARE_MULTICAST_DELEGATE_OneParam(FCSCombatEventSignature, const FCSCombatEvent&);
+
 UCLASS()
 class CSFUSION_API ACSMatchDirector : public AActor
 {
@@ -253,6 +270,17 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "CS|Combat")
 	FCSRecordsChanged OnRecordsChanged;
 
+	/** Every peer, including the authority. */
+	FCSCombatEventSignature OnCombatEvent;
+
+	/**
+	 * One per victim and shooter per frame: pellets of a shotgun blast are
+	 * summed by the authority before sending (see FlushCombatEvents).
+	 */
+	SEND_FUSIONRPC(TargetAllClients)
+	void RpcCombatEvent(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation);
+	void RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation);
+
 protected:
 	/** Authority-side respawn timer and reload completion. */
 	void TickAuthority();
@@ -304,4 +332,9 @@ private:
 	 * background window, short enough that loot appears promptly.
 	 */
 	static constexpr double HeartbeatTimeoutSeconds = 10.0;
+
+	/** Authority: hits collected this frame, sent at the end of it. */
+	TArray<FCSCombatEvent> PendingCombatEvents;
+	void FlushCombatEvents();
+	void QueueCombatEvent(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, ECSHitZone Zone);
 };

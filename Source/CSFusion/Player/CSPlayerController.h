@@ -55,6 +55,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "CS|Session")
 	UCSSessionSubsystem* GetSessionSubsystem() const;
 
+	// --- In-match menus (Slate, see UI/) -------------------------------------
+
+	/** Inventory screen on/off (Tab by default). */
+	void ToggleInventoryScreen();
+
+	/** ESC menu on/off. Closes the inventory screen first if it is open. */
+	void TogglePauseMenu();
+
+	void CloseMenus();
+
+	bool IsInventoryOpen() const { return bInventoryOpen; }
+	bool IsPauseMenuOpen() const { return bPauseOpen; }
+
+	virtual void PlayerTick(float DeltaTime) override;
+
 protected:
 	UFUNCTION()
 	void HandleSessionStateChanged(ECSSessionState NewState);
@@ -79,6 +94,28 @@ protected:
 	void CSTestInput();
 
 	void ArmSelfTest();
+
+	/** Stage 5 self-test, enabled with -cstestui: inventory screen, ESC menu, settings. */
+	UFUNCTION(Exec)
+	void CSTestUI();
+	FTimerHandle TestUITimer;
+	FTimerHandle TestLeaveTimer;
+
+	/** Writes a screenshot to Saved/CSTest/<Name>.png (used by the UI tests). */
+	void TestScreenshot(const FString& Name);
+
+	/** Adds the widget to the viewport and gives it input focus. */
+	void ShowMenuWidget(const TSharedRef<SWidget>& Widget, const TSharedRef<SWidget>& Focus);
+	void HideMenuWidget(const TSharedPtr<SWidget>& Widget);
+
+	/** UI-only input with a cursor while any menu is open, game input otherwise. */
+	void RefreshMenuInputMode();
+
+	TSharedPtr<class SCSPauseMenu> PauseMenu;
+	TSharedPtr<class SCSInventoryPanel> InventoryPanel;
+	TSharedPtr<SWidget> InventoryHost;
+	bool bPauseOpen = false;
+	bool bInventoryOpen = false;
 
 	// --- Stage 4 self-tests (CSPlayerControllerLootTests.cpp) ---
 	UFUNCTION(Exec) void CSTestGrab();

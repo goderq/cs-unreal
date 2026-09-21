@@ -59,6 +59,7 @@ public:
 	explicit ACSCharacter(const FObjectInitializer& ObjectInitializer);
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void OnRep_PlayerState() override;
@@ -141,6 +142,14 @@ public:
 	/** Drops the equipped inventory weapon into the world. */
 	void RequestDropEquipped();
 
+	/** Owning client: drop the whole stack in an inventory slot (inventory screen). */
+	void RequestDropSlot(int32 Slot);
+
+	const UCSInputConfig* GetInputConfig() const { return InputConfig; }
+
+	/** Owning client: re-read FOV and sensitivity, and rebuild key mappings. */
+	void ApplyLocalPreferences();
+
 	/**
 	 * Pickup request. The pickup travels as an actor reference; the
 	 * authority re-validates everything about it - that it still exists, is
@@ -190,6 +199,8 @@ protected:
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_EquipSlot(const FInputActionValue& Value);
 	void Input_Drop(const FInputActionValue& Value);
+	void Input_ToggleInventory(const FInputActionValue& Value);
+	void Input_PauseMenu(const FInputActionValue& Value);
 
 	/** Local: choose the pickup nearest the crosshair within reach and in sight. */
 	void UpdateFocusedPickup();
@@ -316,4 +327,7 @@ private:
 	/** Mapping context built in C++ by UCSInputConfig, cached per pawn. */
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> RuntimeMappingContext;
+
+	/** Subscription to UCSSettingsSubsystem::OnPreferencesChanged. */
+	FDelegateHandle PreferencesChangedHandle;
 };

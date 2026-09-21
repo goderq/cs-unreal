@@ -466,6 +466,47 @@ def place_loot():
     log("placed {0} loot markers".format(len(LOOT_LAYOUT)))
 
 
+def make_lighting_dynamic():
+    """Lights movable: Lumen lights the map at runtime, so there is nothing to
+    bake, and a packaged build no longer shows LIGHTING NEEDS TO BE REBUILT."""
+    level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
+    level_subsystem.load_level(MAP_PATH)
+
+    changed = 0
+    for actor in actor_subsystem.get_all_level_actors():
+        if isinstance(actor, (unreal.DirectionalLight, unreal.SkyLight)):
+            root = actor.get_editor_property("root_component")
+            if root and root.get_editor_property("mobility") != unreal.ComponentMobility.MOVABLE:
+                root.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
+                changed += 1
+    if changed:
+        level_subsystem.save_current_level()
+    log("lighting: {0} light(s) switched to movable".format(changed))
+
+
+MENU_MAP_PATH = MAPS_DIR + "/Lvl_MainMenu"
+
+
+def make_menu_map():
+    """Empty map that only hosts the main menu (ACSMenuGameMode, no pawn)."""
+    ensure_dir(MAPS_DIR)
+    if EDITOR_ASSET.does_asset_exist(MENU_MAP_PATH):
+        log("reuse  {0}".format(MENU_MAP_PATH))
+        return
+
+    level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+    level_subsystem.new_level(MENU_MAP_PATH)
+
+    world = unreal.EditorLevelLibrary.get_editor_world()
+    if world:
+        settings = world.get_world_settings()
+        settings.set_editor_property("default_game_mode", unreal.CSMenuGameMode.static_class())
+
+    level_subsystem.save_current_level()
+    log("created " + MENU_MAP_PATH)
+
+
 def main():
     log("Stage 1 content bootstrap starting")
     actions = make_input_actions()
@@ -479,6 +520,8 @@ def main():
     weapons = make_weapons()
     item_paths = make_items(weapons)
     place_loot()
+    make_lighting_dynamic()
+    make_menu_map()
     log("ITEM REGISTRY ORDER (must match DefaultGame.ini):")
     for p in item_paths:
         log("  " + p)

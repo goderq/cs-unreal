@@ -7,7 +7,33 @@
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
 
+#define LOCTEXT_NAMESPACE "CSInputConfig"
+
+TArray<FCSRebindableBinding> UCSInputConfig::GetRebindableBindings() const
+{
+	// Ids are persisted in the settings save - never rename one, only add.
+	return {
+		{ TEXT("MoveForward"),     LOCTEXT("MoveForward", "Move forward"),    Key_MoveForward },
+		{ TEXT("MoveBack"),        LOCTEXT("MoveBack", "Move back"),          Key_MoveBack },
+		{ TEXT("MoveLeft"),        LOCTEXT("MoveLeft", "Move left"),          Key_MoveLeft },
+		{ TEXT("MoveRight"),       LOCTEXT("MoveRight", "Move right"),        Key_MoveRight },
+		{ TEXT("Jump"),            LOCTEXT("Jump", "Jump"),                   Key_Jump },
+		{ TEXT("Sprint"),          LOCTEXT("Sprint", "Sprint"),               Key_Sprint },
+		{ TEXT("Crouch"),          LOCTEXT("Crouch", "Crouch"),               Key_Crouch },
+		{ TEXT("Reload"),          LOCTEXT("Reload", "Reload"),               Key_Reload },
+		{ TEXT("Interact"),        LOCTEXT("Interact", "Pick up / interact"), Key_Interact },
+		{ TEXT("Drop"),            LOCTEXT("Drop", "Drop weapon"),            Key_Drop },
+		{ TEXT("ToggleInventory"), LOCTEXT("Inventory", "Inventory"),         Key_ToggleInventory },
+	};
+}
+
 UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer) const
+{
+	return BuildRuntimeMappingContext(Outer, [](FName, const FKey& Default) { return Default; });
+}
+
+UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer,
+	TFunctionRef<FKey(FName, const FKey&)> Resolve) const
 {
 	UInputMappingContext* Context = NewObject<UInputMappingContext>(
 		Outer ? Outer : GetTransientPackage(), NAME_None, RF_Transient);
@@ -48,23 +74,23 @@ UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer)
 	// Movement is one Axis2D action: X is strafe (right positive), Y is
 	// forward. ACSCharacter::Input_Move reads them that way, so W and S are
 	// swizzled onto Y and S and A are negated.
-	Map(IA_Move, Key_MoveForward, { MakeSwizzleYXZ() });
-	Map(IA_Move, Key_MoveBack,    { MakeSwizzleYXZ(), MakeNegate() });
-	Map(IA_Move, Key_MoveRight,   {});
-	Map(IA_Move, Key_MoveLeft,    { MakeNegate() });
+	Map(IA_Move, Resolve(TEXT("MoveForward"), Key_MoveForward), { MakeSwizzleYXZ() });
+	Map(IA_Move, Resolve(TEXT("MoveBack"),    Key_MoveBack),    { MakeSwizzleYXZ(), MakeNegate() });
+	Map(IA_Move, Resolve(TEXT("MoveRight"),   Key_MoveRight),   {});
+	Map(IA_Move, Resolve(TEXT("MoveLeft"),    Key_MoveLeft),    { MakeNegate() });
 
-	Map(IA_Look,            Key_Look,            {});
-	Map(IA_Jump,            Key_Jump,            {});
-	Map(IA_Sprint,          Key_Sprint,          {});
-	Map(IA_Crouch,          Key_Crouch,          {});
-	Map(IA_Fire,            Key_Fire,            {});
-	Map(IA_Aim,             Key_Aim,             {});
-	Map(IA_Reload,          Key_Reload,          {});
-	Map(IA_Interact,        Key_Interact,        {});
-	Map(IA_ToggleInventory, Key_ToggleInventory, {});
-	Map(IA_PauseMenu,       Key_PauseMenu,       {});
-	Map(IA_Scoreboard,      Key_Scoreboard,      {});
-	Map(IA_Drop,            Key_Drop,            {});
+	Map(IA_Look,            Key_Look,                                          {});
+	Map(IA_Jump,            Resolve(TEXT("Jump"), Key_Jump),                   {});
+	Map(IA_Sprint,          Resolve(TEXT("Sprint"), Key_Sprint),               {});
+	Map(IA_Crouch,          Resolve(TEXT("Crouch"), Key_Crouch),               {});
+	Map(IA_Fire,            Key_Fire,                                          {});
+	Map(IA_Aim,             Key_Aim,                                           {});
+	Map(IA_Reload,          Resolve(TEXT("Reload"), Key_Reload),               {});
+	Map(IA_Interact,        Resolve(TEXT("Interact"), Key_Interact),           {});
+	Map(IA_ToggleInventory, Resolve(TEXT("ToggleInventory"), Key_ToggleInventory), {});
+	Map(IA_PauseMenu,       Key_PauseMenu,                                     {});
+	Map(IA_Scoreboard,      Key_Scoreboard,                                    {});
+	Map(IA_Drop,            Resolve(TEXT("Drop"), Key_Drop),                   {});
 
 	// Every number key drives the same action; a Scalar modifier turns the
 	// digital 1.0 into the key's own number, which Input_EquipSlot decodes.
@@ -78,3 +104,5 @@ UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer)
 	UE_LOG(LogCS, Log, TEXT("Built runtime mapping context with %d mappings."), Count);
 	return Context;
 }
+
+#undef LOCTEXT_NAMESPACE

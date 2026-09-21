@@ -126,6 +126,27 @@ void ACSPlayerController::ArmSelfTest()
 		}
 	}
 
+	// -cstestleave=SECONDS: leave the match through the ESC-menu path once.
+	static bool bLeaveTestDone = false;
+	float LeaveAfter = 0.f;
+	if (!bLeaveTestDone && FParse::Value(FCommandLine::Get(), TEXT("cstestleave="), LeaveAfter) && LeaveAfter > 0.f)
+	{
+		bLeaveTestDone = true;
+		GetWorldTimerManager().SetTimer(TestLeaveTimer, [this]()
+		{
+			UE_LOG(LogCS, Log, TEXT("LEAVE TEST: leaving the match via the ESC menu."));
+			TogglePauseMenu();
+			CloseMenus();
+			if (UCSSessionSubsystem* Session = GetSessionSubsystem())
+			{
+				Session->LeaveToMainMenu();
+			}
+		}, LeaveAfter, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestui")))
+	{
+		GetWorldTimerManager().SetTimer(TestUITimer, this, &ACSPlayerController::CSTestUI, 10.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestcontest")))
 	{
 		GetWorldTimerManager().SetTimer(TestContestTimer, this, &ACSPlayerController::CSTestContest, 12.f, false);
@@ -449,6 +470,8 @@ void ACSPlayerController::TestFireCheck()
 
 void ACSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CloseMenus();
+
 	if (UCSSessionSubsystem* Session = GetSessionSubsystem())
 	{
 		Session->OnSessionStateChanged.RemoveDynamic(this, &ACSPlayerController::HandleSessionStateChanged);
@@ -499,8 +522,13 @@ void ACSPlayerController::HandleSessionStateChanged(ECSSessionState NewState)
 
 	if (NewState == ECSSessionState::Disconnected || NewState == ECSSessionState::Error)
 	{
-		// Stage 5 replaces this with a reconnect dialog.
-		SetUIInputMode(true);
+		// Lost the connection mid-match: there is no match to stay in, so go back
+		// to the menu (a no-op if we are already on our way there).
+		if (UCSSessionSubsystem* Session = GetSessionSubsystem())
+		{
+			CloseMenus();
+			Session->LeaveToMainMenu();
+		}
 	}
 }
 

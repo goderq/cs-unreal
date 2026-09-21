@@ -31,6 +31,8 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Net/UnrealNetwork.h"
+#include "Player/CSPlayerController.h"
+#include "Settings/CSSettingsSubsystem.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
 
@@ -142,6 +144,47 @@ void ACSCharacter::BeginPlay()
 
 	RefreshMeshVisibility();
 	ApplyInputMappings();
+
+	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		PreferencesChangedHandle = Settings->OnPreferencesChanged.AddUObject(this, &ACSCharacter::ApplyLocalPreferences);
+		FirstPersonCamera->SetFieldOfView(Settings->GetPreferences().FieldOfView);
+	}
+}
+
+void ACSCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		Settings->OnPreferencesChanged.Remove(PreferencesChangedHandle);
+	}
+	Super::EndPlay(EndPlayReason);
+}
+
+void ACSCharacter::ApplyLocalPreferences()
+{
+	const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
+	if (!Settings)
+	{
+		return;
+	}
+
+	// FOV is purely a view setting; applying it on every peer's copy of the
+	// pawn is harmless because only the local player views through this camera.
+	FirstPersonCamera->SetFieldOfView(Settings->GetPreferences().FieldOfView);
+
+	// Rebuild the mapping so rebound keys take effect immediately.
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (PC && PC->IsLocalController() && PC->GetLocalPlayer() && RuntimeMappingContext)
+	{
+		if (UEnhancedInputLocalPlayerSubsystem* Input =
+			ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(PC->GetLocalPlayer()))
+		{
+			Input->RemoveMappingContext(RuntimeMappingContext);
+		}
+		RuntimeMappingContext = nullptr;
+		ApplyInputMappings();
+	}
 }
 
 void ACSCharacter::HandleFusionObjectReady()
@@ -664,6 +707,22 @@ void ACSCharacter::RequestDropEquipped()
 	RpcRequestDrop_Receive(Slot);
 }
 
+void ACSCharacter::RequestDropSlot(int32 Slot)
+{
+	if (Slot == INDEX_NONE)
+	{
+		// The starter pistol can never be dropped.
+		return;
+	}
+
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcRequestDrop(Slot);
+		return;
+	}
+	RpcRequestDrop_Receive(Slot);
+}
+
 void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 {
 	CS_AUTHORITY_ONLY(this);
@@ -877,7 +936,9 @@ void ACSCharacter::ApplyInputMappings()
 	// per pawn and cached, because AddMappingContext keys off the object.
 	if (!RuntimeMappingContext)
 	{
-		RuntimeMappingContext = InputConfig->BuildRuntimeMappingContext(this);
+		const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
+		RuntimeMappingContext = InputConfig->BuildRuntimeMappingContext(this,
+			[Settings](FName Id, const FKey& Default) { return Settings ? Settings->GetKeyFor(Id, Default) : Default; });
 	}
 
 	// Re-adding after a seamless travel is required: the subsystem's contexts
@@ -973,6 +1034,16 @@ void ACSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(InputConfig->IA_Drop, ETriggerEvent::Started, this, &ACSCharacter::Input_Drop);
 		++Bound;
 	}
+	if (InputConfig->IA_ToggleInventory)
+	{
+		Input->BindAction(InputConfig->IA_ToggleInventory, ETriggerEvent::Started, this, &ACSCharacter::Input_ToggleInventory);
+		++Bound;
+	}
+	if (InputConfig->IA_PauseMenu)
+	{
+		Input->BindAction(InputConfig->IA_PauseMenu, ETriggerEvent::Started, this, &ACSCharacter::Input_PauseMenu);
+		++Bound;
+	}
 
 	UE_LOG(LogCS, Log, TEXT("%s: bound %d input actions."), *GetName(), Bound);
 
@@ -997,11 +1068,16 @@ void ACSCharacter::Input_Look(const FInputActionValue& Value)
 {
 	const FVector2D Axis = Value.Get<FVector2D>();
 
-	// Per-player sensitivity and invert-Y are applied by the settings system
-	// (Stage 8) through the Input Mapping Context modifiers, so raw values are
-	// used here and only scaled by the pawn's own base multiplier.
-	AddControllerYawInput(Axis.X * BaseLookScale);
-	AddControllerPitchInput(-Axis.Y * BaseLookScale);
+	// Sensitivity and invert-Y come from the local settings save.
+	float Scale = BaseLookScale;
+	float PitchSign = -1.f;
+	if (const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		Scale *= Settings->GetPreferences().MouseSensitivity;
+		PitchSign = Settings->GetPreferences().bInvertY ? 1.f : -1.f;
+	}
+	AddControllerYawInput(Axis.X * Scale);
+	AddControllerPitchInput(PitchSign * Axis.Y * Scale);
 }
 
 void ACSCharacter::Input_JumpStart(const FInputActionValue& /*Value*/)
@@ -1114,4 +1190,20 @@ void ACSCharacter::Input_EquipSlot(const FInputActionValue& Value)
 void ACSCharacter::Input_Drop(const FInputActionValue& /*Value*/)
 {
 	RequestDropEquipped();
+}
+
+void ACSCharacter::Input_ToggleInventory(const FInputActionValue& /*Value*/)
+{
+	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
+	{
+		PC->ToggleInventoryScreen();
+	}
+}
+
+void ACSCharacter::Input_PauseMenu(const FInputActionValue& /*Value*/)
+{
+	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
+	{
+		PC->TogglePauseMenu();
+	}
 }

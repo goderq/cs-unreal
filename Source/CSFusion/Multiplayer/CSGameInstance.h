@@ -54,19 +54,15 @@ public:
 	UCSSessionSubsystem* GetSessionSubsystem() const;
 
 	/**
-	 * ALPHA ONLY - stand-in for the main menu (Stage 5).
+	 * Command-line shortcut past the main menu, used by the automated tests
+	 * and handy for LAN parties: with -room=NAME the game joins (or creates)
+	 * that room straight away. Without -room= the main menu is shown.
 	 *
-	 * With no UI, nothing would ever call HostOrJoin and the packaged build
-	 * would never reach Photon. So the build auto-joins a room shortly after
-	 * start. Two launched clients with the same room name meet each other.
-	 *
-	 * Command line overrides:
-	 *   -room=NAME        room to join or create   (default: cs-alpha)
+	 * Command line:
+	 *   -room=NAME        room to join or create
 	 *   -region=CODE      force a Photon region, e.g. eu / us
 	 *   -maxplayers=N     room capacity            (default: 8)
 	 *   -noautoconnect    stay offline
-	 *
-	 * Delete this once the menu exists.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "CS|Net")
 	void AutoConnectFromCommandLine();

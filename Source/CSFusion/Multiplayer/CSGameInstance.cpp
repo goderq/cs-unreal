@@ -52,8 +52,14 @@ void UCSGameInstance::AutoConnectFromCommandLine()
 
 	FCSSessionRequest Request;
 
-	Request.RoomName = TEXT("cs-alpha");
-	FParse::Value(CmdLine, TEXT("room="), Request.RoomName);
+	// Since Stage 5 the main menu is the normal way in. Auto-connect remains
+	// for scripted tests and dedicated shortcuts: it only happens when a room
+	// is named on the command line.
+	if (!FParse::Value(CmdLine, TEXT("room="), Request.RoomName) || Request.RoomName.IsEmpty())
+	{
+		UE_LOG(LogCSNet, Log, TEXT("No -room= on the command line; showing the main menu."));
+		return;
+	}
 
 	Request.MaxPlayers = 8;
 	FParse::Value(CmdLine, TEXT("maxplayers="), Request.MaxPlayers);
@@ -69,8 +75,7 @@ void UCSGameInstance::AutoConnectFromCommandLine()
 	// only writes the room's MAP_DATA custom property when it is non-null, and
 	// that property is how Fusion attaches a map to a room. Leaving it unset
 	// creates a room with no map bound to it.
-	Request.InitialWorld = TSoftObjectPtr<UWorld>(
-		FSoftObjectPath(TEXT("/Game/Maps/Lvl_Warehouse.Lvl_Warehouse")));
+	Request.InitialWorld = UCSSessionSubsystem::DefaultMatchWorld();
 
 	Request.EmptyTtlSeconds = 0;
 	Request.bVisible = true;

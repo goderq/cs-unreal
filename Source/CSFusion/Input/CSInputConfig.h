@@ -18,6 +18,14 @@
 class UInputAction;
 class UInputMappingContext;
 
+/** A key the player may rebind in Settings. Id is what the save file stores. */
+struct CSFUSION_API FCSRebindableBinding
+{
+	FName Id;
+	FText DisplayName;
+	FKey DefaultKey;
+};
+
 UCLASS(BlueprintType)
 class CSFUSION_API UCSInputConfig : public UDataAsset
 {
@@ -94,6 +102,16 @@ public:
 
 	/** Build the context this project actually uses. Never returns the asset. */
 	UInputMappingContext* BuildRuntimeMappingContext(UObject* Outer) const;
+
+	/**
+	 * Same, with every rebindable key passed through Resolve(Id, DefaultKey) so
+	 * player overrides from the settings save take effect.
+	 */
+	UInputMappingContext* BuildRuntimeMappingContext(UObject* Outer,
+		TFunctionRef<FKey(FName, const FKey&)> Resolve) const;
+
+	/** Bindings the settings screen lists, with their config defaults. */
+	TArray<FCSRebindableBinding> GetRebindableBindings() const;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	FKey Key_MoveForward = EKeys::W;

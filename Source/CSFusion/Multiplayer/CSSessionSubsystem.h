@@ -16,6 +16,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "Core/CSCoreTypes.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "CSSessionSubsystem.generated.h"
@@ -51,9 +52,30 @@ struct CSFUSION_API FCSSessionRequest
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session", meta = (ClampMin = "0", ClampMax = "255"))
 	int32 EmptyTtlSeconds = 0;
 
-	/** Map loaded on join. Leave unset to stay on the current world. */
+	/** Map loaded on join. Unset = UCSSessionSubsystem::DefaultMatchWorld(). */
 	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "CS|Session")
 	TSoftObjectPtr<UWorld> InitialWorld;
+};
+
+/** One row of the session browser, copied out of Photon's lobby room list. */
+USTRUCT(BlueprintType)
+struct CSFUSION_API FCSRoomInfo
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Session")
+	FString Name;
+
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Session")
+	int32 PlayerCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Session")
+	int32 MaxPlayers = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Session")
+	bool bIsOpen = false;
+
+	bool IsJoinable() const { return bIsOpen && (MaxPlayers == 0 || PlayerCount < MaxPlayers); }
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSSessionStateChanged, ECSSessionState, NewState);
@@ -61,6 +83,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSSessionFailed, const FString&, Re
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCSSessionJoined);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FCSSessionLeft);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FCSMasterClientChanged, bool, bIsLocalPlayerMaster);
+DECLARE_MULTICAST_DELEGATE(FCSRoomListChanged);
 
 UCLASS()
 class CSFUSION_API UCSSessionSubsystem : public UGameInstanceSubsystem
@@ -74,11 +97,11 @@ public:
 
 	// --- Commands ----------------------------------------------------------
 
-	/** Connect to Photon (if needed) and host/join the requested room. */
+	/** Connect to Photon (if needed) and join the named room, creating it if absent. */
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
 	bool HostOrJoin(const FCSSessionRequest& Request);
 
-	/** Quick match: connect and drop into any open room, creating one if none. */
+	/** Quick match: join any open room, creating one only if none exists. */
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
 	bool QuickMatch(const FCSSessionRequest& Request);
 
@@ -90,9 +113,50 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
 	void LeaveMatch();
 
+	/**
+	 * Leave the match, drop the Photon connection and open the main menu map
+	 * once the disconnect has completed (or after a short timeout).
+	 *
+	 * A full disconnect rather than a bare LeaveRoom: the next Play then goes
+	 * through the same connect-then-join path as the first one, and Fusion's
+	 * disconnect action - which runs on a world timer - finishes before its
+	 * world is torn down by the map change.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "CS|Session")
+	void LeaveToMainMenu();
+
 	/** Full teardown of the Photon connection. */
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
 	void Disconnect();
+
+	// --- Session browser ---------------------------------------------------
+
+	/** Connect if needed, join Photon's default lobby and start receiving the room list. */
+	UFUNCTION(BlueprintCallable, Category = "CS|Session")
+	void StartBrowsing(const FString& Region);
+
+	/** Stop refreshing the list. The connection is kept so a join is instant. */
+	UFUNCTION(BlueprintCallable, Category = "CS|Session")
+	void StopBrowsing();
+
+	UFUNCTION(BlueprintPure, Category = "CS|Session")
+	bool IsBrowsing() const { return bBrowsing; }
+
+	/** True once the lobby has been joined and the list is live. */
+	UFUNCTION(BlueprintPure, Category = "CS|Session")
+	bool IsInLobby() const;
+
+	UFUNCTION(BlueprintPure, Category = "CS|Session")
+	const TArray<FCSRoomInfo>& GetRoomList() const { return RoomList; }
+
+	/** Fires whenever the browser's room list changes. */
+	FCSRoomListChanged OnRoomListChanged;
+
+	/** Long package name of the main menu map. */
+	static const TCHAR* MainMenuMapPath() { return TEXT("/Game/Maps/Lvl_MainMenu"); }
+
+	/** The gameplay map every room is bound to. */
+	static TSoftObjectPtr<UWorld> DefaultMatchWorld();
 
 	// --- Queries -----------------------------------------------------------
 
@@ -101,6 +165,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "CS|Session")
 	bool IsInRoom() const { return CachedState == ECSSessionState::InRoom; }
+
+	/** A connect or room join is in progress. */
+	UFUNCTION(BlueprintPure, Category = "CS|Session")
+	bool IsBusy() const { return bOperationInFlight || bReturningToMenu; }
 
 	UFUNCTION(BlueprintPure, Category = "CS|Session")
 	bool IsMasterClient() const { return bCachedIsMaster; }
@@ -140,10 +208,25 @@ public:
 	FCSMasterClientChanged OnMasterClientChanged;
 
 private:
+	/** Which room call to make once the connection is up. */
+	enum class EPendingRoomOp : uint8 { None, JoinOrCreate, JoinRandomOrCreate, JoinOnly };
+
 	UFusionOnlineSubsystem* GetFusion() const;
 
-	/** Only place that talks to the Fusion matchmaking API. */
-	bool StartRoomOperation(const FCSSessionRequest& Request, bool bAllowCreate, bool bRandom);
+	/** Only place that starts a Fusion matchmaking flow. */
+	bool StartRoomOperation(const FCSSessionRequest& Request, EPendingRoomOp Op);
+
+	/** Connects with the pending request's region options. */
+	void Connect(const FCSSessionRequest& Request);
+
+	/** Issues the pending room call. Requires a connected, room-less client. */
+	void IssuePendingRoomOp();
+
+	/** Lobby join and room-list copy, run from the poller while browsing. */
+	void PollLobby();
+
+	/** Tail of LeaveToMainMenu. */
+	void OpenMainMenu();
 
 	void StartPolling();
 	void StopPolling();
@@ -171,23 +254,35 @@ private:
 	UPROPERTY(Transient)
 	FCSSessionRequest PendingRequest;
 
-	FTimerHandle PollTimerHandle;
+	UPROPERTY(Transient)
+	TArray<FCSRoomInfo> RoomList;
+
+	FTSTicker::FDelegateHandle PollTickerHandle;
+	bool bPolling = false;
+
+	/** Status seen on the previous poll, to spot a failed room call (JoiningRoom -> Connected). */
+	ECSSessionState PreviousPolledState = ECSSessionState::None;
 
 	/** Guards against re-entrant room operations. */
 	bool bOperationInFlight = false;
 
 	/**
-	 * True only for JoinByName, which is the one flow that has to issue its
-	 * room operation itself after the connection completes.
+	 * Room call deferred until Status() reaches Connected.
 	 *
-	 * HostOrJoin and QuickMatch go through ConnectAndJoinRoom, which already
-	 * chains its own JoinOrCreateRoom internally. Without this gate the poller
-	 * fired a second, join-only JoinRoom for them, which races the SDK's
-	 * JoinOrCreateRoom and fails with "Game does not exist" (32758) because
-	 * nothing creates the room.
+	 * Every flow is connect-then-join with exactly ONE room call. The SDK's
+	 * ConnectAndJoinRoom is not used any more: it refuses to start while the
+	 * client is already connected (which the session browser leaves it), and
+	 * it always issues JoinOrCreateRoom - with an empty name that CREATES a
+	 * new room instead of joining a random one, so Quick Match never met
+	 * anybody. Issuing a second call next to it was the "Game does not exist"
+	 * (32758) race fixed in v0.1.0.
 	 */
-	bool bPendingJoinOnly = false;
+	EPendingRoomOp PendingOp = EPendingRoomOp::None;
 
-	/** Join-by-name is a two-step flow; this stops the second step re-firing. */
-	bool bJoinByNameIssued = false;
+	bool bBrowsing = false;
+	bool bLobbyJoinIssued = false;
+
+	/** Set by LeaveToMainMenu; the poller opens the menu once disconnected. */
+	bool bReturningToMenu = false;
+	double ReturnToMenuDeadline = 0.0;
 };
