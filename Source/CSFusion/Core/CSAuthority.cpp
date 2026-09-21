@@ -112,6 +112,41 @@ bool UCSAuthority::CanWrite(const AActor* Actor)
 	return Actor->HasAuthority();
 }
 
+bool UCSAuthority::GetRoomPlayers(const UObject* WorldContextObject, TArray<int32>& OutActive, TArray<int32>& OutInactive)
+{
+	OutActive.Reset();
+	OutInactive.Reset();
+
+#if CS_WITH_FUSION
+	UFusionOnlineSubsystem* Fusion = GetFusion(WorldContextObject);
+	if (!Fusion || !Fusion->IsInRoom())
+	{
+		return false;
+	}
+
+	UFusionRealtimeClient* Realtime = Fusion->GetRealtimeClient();
+	PhotonMatchmaking::RealtimeClient* Client = Realtime ? Realtime->GetClient() : nullptr;
+	if (!Client)
+	{
+		return false;
+	}
+
+	const auto Room = Client->GetCurrentRoom();
+	if (!Room)
+	{
+		return false;
+	}
+
+	for (const PhotonMatchmaking::PlayerView& Player : Room->GetPlayers())
+	{
+		(Player.IsInactive ? OutInactive : OutActive).Add(Player.Number);
+	}
+	return true;
+#else
+	return false;
+#endif
+}
+
 int32 UCSAuthority::GetOwningPlayerId(const AActor* Actor)
 {
 	if (!IsValid(Actor))

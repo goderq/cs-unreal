@@ -80,6 +80,23 @@ protected:
 
 	void ArmSelfTest();
 
+	// --- Stage 4 self-tests (CSPlayerControllerLootTests.cpp) ---
+	UFUNCTION(Exec) void CSTestGrab();
+	UFUNCTION(Exec) void CSTestKill();
+	UFUNCTION(Exec) void CSTestWatchLeave();
+	UFUNCTION(Exec) void CSTestDoubleDrop();
+	void TestKillStep();
+	void TestKillVerifyLoot();
+	void TestWalkUpAndPress(class ACSWorldPickup* Pickup);
+	FTimerHandle TestKillTimer;
+	FTimerHandle Stage4ArmTimers[4];
+	FTimerHandle TestStepTimer;
+	TWeakObjectPtr<class ACSCharacter> TestVictim;
+	int32 TestVictimId = 0;
+	int32 TestVictimItemsBefore = 0;
+	int32 TestShotsFired = 0;
+	int32 TestClaimAmmo = 0;
+
 	/** Contested-pickup self-test, enabled with -cstestcontest on two clients. */
 	UFUNCTION(Exec)
 	void CSTestContest();

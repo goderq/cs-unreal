@@ -89,3 +89,27 @@ CSFusion.exe -windowed -room=test -cstestinput -cstestshoot
 ```bash
 CSFusion.exe -room=test -cstestloot -cstestcontest
 ```
+
+## Результаты прогона v0.4.0-alpha (упакованный билд, два клиента)
+
+| ТЗ | Тест | Результат |
+|---|---|---|
+| 4 | B умирает | ✅ `Player 2 killed by 1`, 5 выстрелов из пистолета |
+| 5 | Инвентарь B превращается в лут | ✅ `victim inventory 2 -> 0, pickups 14 -> 16` |
+| — | Стартовый пистолет не выпал | ✅ `starter kept yes` |
+| 6 | A подбирает лут B | ✅ `took the victim's weapon (30 rounds kept)` |
+| 7–8 | B респаунится только с пистолетом | ✅ `alive, hp 100, starter (12 rds), inventory 0` |
+| 9–10 | B «падает» с AK — AK появляется на месте выхода | ✅ процесс убит, через ~8 с `dropped 2 pickups at V(X=-2260, Y=450)` |
+| 11 | Другой игрок подбирает этот AK | ✅ `took the leaver's weapon -> CLAIM OK` |
+| — | Двойное уведомление об уходе | ✅ живой прогон: второе уведомление Photon → `already handled - ignoring repeat` |
+| — | Синтетический тест двойного выброса | ✅ удалён 3 раза, лут появился 1 раз (16 → 19 при 3 предметах) |
+| — | Игроки не появляются в одной точке | ✅ исправлен баг стартового телепорта |
+
+```bash
+# смерть
+CSFusion.exe -room=t -cstestkill        # клиент A (запустить первым)
+CSFusion.exe -room=t -cstestgrab        # клиент B
+# обрыв: B с -cstestgrab, A с -cstestwatchleave, затем убить игровой процесс B
+# двойной выброс (оффлайн)
+CSFusion.exe -noautoconnect -cstestdoubledrop
+```

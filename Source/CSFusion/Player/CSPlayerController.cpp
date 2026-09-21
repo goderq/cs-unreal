@@ -109,6 +109,23 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestLootTimer, this, &ACSPlayerController::CSTestLoot, 9.f, false);
 	}
+	struct FArm { const TCHAR* Flag; float Delay; void (ACSPlayerController::*Fn)(); };
+	static const FArm Stage4Tests[] = {
+		{ TEXT("cstestdoubledrop"), 8.f,  &ACSPlayerController::CSTestDoubleDrop },
+		{ TEXT("cstestgrab"),       9.f,  &ACSPlayerController::CSTestGrab },
+		{ TEXT("cstestwatchleave"), 20.f, &ACSPlayerController::CSTestWatchLeave },
+		{ TEXT("cstestkill"),       22.f, &ACSPlayerController::CSTestKill },
+	};
+	for (int32 i = 0; i < UE_ARRAY_COUNT(Stage4Tests); ++i)
+	{
+		if (FParse::Param(FCommandLine::Get(), Stage4Tests[i].Flag))
+		{
+			// Member handles: re-arming after travel REPLACES the timer instead
+			// of adding a second one, so each test runs once.
+			GetWorldTimerManager().SetTimer(Stage4ArmTimers[i], this, Stage4Tests[i].Fn, Stage4Tests[i].Delay, false);
+		}
+	}
+
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestcontest")))
 	{
 		GetWorldTimerManager().SetTimer(TestContestTimer, this, &ACSPlayerController::CSTestContest, 12.f, false);

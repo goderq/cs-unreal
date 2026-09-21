@@ -72,6 +72,22 @@ public:
 	/** Number of pickups currently alive in a world. */
 	static int32 CountAlive(const UObject* WorldContextObject);
 
+	/**
+	 * Authority only: frees room for Incoming new drops under MaxWorldPickups
+	 * by removing the OLDEST dropped pickups. Map-placed loot is never evicted.
+	 */
+	static void MakeRoomForDrops(const UObject* WorldContextObject, int32 Incoming);
+
+	/**
+	 * Where the item visually flies out from (the death or drop point). Every
+	 * peer animates the mesh from here to the pickup's real location, so the
+	 * scatter looks physical while the network only carries two positions.
+	 */
+	void SetDropOrigin(const FVector& Origin);
+
+	bool IsDropped() const { return ExpiresAtNetworkTime > 0.0; }
+	double GetSpawnNetworkTime() const { return SpawnNetworkTime; }
+
 protected:
 	UFUNCTION()
 	void OnRep_Item();
@@ -96,6 +112,16 @@ protected:
 	/** Network time at which a dropped item vanishes. 0 = never. */
 	UPROPERTY(Replicated)
 	double ExpiresAtNetworkTime = 0.0;
+
+	UPROPERTY(Replicated)
+	double SpawnNetworkTime = 0.0;
+
+	/** Start of the cosmetic fly-out arc. Zero vector = no arc. */
+	UPROPERTY(Replicated)
+	FVector DropOrigin = FVector::ZeroVector;
+
+	UPROPERTY(VisibleAnywhere, Category = "CS|Components")
+	TObjectPtr<USceneComponent> Root;
 
 	/** Authority-local; set the instant a request wins, before destruction. */
 	bool bClaimed = false;

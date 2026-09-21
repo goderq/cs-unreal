@@ -271,6 +271,25 @@ protected:
 	UPROPERTY(ReplicatedUsing = OnRep_Stance, BlueprintReadOnly, Category = "CS|Character")
 	ECSStanceState Stance = ECSStanceState::Standing;
 
+	/**
+	 * Liveness beacon, incremented by the owning client once a second.
+	 *
+	 * An application-level liveness signal that does not depend on how quickly
+	 * the Photon cloud notices a client that vanished without saying goodbye
+	 * (crash, killed process, pulled cable). This pawn is owned by the player,
+	 * so Fusion replicates the counter to the authority; when the client dies
+	 * the value freezes, and ACSMatchDirector treats a counter that has not
+	 * moved for HeartbeatTimeoutSeconds as a disconnect. It bounds detection
+	 * time from our side, whatever the server-side timeout turns out to be.
+	 */
+	UPROPERTY(Replicated)
+	int32 Heartbeat = 0;
+
+public:
+	int32 GetHeartbeat() const { return Heartbeat; }
+
+protected:
+
 	UFUNCTION()
 	void OnRep_Stance();
 
@@ -283,6 +302,13 @@ private:
 
 	/** Last respawn counter seen, so one respawn teleports exactly once. */
 	int32 LastRespawnCounter = 0;
+
+	/** Set once this pawn's player has had a record, to spot their departure. */
+	bool bHadRecord = false;
+	bool bDepartedHidden = false;
+
+	/** Owner-side accumulator for the heartbeat. */
+	float HeartbeatAccumulator = 0.f;
 
 	/** Local only; recomputed every frame for the owning client. */
 	TWeakObjectPtr<class ACSWorldPickup> FocusedPickup;

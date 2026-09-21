@@ -4,6 +4,7 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(CSMatchDirector.fusion)
 
+#include "Characters/CSCharacter.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
@@ -11,6 +12,7 @@
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
+#include "Pickups/CSWorldPickup.h"
 #include "Net/UnrealNetwork.h"
 #include "Weapons/CSWeaponDefinition.h"
 
@@ -146,6 +148,14 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 		return;
 	}
 
+	// A departed player must not be resurrected by their pawn lingering for a
+	// frame after the leave notification. Photon player numbers are never
+	// reused within a room, so refusing them is safe.
+	if (HandledDepartures.Contains(PlayerId))
+	{
+		return;
+	}
+
 	if (Records.Num() >= Settings->MaxTrackedPlayers)
 	{
 		UE_LOG(LogCSAuth, Error,
@@ -189,21 +199,36 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 {
 	CS_AUTHORITY_ONLY(this);
 
+	// Double-drop guard. Both the Fusion leave notification and the
+	// missing-pawn sweep can report the same departure; only the first counts.
+	if (HandledDepartures.Contains(PlayerId))
+	{
+		UE_LOG(LogCSAuth, Log, TEXT("Departure of player %d already handled - ignoring repeat (%s)."),
+			PlayerId, *UEnum::GetValueAsString(Reason));
+		return;
+	}
+
 	const int32 Index = FindRecordIndex(PlayerId);
 	if (Index == INDEX_NONE)
 	{
 		return;
 	}
+	HandledDepartures.Add(PlayerId);
 
-	// Stage 4 hook: drop this player's inventory as world loot BEFORE the
-	// record goes away, and make that drop idempotent so a duplicated
-	// disconnect callback cannot spawn the loot twice. The starter pistol is
-	// never part of it.
-	UE_LOG(LogCSAuth, Log, TEXT("Removing player %d (%s)."),
-		PlayerId, *UEnum::GetValueAsString(Reason));
+	// Loot first, while the inventory still exists. The position is the last
+	// one the authority saw: the pawn is PlayerAttached and may already be gone.
+	FVector Where = FVector::ZeroVector;
+	GetLastKnownLocation(PlayerId, Where);
+	const int32 Dropped = DropInventoryAsLoot(PlayerId, Where, Reason);
+
+	UE_LOG(LogCSAuth, Log, TEXT("Player %d left (%s): dropped %d pickups at %s."),
+		PlayerId, *UEnum::GetValueAsString(Reason), Dropped, *Where.ToCompactString());
 
 	Records.RemoveAt(Index);
 	LastKnownAlive.Remove(PlayerId);
+	LastKnownLocation.Remove(PlayerId);
+	HeartbeatSeen.Remove(PlayerId);
+	PawnMissingSince.Remove(PlayerId);
 
 	if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
 	{
@@ -211,6 +236,109 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 	}
 
 	OnRecordsChanged.Broadcast(PlayerId);
+}
+
+ACSCharacter* ACSMatchDirector::FindPawnForPlayer(const UObject* WorldContextObject, int32 PlayerId)
+{
+	if (PlayerId == 0)
+	{
+		return nullptr;
+	}
+	UWorld* World = GEngine
+		? GEngine->GetWorldFromContextObject(WorldContextObject, EGetWorldErrorMode::ReturnNull)
+		: nullptr;
+	if (!World)
+	{
+		return nullptr;
+	}
+	for (TActorIterator<ACSCharacter> It(World); It; ++It)
+	{
+		if (!It->IsActorBeingDestroyed() && It->GetOwningPlayerId() == PlayerId)
+		{
+			return *It;
+		}
+	}
+	return nullptr;
+}
+
+bool ACSMatchDirector::GetLastKnownLocation(int32 PlayerId, FVector& OutLocation) const
+{
+	if (const FVector* Found = LastKnownLocation.Find(PlayerId))
+	{
+		OutLocation = *Found;
+		return true;
+	}
+	if (const ACSCharacter* Pawn = FindPawnForPlayer(this, PlayerId))
+	{
+		OutLocation = Pawn->GetActorLocation();
+		return true;
+	}
+	return false;
+}
+
+int32 ACSMatchDirector::DropInventoryAsLoot(int32 PlayerId, const FVector& Where, ECSDeathReason Reason)
+{
+	CS_AUTHORITY_ONLY_RET(this, 0);
+
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	if (!Inventory)
+	{
+		return 0;
+	}
+
+	// TakeAll empties the inventory in the same step. That is what makes a
+	// repeated call harmless: the second one finds nothing left to drop.
+	const TArray<FCSInventorySlot> Contents = Inventory->TakeAll();
+	if (Contents.Num() == 0)
+	{
+		return 0;
+	}
+
+	ACSWorldPickup::MakeRoomForDrops(this, Contents.Num());
+
+	UWorld* World = GetWorld();
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CSLootScatter), false);
+	// Ignore every pawn so loot lands on the floor, not on a body.
+	for (TActorIterator<ACSCharacter> It(World); It; ++It)
+	{
+		Params.AddIgnoredActor(*It);
+	}
+
+	int32 Spawned = 0;
+	for (int32 i = 0; i < Contents.Num(); ++i)
+	{
+		const FCSInventorySlot& Item = Contents[i];
+
+		// Deterministic ring: golden-angle spacing, growing radius, so items
+		// never stack on one spot however many there are.
+		const float Angle = i * 2.39996f;
+		const float Radius = FMath::Min(55.f + 28.f * i, 220.f);
+		const FVector Flat = Where + FVector(FMath::Cos(Angle) * Radius, FMath::Sin(Angle) * Radius, 0.f);
+
+		// Settle onto whatever is below.
+		FVector Target = Flat;
+		FHitResult Hit;
+		if (World->LineTraceSingleByChannel(Hit, Flat + FVector(0.f, 0.f, 80.f),
+				Flat - FVector(0.f, 0.f, 400.f), ECC_WorldStatic, Params))
+		{
+			Target = Hit.ImpactPoint + FVector(0.f, 0.f, 25.f);
+		}
+
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		if (ACSWorldPickup* Pickup = World->SpawnActor<ACSWorldPickup>(
+				ACSWorldPickup::StaticClass(), Target, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), SpawnParams))
+		{
+			// Weapons keep the rounds they had; stacks keep their count.
+			Pickup->InitializeItem(Item.ItemIndex, Item.Count, Item.AmmoInMag, /*bDropped*/ true);
+			Pickup->SetDropOrigin(Where + FVector(0.f, 0.f, 40.f));
+			++Spawned;
+		}
+	}
+
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d inventory -> %d loot pickups (%s)."),
+		PlayerId, Spawned, *UEnum::GetValueAsString(Reason));
+	return Spawned;
 }
 
 FCSLoadoutView ACSMatchDirector::GetLoadout(int32 PlayerId) const
@@ -507,6 +635,20 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 		UE_LOG(LogCSCombat, Log, TEXT("Player %d killed by %d (%s)."),
 			VictimId, InstigatorId, *UEnum::GetValueAsString(Zone));
 
+		// Everything in the inventory falls where they died. The starter
+		// pistol stays with the player - it is not in the inventory.
+		FVector DeathSpot = FVector::ZeroVector;
+		if (const ACSCharacter* VictimPawn = FindPawnForPlayer(this, VictimId))
+		{
+			DeathSpot = VictimPawn->GetActorLocation();
+		}
+		else
+		{
+			GetLastKnownLocation(VictimId, DeathSpot);
+		}
+		DropInventoryAsLoot(VictimId, DeathSpot,
+			InstigatorId == VictimId ? ECSDeathReason::Suicide : ECSDeathReason::Killed);
+
 		OnPlayerKilled.Broadcast(VictimId, InstigatorId, Zone);
 	}
 
@@ -561,6 +703,71 @@ void ACSMatchDirector::TickAuthority()
 	CS_AUTHORITY_ONLY(this);
 
 	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+	const bool bInSession = UCSAuthority::IsSessionActive(this);
+
+	// Track positions and notice vanished pawns. Collected first and removed
+	// after the loop, because RemovePlayer edits Records.
+	TArray<int32> Vanished;
+	for (const FCSPlayerCombatRecord& Record : Records)
+	{
+		if (const ACSCharacter* Pawn = FindPawnForPlayer(this, Record.PlayerId))
+		{
+			LastKnownLocation.Add(Record.PlayerId, Pawn->GetActorLocation());
+			PawnMissingSince.Remove(Record.PlayerId);
+
+			// Unexpected-disconnect detector that does not wait on the Photon
+			// server's own timeout: the client bumps a counter every second on
+			// its (player-owned, hence replicated) pawn. Frozen for too long
+			// means the process or its connection is gone.
+			TPair<int32, double>& Seen = HeartbeatSeen.FindOrAdd(Record.PlayerId, TPair<int32, double>(Pawn->GetHeartbeat(), Now));
+			if (Seen.Key != Pawn->GetHeartbeat())
+			{
+				Seen = TPair<int32, double>(Pawn->GetHeartbeat(), Now);
+			}
+			else if (bInSession && Now - Seen.Value > HeartbeatTimeoutSeconds)
+			{
+				UE_LOG(LogCSAuth, Log, TEXT("Player %d: no heartbeat for %.1fs - treating as disconnected."),
+					Record.PlayerId, Now - Seen.Value);
+				Vanished.Add(Record.PlayerId);
+			}
+		}
+		else if (bInSession)
+		{
+			// Safety net for the leave notification. If the master migrates
+			// while a player is leaving, the new master can receive the notice
+			// before it has become the authority and skip it. A pawn that stays
+			// gone for this long means the player is gone. RemovePlayer is
+			// idempotent, so the normal path firing too is harmless.
+			const double& Since = PawnMissingSince.FindOrAdd(Record.PlayerId, Now);
+			if (Now - Since > 8.0)
+			{
+				Vanished.Add(Record.PlayerId);
+			}
+		}
+	}
+	// Primary departure detector: the room membership the Photon server itself
+	// reports. A tracked player that the server has marked inactive (lost
+	// connection) or no longer lists at all is gone - however their pawn and
+	// PlayerState happen to be doing on this peer.
+	TArray<int32> Active;
+	TArray<int32> Inactive;
+	if (bInSession && UCSAuthority::GetRoomPlayers(this, Active, Inactive))
+	{
+		for (const FCSPlayerCombatRecord& Record : Records)
+		{
+			if (!Active.Contains(Record.PlayerId) && !Vanished.Contains(Record.PlayerId))
+			{
+				UE_LOG(LogCSAuth, Log, TEXT("Room membership: player %d is %s."),
+					Record.PlayerId, Inactive.Contains(Record.PlayerId) ? TEXT("INACTIVE (connection lost)") : TEXT("no longer in the room"));
+				Vanished.Add(Record.PlayerId);
+			}
+		}
+	}
+
+	for (const int32 PlayerId : Vanished)
+	{
+		RemovePlayer(PlayerId, ECSDeathReason::Disconnected);
+	}
 
 	for (FCSPlayerCombatRecord& Record : Records)
 	{

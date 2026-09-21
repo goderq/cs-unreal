@@ -70,3 +70,4 @@
 #include "FusionHelpers.h"
 #include "FusionOnlineSubsystem.h"
 #include "FusionActorComponent.h"
+#include "FusionRealtimeClient.h"

@@ -224,6 +224,7 @@ void ACSCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ACSCharacter, Stance);
+	DOREPLIFETIME(ACSCharacter, Heartbeat);
 }
 
 void ACSCharacter::Tick(float DeltaSeconds)
@@ -234,6 +235,14 @@ void ACSCharacter::Tick(float DeltaSeconds)
 	{
 		UpdateStance();
 		UpdateFocusedPickup();
+
+		// Liveness beacon: see Heartbeat in the header. Only the owner writes it.
+		HeartbeatAccumulator += DeltaSeconds;
+		if (HeartbeatAccumulator >= 1.f)
+		{
+			HeartbeatAccumulator = 0.f;
+			++Heartbeat;
+		}
 	}
 
 	SyncWithDirector();
@@ -730,13 +739,33 @@ void ACSCharacter::SyncWithDirector()
 		{
 			const_cast<ACSMatchDirector*>(Director)->EnsurePlayer(PlayerId);
 		}
+
+		// The record existed and is gone: the authority processed this player's
+		// departure. Their pawn can linger (Photon may not drop them for a long
+		// time), so hide it on every peer rather than leave a frozen ghost.
+		if (bHadRecord && !bDepartedHidden && !IsLocallyControlled())
+		{
+			bDepartedHidden = true;
+			ApplyAliveState(false);
+			UE_LOG(LogCSNet, Log, TEXT("%s: player %d departed - hiding pawn."), *GetName(), PlayerId);
+		}
 		return;
 	}
+
+	bHadRecord = true;
 
 	if (Record.bAlive != bLocalAliveState)
 	{
 		bLocalAliveState = Record.bAlive;
 		ApplyAliveState(Record.bAlive);
+	}
+
+	// First sight of the record is the initial registration, not a respawn:
+	// adopt the counter without teleporting. Treating it as a respawn sent
+	// every player to spawn point 0 at match start, on top of each other.
+	if (LastRespawnCounter == 0)
+	{
+		LastRespawnCounter = Record.RespawnCounter;
 	}
 
 	// Only the owning client can move its own pawn, so only it acts on the

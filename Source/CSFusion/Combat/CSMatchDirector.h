@@ -183,8 +183,32 @@ public:
 	/** Creates or resets a record. Safe to call repeatedly. */
 	void EnsurePlayer(int32 PlayerId);
 
-	/** Stage 4 will drop this player's loot here before clearing the record. */
+	/**
+	 * A player left the room - normally or by losing connection. Drops their
+	 * whole inventory as loot at their last known position, then forgets them.
+	 *
+	 * Idempotent by design, because it IS called more than once: Fusion's
+	 * leave notification and the missing-pawn sweep can both fire for the same
+	 * departure. The first call takes the inventory and removes the record;
+	 * any later call finds the player already handled and creates nothing.
+	 */
 	void RemovePlayer(int32 PlayerId, ECSDeathReason Reason);
+
+	/**
+	 * Turns every item in a player's inventory into world pickups scattered
+	 * around Where, and empties the inventory. The starter pistol is never
+	 * involved - it is not in the inventory. Returns the number of pickups.
+	 */
+	int32 DropInventoryAsLoot(int32 PlayerId, const FVector& Where, ECSDeathReason Reason);
+
+	/** The pawn of a player, by Fusion ownership. Null if it does not exist. */
+	static class ACSCharacter* FindPawnForPlayer(const UObject* WorldContextObject, int32 PlayerId);
+
+	/** Where the authority last saw this player. Survives the pawn's destruction. */
+	bool GetLastKnownLocation(int32 PlayerId, FVector& OutLocation) const;
+
+	/** Authority: record a position for a player explicitly (tests, spawn). */
+	void NoteLocation(int32 PlayerId, const FVector& Location) { LastKnownLocation.Add(PlayerId, Location); }
 
 	/**
 	 * Full authority-side validation of a fire request.
@@ -255,4 +279,29 @@ protected:
 private:
 	/** Snapshot of alive flags, so every peer can raise death events locally. */
 	TMap<int32, bool> LastKnownAlive;
+
+	// --- Authority-local bookkeeping (not replicated) ------------------------
+
+	/**
+	 * Last position of every tracked player. Needed because under Fusion a
+	 * leaving player's pawn is PlayerAttached and may already be destroyed by
+	 * the time the leave notification arrives.
+	 */
+	TMap<int32, FVector> LastKnownLocation;
+
+	/** When a tracked player's pawn was first seen missing, for the sweep. */
+	TMap<int32, double> PawnMissingSince;
+
+	/** Players whose departure has been processed. Guards against double drops. */
+	TSet<int32> HandledDepartures;
+
+	/** Last heartbeat value seen per player, and when it last changed. */
+	TMap<int32, TPair<int32, double>> HeartbeatSeen;
+
+	/**
+	 * How long a heartbeat may stay frozen before the player is treated as
+	 * disconnected. Long enough to ride out a hitch or a slow frame on a
+	 * background window, short enough that loot appears promptly.
+	 */
+	static constexpr double HeartbeatTimeoutSeconds = 10.0;
 };

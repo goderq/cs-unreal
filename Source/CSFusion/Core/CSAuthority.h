@@ -110,6 +110,17 @@ public:
 
 	/** Native accessor for the Fusion subsystem. Null offline. */
 	static UFusionOnlineSubsystem* GetFusion(const UObject* WorldContextObject);
+
+	/**
+	 * The room's membership as the Photon server reports it: players still
+	 * connected, and players the server has marked inactive (connection lost,
+	 * within PlayerTTL). Returns false when not in a room.
+	 *
+	 * This is the ground truth for "who is still here". It does not depend on
+	 * Unreal objects (pawns, PlayerStates) that may linger or vanish on their
+	 * own schedule.
+	 */
+	static bool GetRoomPlayers(const UObject* WorldContextObject, TArray<int32>& OutActive, TArray<int32>& OutInactive);
 };
 
 /**

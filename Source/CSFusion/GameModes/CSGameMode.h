@@ -42,6 +42,14 @@ public:
 	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
 	virtual void RestartGame() override;
 
+	/**
+	 * Fusion calls this on every peer when a player leaves the room - both a
+	 * normal leave and a lost connection (UFusionClient::OnPlayerLeft), with
+	 * the Photon player number in PlayerState->SavedNetworkAddress. On the
+	 * authority this is what turns a departed player's inventory into loot.
+	 */
+	virtual void AddInactivePlayer(APlayerState* PlayerState, APlayerController* PC) override;
+
 	/** Warmup length in seconds before the round starts. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Match")
 	float WarmupSeconds = 5.f;

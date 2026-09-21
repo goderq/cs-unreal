@@ -8,6 +8,7 @@
 #include "Core/CSLog.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
+#include "GameFramework/PlayerState.h"
 #include "GameModes/CSGameState.h"
 #include "Multiplayer/CSGameInstance.h"
 #include "Player/CSPlayerController.h"
@@ -234,5 +235,28 @@ void ACSGameMode::UpdateMatchFlow()
 			GS->SetMatchPhase(ECSMatchPhase::WaitingForPlayers);
 		}
 		break;
+	}
+}
+
+void ACSGameMode::AddInactivePlayer(APlayerState* LeavingPlayerState, APlayerController* PC)
+{
+	// Read the id before Super, which may move or rename the PlayerState.
+	const int32 PlayerNumber = LeavingPlayerState ? FCString::Atoi(*LeavingPlayerState->SavedNetworkAddress) : 0;
+
+	Super::AddInactivePlayer(LeavingPlayerState, PC);
+
+	if (PlayerNumber == 0 || !UCSAuthority::IsGameAuthority(this))
+	{
+		return;
+	}
+
+	UE_LOG(LogCSAuth, Log, TEXT("Fusion reports player %d left the room."), PlayerNumber);
+
+	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+	{
+		// The server - here the Master Client - decides what drops. The leaving
+		// client has no say, and RemovePlayer is idempotent, so a repeated
+		// notification cannot create a second set of loot.
+		Director->RemovePlayer(PlayerNumber, ECSDeathReason::Disconnected);
 	}
 }
