@@ -24,7 +24,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Version,
     [ValidateSet("Shipping", "Development")][string]$Config = "Shipping",
     [string]$EngineDir = "C:\Program Files\Epic Games\UE_5.8\Engine",
-    [switch]$SkipZip
+    [switch]$SkipZip,
+    [switch]$NoKeys
 )
 
 $ErrorActionPreference = "Stop"
@@ -65,6 +66,22 @@ if (-not (Test-Path (Join-Path $staged "CSFusion.exe"))) { throw "Staged build m
 # Anything the smoke tests wrote into the staged folder must not ship.
 $saved = Join-Path $staged "CSFusion\Saved"
 if (Test-Path $saved) { Remove-Item $saved -Recurse -Force }
+
+# --- Account keys -----------------------------------------------------------------
+# Staging only picks up Default*.ini, so Config\Backend.ini is copied in by hand.
+# Without it the packaged game cannot sign anybody in - and signing in is what
+# lets you play. The keys therefore travel inside the build, which is how every
+# EOS client works; the point of keeping them out of the repository is that they
+# cannot be scraped automatically. Use -NoKeys for a build meant to stay keyless.
+$backend = Join-Path $Root "Config\Backend.ini"
+if ($NoKeys) {
+    Write-Host "Account keys left out (-NoKeys): the build cannot sign in." -ForegroundColor Yellow
+} elseif (Test-Path $backend) {
+    Copy-Item $backend (Join-Path $staged "CSFusion\Config\Backend.ini") -Force
+    Write-Host "Account keys copied into the build (Config\Backend.ini)." -ForegroundColor Yellow
+} else {
+    Write-Host "No Config\Backend.ini: the build cannot sign in (see docs/ACCOUNTS.md)." -ForegroundColor Yellow
+}
 
 # --- Zip --------------------------------------------------------------------------
 if (-not $SkipZip) {
