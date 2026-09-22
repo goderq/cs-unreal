@@ -9,6 +9,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Account/CSAccountSubsystem.h"
 #include "Core/CSModeSettings.h"
 #include "UI/CSUIStyle.h"
 #include "UI/SCSInventoryPanel.h"
@@ -221,11 +222,59 @@ TSharedRef<SWidget> SCSMainMenu::MakeNav()
 				SNew(STextBlock).Text(LOCTEXT("GameTitleB", "FUSION")).Font(CSUI::Font(46, true)).ColorAndOpacity(CSUI::Accent)
 			]
 		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 44.f)
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 18.f)
 		[
 			SNew(STextBlock)
 			.Text(FText::Format(LOCTEXT("Version", "multiplayer fps  -  v{0}"), FText::FromString(ProjectVersion())))
 			.Font(CSUI::Font(13)).ColorAndOpacity(CSUI::TextDim)
+		]
+
+		// v1.2: who is signed in, and their lifetime numbers.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 26.f)
+		[
+			SNew(SBorder)
+			.BorderImage(CSUI::WhiteBrush())
+			.BorderBackgroundColor(CSUI::PanelRaised)
+			.Padding(FMargin(16.f, 12.f))
+			.Visibility_Lambda([this]()
+			{
+				const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(WorldContext.Get());
+				return (Account && Account->IsReady()) ? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock).Font(CSUI::Font(11, true)).ColorAndOpacity(CSUI::TextDim)
+					.Text(LOCTEXT("SignedIn", "SIGNED IN"))
+				]
+				+ SVerticalBox::Slot().AutoHeight()
+				[
+					SNew(STextBlock).Font(CSUI::Font(20, true)).ColorAndOpacity(CSUI::Text)
+					.Text_Lambda([this]()
+					{
+						const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(WorldContext.Get());
+						return FText::FromString(Account ? Account->GetNickname() : FString());
+					})
+				]
+				+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+				[
+					SNew(STextBlock).Font(CSUI::Font(12)).ColorAndOpacity(CSUI::TextDim)
+					.Text_Lambda([this]()
+					{
+						const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(WorldContext.Get());
+						if (!Account)
+						{
+							return FText::GetEmpty();
+						}
+						const FCSAccountStats& Stats = Account->GetStats();
+						return FText::Format(LOCTEXT("StatsLine", "{0} matches  -  {1} wins  -  {2} / {3} K/D {4}"),
+							FText::AsNumber(Stats.Matches), FText::AsNumber(Stats.Wins),
+							FText::AsNumber(Stats.Kills), FText::AsNumber(Stats.Deaths),
+							FText::AsNumber(FMath::RoundToFloat(Stats.KD() * 100.f) / 100.f));
+					})
+				]
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("Play", "PLAY"), EPage::Play) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("QuickNav", "Quick Match"), EPage::Play, true) ]

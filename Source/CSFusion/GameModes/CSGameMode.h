@@ -106,6 +106,12 @@ protected:
 	bool IsRoundDecided() const;
 	void FinishMatch(ECSTeam WinnerTeam, int32 WinnerPlayerId);
 
+	/** v1.2 accounts: hand the finished match to the backend (authority, once). */
+	void ReportMatchToBackend(ECSTeam WinnerTeam, int32 WinnerPlayerId);
+
+	/** When the current match went InProgress; zero once reported. */
+	FDateTime MatchStartedUtc;
+
 	ACSGameState* GetCSGameState() const;
 
 	/** Cached, sorted list of player starts so indices agree on every peer. */

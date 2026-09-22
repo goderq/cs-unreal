@@ -11,6 +11,7 @@
 #include "CSMenuPlayerController.generated.h"
 
 class SCSMainMenu;
+class SCSLoginScreen;
 
 UCLASS()
 class CSFUSION_API ACSMenuPlayerController : public APlayerController
@@ -36,6 +37,11 @@ protected:
 	void RunMenuTest();
 	void MenuTestStep();
 	void Screenshot(const FString& Name);
+
+	/** v1.2: the sign-in screen shown before the menu. */
+	TSharedPtr<SCSLoginScreen> LoginScreen;
+	void ShowLoginScreen();
+	void ShowMainMenu();
 
 	TSharedPtr<SCSMainMenu> Menu;
 

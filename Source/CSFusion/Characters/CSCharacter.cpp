@@ -39,6 +39,7 @@
 #include "Weapons/CSWeaponDefinition.h"
 #include "Weapons/CSWeaponPresentation.h"
 #include "Animation/CSAnimInstance.h"
+#include "Account/CSAccountSubsystem.h"
 #include "Audio/CSAudio.h"
 #include "Audio/CSAudioSettings.h"
 #include "Engine/SkeletalMesh.h"
@@ -351,6 +352,7 @@ void ACSCharacter::Tick(float DeltaSeconds)
 	}
 
 	SyncWithDirector();
+	BroadcastIdentity();
 
 	BindCombatEvents();
 	UpdateWeaponPresentation();
@@ -1504,5 +1506,56 @@ void ACSCharacter::Input_PauseMenu(const FInputActionValue& /*Value*/)
 	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
 	{
 		PC->TogglePauseMenu();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v1.2 accounts: who is this player
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::BroadcastIdentity()
+{
+	if (!IsLocallyControlled() || bIsBot)
+	{
+		return;
+	}
+	const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	if (!Account || !Account->IsReady())
+	{
+		return;
+	}
+	// Repeated for a while after spawning: a player who joins later has to
+	// hear it too, and an RPC sent before they arrived is gone.
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now < NextIdentityBroadcast)
+	{
+		return;
+	}
+	NextIdentityBroadcast = Now + 10.0;
+
+	FString Nickname = Account->GetNickname();
+	FString ProfileId = Account->GetProfileId();
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcIdentify(Nickname, ProfileId);
+	}
+	else
+	{
+		RpcIdentify_Receive(Nickname, ProfileId);
+	}
+}
+
+void ACSCharacter::RpcIdentify_Receive(FString& Nickname, FString& ProfileId)
+{
+	// Runs on every peer. The name is cosmetic; the profile id is only kept by
+	// the authority, and only to report the match afterwards.
+	DisplayNickname = Nickname.Left(24);
+
+	if (UCSAuthority::IsGameAuthority(this))
+	{
+		if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+		{
+			Director->NoteIdentity(GetOwningPlayerId(), ProfileId);
+		}
 	}
 }

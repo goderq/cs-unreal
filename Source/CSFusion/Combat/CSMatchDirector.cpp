@@ -705,6 +705,13 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 	const float Before = Victim->Health;
 	Victim->Health = FMath::Max(0.f, Victim->Health - ToHealth);
 	const float Applied = Before - Victim->Health;
+	if (InstigatorId != VictimId)
+	{
+		if (FCSPlayerCombatRecord* Dealer = FindRecordMutable(InstigatorId))
+		{
+			Dealer->DamageDealt += FMath::RoundToInt(Applied);
+		}
+	}
 	const bool bKilledNow = Victim->Health <= 0.f;
 
 	UE_LOG(LogCSCombat, Verbose,
@@ -724,6 +731,7 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 			if (FCSPlayerCombatRecord* Killer = FindRecordMutable(InstigatorId))
 			{
 				Killer->Kills += 1;
+				Killer->Headshots += (Zone == ECSHitZone::Head) ? 1 : 0;
 				const int32 Reward = Rules.KillReward + (Zone == ECSHitZone::Head ? Rules.HeadshotBonus : 0);
 				Killer->Money = FMath::Clamp(Killer->Money + Reward, 0, Rules.MaxMoney);
 
@@ -1210,6 +1218,8 @@ void ACSMatchDirector::ResetForNewMatch()
 	{
 		Record.Kills = 0;
 		Record.Deaths = 0;
+		Record.Headshots = 0;
+		Record.DamageDealt = 0;
 		Record.Money = Rules.StartMoney;
 		Record.Armor = 0.f;
 		if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Record.PlayerId))
@@ -1486,6 +1496,8 @@ void ACSMatchDirector::ResetScores()
 		{
 			Record.Kills = 0;
 			Record.Deaths = 0;
+			Record.Headshots = 0;
+			Record.DamageDealt = 0;
 			OnRecordsChanged.Broadcast(Record.PlayerId);
 		}
 	}
@@ -1673,4 +1685,24 @@ void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, FVector Location
 	{
 		Grenade->Explode(Location);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// v1.2 accounts
+// ---------------------------------------------------------------------------
+
+void ACSMatchDirector::NoteIdentity(int32 PlayerId, const FString& ProfileId)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (PlayerId == 0 || ProfileId.IsEmpty())
+	{
+		return;
+	}
+	ProfileIds.Add(PlayerId, ProfileId);
+}
+
+FString ACSMatchDirector::GetProfileIdFor(int32 PlayerId) const
+{
+	const FString* Found = ProfileIds.Find(PlayerId);
+	return Found ? *Found : FString();
 }

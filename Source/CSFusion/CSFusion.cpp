@@ -1,6 +1,7 @@
 // Copyright (c) 2026 CS-Fusion. All Rights Reserved.
 
 #include "CSFusion.h"
+#include "Account/CSBackendConfig.h"
 #include "Core/CSLog.h"
 #include "Modules/ModuleManager.h"
 
@@ -8,6 +9,10 @@
 
 void FCSFusionModule::StartupModule()
 {
+	// Accounts: pull Config/Backend.ini into the engine config before anything
+	// asks EOS for its settings (docs/ACCOUNTS.md).
+	FCSBackendConfig::LoadAndApply();
+
 #if CS_WITH_FUSION
 	UE_LOG(LogCS, Log, TEXT("CSFusion module started (Photon Fusion 3 backend ENABLED)."));
 #else

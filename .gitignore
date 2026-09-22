@@ -41,3 +41,6 @@ Content/LevelPrototyping/
 
 # v1.1: raw downloads (only prepared clips are committed)
 SourceArt/_download/
+
+# Accounts: local keys, never committed (template: Config/Backend.ini.example)
+Config/Backend.ini

@@ -192,6 +192,20 @@ public:
 	/** Camera shake from a nearby blast, 0..1 (local view). */
 	void AddExplosionShake(float Strength) { ExplosionShake = FMath::Max(ExplosionShake, Strength); }
 
+	/**
+	 * v1.2 accounts: the owning client tells everyone who it is - the nickname
+	 * for the HUD, and (for the authority) the profile id the match report uses.
+	 * Only cosmetic on other peers; nothing here decides gameplay.
+	 */
+	void BroadcastIdentity();
+
+	SEND_FUSIONRPC(TargetAllClients)
+	void RpcIdentify(FString& Nickname, FString& ProfileId);
+	void RpcIdentify_Receive(FString& Nickname, FString& ProfileId);
+
+	/** Name shown for this player, or an empty string when they have not said. */
+	const FString& GetDisplayNickname() const { return DisplayNickname; }
+
 	/** v1.1 shop: owning client asks to buy shop entry ShopIndex. The authority re-checks everything. */
 	void RequestBuy(int32 ShopIndex);
 
@@ -329,6 +343,8 @@ protected:
 	void UpdateCameraHeight(float DeltaSeconds);
 	float ExplosionShake = 0.f;
 	FTimerHandle ThrowReleaseTimer;
+	FString DisplayNickname;
+	double NextIdentityBroadcast = 0.0;
 	/** First-person throw clock (< 0 idle). */
 	float ViewThrowTime = -1.f;
 

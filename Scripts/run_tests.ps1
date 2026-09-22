@@ -66,6 +66,8 @@ function Start-Client([string]$ClientArgs, [string]$LogName, [string]$StartMap =
     $logArg = "-LOG=$LogName"
     # Legacy suites test pickup and shooting as in v1.0: weapons on the floor,
     # no spawn protection. The v1.1 mode suites (-cstestmodes*) run the real rules.
+    # Self-tests cannot sign in to Epic, so they always run without an account.
+    $ClientArgs = "-noaccount $ClientArgs"
     if ($ClientArgs -notmatch "cstestmodes|cstestposes|cstestcomp") { $ClientArgs = "-mapweapons -nospawnprotection $ClientArgs" }
     if ($Packaged) {
         return Start-Process -FilePath $GameExe -ArgumentList "$StartMap -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru

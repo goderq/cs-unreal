@@ -1,0 +1,21 @@
+; Copy to Config/Backend.ini and fill in. Backend.ini is git-ignored: keys must
+; never be committed to a public repository. Guide: docs/ACCOUNTS.md
+;
+; A build machine can use environment variables instead:
+;   CS_SUPABASE_URL, CS_SUPABASE_ANON_KEY, CS_EOS_PRODUCT_ID, CS_EOS_SANDBOX_ID,
+;   CS_EOS_DEPLOYMENT_ID, CS_EOS_CLIENT_ID, CS_EOS_CLIENT_SECRET, CS_EOS_ENCRYPTION_KEY
+
+[Supabase]
+; Project Settings -> API
+Url=https://YOUR-PROJECT.supabase.co
+AnonKey=PASTE_THE_ANON_PUBLIC_KEY
+
+[EOS]
+; Epic Dev Portal -> Product Settings, and the client you created
+ProductId=
+SandboxId=
+DeploymentId=
+ClientId=
+ClientSecret=
+; Product Settings -> Encryption (any 64 hex characters), used for cloud saves
+EncryptionKey=

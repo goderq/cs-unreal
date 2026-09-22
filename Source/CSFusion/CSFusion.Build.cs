@@ -85,6 +85,12 @@ public class CSFusion : ModuleRules
 			"RenderCore", // Stage 8 perf test: game/render thread times
 			"RHI",
 			"AnimationCore", // v1.0: two-bone IK for the left hand
+			// v1.2 accounts: Epic sign-in and the Supabase backend.
+			"HTTP",
+			"Json",
+			"JsonUtilities",
+			"OnlineSubsystem",
+			"OnlineSubsystemUtils",
 		});
 
 		PublicIncludePaths.Add(ModuleDirectory);

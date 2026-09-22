@@ -16,7 +16,9 @@
 #include "Misc/Paths.h"
 #include "Multiplayer/CSSessionSubsystem.h"
 #include "TimerManager.h"
+#include "UI/SCSLoginScreen.h"
 #include "UI/SCSMainMenu.h"
+#include "Account/CSAccountSubsystem.h"
 #include "UnrealClient.h"
 
 ACSMenuPlayerController::ACSMenuPlayerController()
@@ -35,6 +37,66 @@ void ACSMenuPlayerController::BeginPlay()
 		return;
 	}
 
+	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		Settings->ReapplyAudio();
+	}
+	MenuMusic = CSAudio::PlayMusic(this, UCSAudioSettings::Get()->MenuMusic);
+
+	// v1.2: an Epic account is required to play. Self-tests and offline
+	// debugging pass -noaccount and go straight to the menu.
+	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	const bool bNeedsSignIn = Account && Account->IsSignInRequired() && !Account->IsReady();
+	if (bNeedsSignIn)
+	{
+		ShowLoginScreen();
+		return;
+	}
+
+	ShowMainMenu();
+}
+
+void ACSMenuPlayerController::ShowLoginScreen()
+{
+	SAssignNew(LoginScreen, SCSLoginScreen)
+		.WorldContext(this)
+		.OnSignedIn(FSimpleDelegate::CreateUObject(this, &ACSMenuPlayerController::ShowMainMenu));
+
+	GEngine->GameViewport->AddViewportWidgetContent(LoginScreen.ToSharedRef(), 10);
+	FInputModeUIOnly Mode;
+	Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	Mode.SetWidgetToFocus(LoginScreen);
+	SetInputMode(Mode);
+	SetShowMouseCursor(true);
+	UE_LOG(LogCS, Log, TEXT("Sign-in screen shown."));
+
+	// -cstestlogin: screenshot the sign-in screen and report its state.
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestlogin")))
+	{
+		GetWorldTimerManager().SetTimer(MenuTestTimer, [this]()
+		{
+			const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+			Screenshot(TEXT("login"));
+			UE_LOG(LogCS, Log, TEXT("LOGIN TEST RESULT: screen up, account state %s, error '%s' -> %s"),
+				*UEnum::GetValueAsString(Account ? Account->GetState() : ECSAccountState::SignedOut),
+				Account ? *Account->GetLastError() : TEXT(""),
+				LoginScreen.IsValid() ? TEXT("LOGIN SCREEN OK") : TEXT("LOGIN SCREEN BROKEN"));
+		}, 4.f, false);
+	}
+}
+
+void ACSMenuPlayerController::ShowMainMenu()
+{
+	if (Menu.IsValid())
+	{
+		return;
+	}
+	if (LoginScreen.IsValid())
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(LoginScreen.ToSharedRef());
+		LoginScreen.Reset();
+	}
+
 	SAssignNew(Menu, SCSMainMenu).WorldContext(this);
 	GEngine->GameViewport->AddViewportWidgetContent(Menu.ToSharedRef(), 10);
 
@@ -45,12 +107,6 @@ void ACSMenuPlayerController::BeginPlay()
 	SetShowMouseCursor(true);
 
 	UE_LOG(LogCS, Log, TEXT("Main menu shown."));
-
-	if (UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
-	{
-		Settings->ReapplyAudio();
-	}
-	MenuMusic = CSAudio::PlayMusic(this, UCSAudioSettings::Get()->MenuMusic);
 
 	// Self-tests run on the first visit only; a later visit (after leaving a
 	// match) can test entering a second match with -cstestrejoin=NAME.
@@ -87,11 +143,19 @@ void ACSMenuPlayerController::BeginPlay()
 
 void ACSMenuPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (Menu.IsValid() && GEngine && GEngine->GameViewport)
+	if (GEngine && GEngine->GameViewport)
 	{
-		GEngine->GameViewport->RemoveViewportWidgetContent(Menu.ToSharedRef());
+		if (Menu.IsValid())
+		{
+			GEngine->GameViewport->RemoveViewportWidgetContent(Menu.ToSharedRef());
+		}
+		if (LoginScreen.IsValid())
+		{
+			GEngine->GameViewport->RemoveViewportWidgetContent(LoginScreen.ToSharedRef());
+		}
 	}
 	Menu.Reset();
+	LoginScreen.Reset();
 	Super::EndPlay(EndPlayReason);
 }
 

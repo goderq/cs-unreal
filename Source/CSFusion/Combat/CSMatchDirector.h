@@ -124,6 +124,13 @@ struct CSFUSION_API FCSPlayerCombatRecord
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
 	int32 Money = 0;
 
+	/** v1.2 stats: kills that were headshots, and total damage dealt. */
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
+	int32 Headshots = 0;
+
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
+	int32 DamageDealt = 0;
+
 	/**
 	 * Spawn protection until this network time (0 = none). No damage is taken
 	 * while it lasts; in Deathmatch modes the shop is open exactly as long.
@@ -240,6 +247,10 @@ public:
 
 	void AddMoney(int32 PlayerId, int32 Delta);
 	void CancelProtection(int32 PlayerId, const TCHAR* Why);
+
+	/** v1.2 accounts: the authority remembers who is signed in, for the match report. */
+	void NoteIdentity(int32 PlayerId, const FString& ProfileId);
+	FString GetProfileIdFor(int32 PlayerId) const;
 	/** Validates everything (shop open, money, room) and delivers the item. */
 	ECSBuyResult TryBuy(int32 PlayerId, int32 ShopIndex);
 	/** Rounds modes: everyone back to life at their team's spawn, buy window open. */
@@ -436,4 +447,6 @@ private:
 	FString CombatWeaponOverride;
 	int32 NextGrenadeSerial = 1;
 	TMap<int32, double> LastThrowTime;
+	/** Authority only: Photon player id -> Supabase profile id (empty for bots and guests). */
+	TMap<int32, FString> ProfileIds;
 };

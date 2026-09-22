@@ -8,6 +8,7 @@
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
 #include "Core/CSModeSettings.h"
+#include "Account/CSAccountSubsystem.h"
 #include "Multiplayer/CSSessionSubsystem.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
@@ -269,6 +270,7 @@ void ACSGameMode::UpdateMatchFlow()
 			GS->SetLossStreak(ECSTeam::Bravo, 0);
 			GS->SetMatchPhase(ECSMatchPhase::InProgress);
 			Director->ResetForNewMatch();
+			MatchStartedUtc = FDateTime::UtcNow();
 
 			if (Rules.bRounds)
 			{
@@ -317,6 +319,7 @@ void ACSGameMode::FinishMatch(ECSTeam WinnerTeam, int32 WinnerPlayerId)
 	GS->SetPhaseEndTime(UCSAuthority::GetNetworkTimeSeconds(this) + PostMatchSeconds);
 	GS->SetMatchPhase(ECSMatchPhase::PostMatch);
 	UE_LOG(LogCS, Log, TEXT("Match over. Winner: team %d / player %d."), static_cast<int32>(WinnerTeam), WinnerPlayerId);
+	ReportMatchToBackend(WinnerTeam, WinnerPlayerId);
 }
 
 void ACSGameMode::UpdateScoreLimit(const FCSModeRules& Rules)
@@ -518,4 +521,58 @@ void ACSGameMode::ConfigureModeIfNeeded()
 		Mode = Session->GetMatchMode();
 	}
 	GS->ConfigureMode(Mode);
+}
+
+void ACSGameMode::ReportMatchToBackend(ECSTeam WinnerTeam, int32 WinnerPlayerId)
+{
+	// Authority only, and only once per match: the Master Client is the peer
+	// that knows every record. Players without an account (and bots) are left
+	// out; the backend checks the reporter played and clamps the numbers.
+	CS_AUTHORITY_ONLY(this);
+
+	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const ACSGameState* GS = GetCSGameState();
+	if (!Account || !Account->IsReady() || !Director || !GS || MatchStartedUtc == FDateTime())
+	{
+		return;
+	}
+
+	TArray<FCSMatchReportPlayer> Players;
+	for (const FCSPlayerCombatRecord& Record : Director->GetAllRecords())
+	{
+		const FString ProfileId = Director->GetProfileIdFor(Record.PlayerId);
+		if (ProfileId.IsEmpty())
+		{
+			continue; // a bot, or a player who is not signed in
+		}
+		FCSMatchReportPlayer& Player = Players.AddDefaulted_GetRef();
+		Player.ProfileId = ProfileId;
+		Player.Team = static_cast<int32>(Record.Team);
+		Player.Kills = Record.Kills;
+		Player.Deaths = Record.Deaths;
+		Player.Headshots = Record.Headshots;
+		Player.Damage = Record.DamageDealt;
+		Player.Money = Record.Money;
+		Player.bWon = GS->GetRules().bTeams
+			? (WinnerTeam != ECSTeam::None && Record.GetTeam() == WinnerTeam)
+			: (WinnerPlayerId == Record.PlayerId);
+	}
+	if (Players.Num() == 0)
+	{
+		return;
+	}
+
+	const UCSSessionSubsystem* Session = GetGameInstance()->GetSubsystem<UCSSessionSubsystem>();
+	FString MapName = GetWorld()->GetMapName();
+	MapName.RemoveFromStart(GetWorld()->StreamingLevelsPrefix);
+	MapName.RemoveFromStart(TEXT("Lvl_"));
+
+	const FString Room = Session ? Session->GetRoomName() : FString();
+	Account->ReportMatch(UCSModeSettings::ModeTag(GS->GetGameMode()), MapName,
+		Room.IsEmpty() ? FString::Printf(TEXT("offline-%s"), *MatchStartedUtc.ToString()) : Room,
+		MatchStartedUtc, static_cast<int32>(WinnerTeam), GS->GetRoundNumber(), Players);
+
+	UE_LOG(LogCS, Log, TEXT("Match report sent for %d signed-in player(s)."), Players.Num());
+	MatchStartedUtc = FDateTime();
 }

@@ -222,7 +222,19 @@ FString ACSHUD::PlayerLabel(int32 PlayerId) const
 	{
 		return TEXT("You");
 	}
-	return CSBots::IsBotId(PlayerId) ? ACSBotManager::GetBotName(PlayerId) : FString::Printf(TEXT("Player %d"), PlayerId);
+	if (CSBots::IsBotId(PlayerId))
+	{
+		return ACSBotManager::GetBotName(PlayerId);
+	}
+	// v1.2: the name from their account, once their pawn has told us.
+	if (const ACSCharacter* Pawn = ACSMatchDirector::FindPawnForPlayer(this, PlayerId))
+	{
+		if (!Pawn->GetDisplayNickname().IsEmpty())
+		{
+			return Pawn->GetDisplayNickname();
+		}
+	}
+	return FString::Printf(TEXT("Player %d"), PlayerId);
 }
 
 FLinearColor ACSHUD::PlayerColor(int32 PlayerId) const
