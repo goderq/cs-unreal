@@ -18,6 +18,7 @@
 #include "TimerManager.h"
 #include "UI/SCSLoginScreen.h"
 #include "UI/SCSMainMenu.h"
+#include "UI/SCSProfilePanel.h"
 #include "Account/CSAccountSubsystem.h"
 #include "UnrealClient.h"
 
@@ -234,6 +235,57 @@ void ACSMenuPlayerController::MenuTestStep()
 			Session && Session->IsBusy() ? TEXT("REQUEST OK") : TEXT("REQUEST BROKEN"));
 		return;
 	}
+	// -cstestmenu=rename:NAME - the profile page: save a new name, then check
+	// the account came back with it and the leaderboard shows it.
+	if (MenuTestAction.StartsWith(TEXT("rename:")))
+	{
+		const FString Wanted = MenuTestAction.Mid(7);
+		const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+		if (MenuTestStage == 0)
+		{
+			Menu->ShowPage(SCSMainMenu::EPage::Profile);
+			MenuTestStage = 1;
+			return;
+		}
+		if (MenuTestStage == 1)
+		{
+			if (!Account || !Account->IsReady())
+			{
+				// Still signing in; the rename needs a token.
+				MenuTestWaited += 1.f;
+				if (MenuTestWaited >= 60.f)
+				{
+					UE_LOG(LogCS, Log, TEXT("RENAME TEST RESULT: never signed in -> RENAME BROKEN"));
+					GetWorldTimerManager().ClearTimer(MenuTestTimer);
+				}
+				return;
+			}
+			if (const TSharedPtr<SCSProfilePanel> Panel = Menu->GetProfilePanel())
+			{
+				Panel->RequestRename(Wanted);
+			}
+			MenuTestStage = 2;
+			MenuTestWaited = 0.f;
+			return;
+		}
+
+		MenuTestWaited += 1.f;
+		if (Account && Account->GetNickname() == Wanted)
+		{
+			Screenshot(TEXT("menu_profile_renamed"));
+			UE_LOG(LogCS, Log, TEXT("RENAME TEST RESULT: account is now '%s' after %.0f s -> RENAME OK"),
+				*Account->GetNickname(), MenuTestWaited);
+			GetWorldTimerManager().ClearTimer(MenuTestTimer);
+		}
+		else if (MenuTestWaited >= 20.f)
+		{
+			UE_LOG(LogCS, Log, TEXT("RENAME TEST RESULT: still '%s', wanted '%s' -> RENAME BROKEN"),
+				Account ? *Account->GetNickname() : TEXT("?"), *Wanted);
+			GetWorldTimerManager().ClearTimer(MenuTestTimer);
+		}
+		return;
+	}
+
 	if (MenuTestAction.StartsWith(TEXT("browsejoin:")))
 	{
 		const FString Wanted = MenuTestAction.Mid(11);
@@ -269,9 +321,10 @@ void ACSMenuPlayerController::MenuTestStep()
 	// Default: tour the pages and screenshot each.
 	static const SCSMainMenu::EPage Tour[] = {
 		SCSMainMenu::EPage::Home, SCSMainMenu::EPage::Play, SCSMainMenu::EPage::Create, SCSMainMenu::EPage::Join,
-		SCSMainMenu::EPage::Browser, SCSMainMenu::EPage::Inventory, SCSMainMenu::EPage::Settings };
+		SCSMainMenu::EPage::Browser, SCSMainMenu::EPage::Inventory, SCSMainMenu::EPage::Settings,
+		SCSMainMenu::EPage::Profile };
 	static const TCHAR* Names[] = { TEXT("menu_home"), TEXT("menu_play"), TEXT("menu_create"), TEXT("menu_join"),
-		TEXT("menu_browser"), TEXT("menu_inventory"), TEXT("menu_settings") };
+		TEXT("menu_browser"), TEXT("menu_inventory"), TEXT("menu_settings"), TEXT("menu_profile") };
 
 	const int32 Page = MenuTestStage / 2;
 	if (Page >= UE_ARRAY_COUNT(Tour))
@@ -284,11 +337,15 @@ void ACSMenuPlayerController::MenuTestStep()
 	if (MenuTestStage % 2 == 0)
 	{
 		Menu->ShowPage(Tour[Page]);
+		MenuTestWaited = 0.f;
 	}
 	else
 	{
-		// The browser needs a few seconds to reach the lobby before its shot.
-		if (Tour[Page] == SCSMainMenu::EPage::Browser && MenuTestWaited < 6.f)
+		// Two pages are not ready the instant they are shown: the browser has
+		// to reach the lobby, and the profile is waiting for the leaderboard.
+		const float NeedsWait = Tour[Page] == SCSMainMenu::EPage::Browser ? 6.f
+			: (Tour[Page] == SCSMainMenu::EPage::Profile ? 3.f : 0.f);
+		if (MenuTestWaited < NeedsWait)
 		{
 			MenuTestWaited += 1.f;
 			return;
