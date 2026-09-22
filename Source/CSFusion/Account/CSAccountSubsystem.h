@@ -88,6 +88,13 @@ public:
 	/** Signing in is required to play unless -noaccount is on the command line. */
 	bool IsSignInRequired() const;
 
+	/**
+	 * One line for the log: did the EOS plugin come up with our credentials,
+	 * and is the account backend configured. Touching it starts the EOS
+	 * platform, so it is a real check of the Epic ids - not just of the ini.
+	 */
+	static FString DescribeBackend();
+
 	const FString& GetNickname() const { return Nickname; }
 	const FString& GetProfileId() const { return ProfileId; }
 	const FString& GetEpicDisplayName() const { return EpicDisplayName; }

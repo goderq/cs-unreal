@@ -77,6 +77,7 @@ void ACSMenuPlayerController::ShowLoginScreen()
 		{
 			const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
 			Screenshot(TEXT("login"));
+			UE_LOG(LogCS, Log, TEXT("LOGIN TEST BACKEND: %s"), *UCSAccountSubsystem::DescribeBackend());
 			UE_LOG(LogCS, Log, TEXT("LOGIN TEST RESULT: screen up, account state %s, error '%s' -> %s"),
 				*UEnum::GetValueAsString(Account ? Account->GetState() : ECSAccountState::SignedOut),
 				Account ? *Account->GetLastError() : TEXT(""),

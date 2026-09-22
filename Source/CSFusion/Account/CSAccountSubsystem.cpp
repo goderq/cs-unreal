@@ -88,6 +88,20 @@ bool UCSAccountSubsystem::IsSignInRequired() const
 	return !FParse::Param(FCommandLine::Get(), TEXT("noaccount"));
 }
 
+FString UCSAccountSubsystem::DescribeBackend()
+{
+	const FCSBackendConfig& Config = FCSBackendConfig::Get();
+	const IOnlineSubsystem* OSS = IOnlineSubsystem::Get(EOSSubsystemName);
+	const IOnlineIdentityPtr Identity = GetEpicIdentity();
+	return FString::Printf(
+		TEXT("EOS subsystem %s, identity interface %s, keys %s (product %s); Supabase %s"),
+		OSS ? TEXT("up") : TEXT("MISSING"),
+		Identity.IsValid() ? TEXT("up") : TEXT("MISSING"),
+		Config.HasEOS() ? TEXT("set") : TEXT("MISSING"),
+		Config.ProductId.IsEmpty() ? TEXT("-") : *Config.ProductId,
+		Config.HasSupabase() ? TEXT("set") : TEXT("MISSING"));
+}
+
 void UCSAccountSubsystem::SetState(ECSAccountState NewState)
 {
 	if (State != NewState)
