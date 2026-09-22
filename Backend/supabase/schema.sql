@@ -221,3 +221,31 @@ end;
 $$;
 
 revoke all on function public.apply_match_result(jsonb) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------
+-- Grants
+--
+-- Row level security decides which rows; these grants decide which tables the
+-- roles may touch at all. A new project does not hand them out for tables
+-- created here, and without them even the service key gets
+-- "permission denied for table profiles".
+--
+--   service_role   the Edge Functions: full access, and RLS does not apply
+--   authenticated  a signed-in player: reads everything, renames only itself
+--                  (the policies above still limit it to its own row)
+--   anon           a player who has not signed in yet: read only
+-- ---------------------------------------------------------------------------
+grant usage on schema public to anon, authenticated, service_role;
+
+grant select on public.profiles, public.player_stats, public.matches,
+                public.match_players, public.leaderboard
+    to anon, authenticated;
+
+grant update on public.profiles to authenticated;
+
+grant select, insert, update, delete on public.profiles, public.player_stats,
+                public.matches, public.match_players
+    to service_role;
+grant select on public.leaderboard to service_role;
+
+grant execute on function public.apply_match_result(jsonb) to service_role;

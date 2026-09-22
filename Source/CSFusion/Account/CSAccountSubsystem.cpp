@@ -66,6 +66,16 @@ void UCSAccountSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 		State = ECSAccountState::NotConfigured;
 		LastError = TEXT("Config/Backend.ini is missing or incomplete (see docs/ACCOUNTS.md).");
 		UE_LOG(LogCS, Warning, TEXT("Accounts: %s"), *LastError);
+		return;
+	}
+
+	// Sign in as the game starts rather than waiting for the login screen: a
+	// build launched straight into a map (a test, or -mode= on the command
+	// line) would otherwise play the whole match signed out, and the match
+	// would never be recorded. The screen just watches the state.
+	if (IsSignInRequired())
+	{
+		SignIn();
 	}
 }
 

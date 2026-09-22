@@ -343,3 +343,29 @@ Shipping, два клиента: одна комната (`2 PLAYERS`, тайм�
   контроллере. Таймеры очищаются в `EndPlay`.
 - Тест убийства теперь подходит к жертве: в DM спавн выбирается подальше от
   врагов, и жертва бывает за стеной.
+
+## v1.2: аккаунты (EOS + Supabase), 22.09.2026
+
+Живая проверка на настоящем проекте Supabase и настоящем продукте Epic.
+
+| Шаг | Результат |
+| --- | --- |
+| Схема базы | `Success. No rows returned`; созданы `profiles`, `player_stats`, `matches`, `match_players`, `leaderboard` |
+| Функция `eos-login` без секретов | `401 {"error":"EOS_CLIENT_ID / EOS_CLIENT_SECRET are not set"}` |
+| Она же с секретами, поддельный токен | `401 {"error":"token is not active"}` — Epic ответил нашему серверу, значит Client ID и Secret рабочие |
+| Вход в игре | `Accounts: Epic login OK (Goder1229)` → `signed in as 'Goder1229' (0 kills, 0 matches)` |
+| Профиль в базе | строка в `profiles` с `epic_account_id`, ник `Goder1229` |
+| Отчёт о матче | `Match report sent for 1 signed-in player(s)` → `match recorded for 1 player(s)`; в базе матч `DM@Depot` и `matches = 1` в статистике |
+
+Найдено и исправлено по ходу:
+- **Ключи EOS не доезжали до плагина.** Модуль игры стартует раньше
+  `OnlineSubsystemEOS`, объекта настроек ещё нет. Теперь значения
+  применяются, когда плагин загрузился.
+- **Адрес базы обрывался на `https:`.** Парсер конфигов движка считает `//`
+  началом комментария, поэтому `Backend.ini` читается своим разбором.
+- **`SUPABASE_JWT_SECRET` создать нельзя** — приставку `SUPABASE_` Supabase
+  резервирует за собой. Секрет называется `CS_JWT_SECRET`.
+- **`permission denied for table profiles`.** Новый проект не выдаёт ролям
+  прав на созданные таблицы; нужные `grant` добавлены в `schema.sql`.
+- **Матч, начатый мимо меню, не записывался**: вход выполнялся только с
+  экрана входа. Теперь вход начинается при старте игры.
