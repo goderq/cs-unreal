@@ -5,6 +5,7 @@
 #include "Core/CSLog.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 #include "UObject/UObjectGlobals.h"
 #include "UObject/Class.h"
 
@@ -12,6 +13,7 @@ namespace
 {
 	FCSBackendConfig GConfigValues;
 	bool GLoaded = false;
+	FDelegateHandle GModulesChangedHandle;
 
 	/** Environment first (build machines), then the local ini file. */
 	FString Value(const FConfigFile& File, const TCHAR* Section, const TCHAR* Key, const TCHAR* EnvName)
@@ -30,6 +32,38 @@ namespace
 	FString Mask(const FString& Secret)
 	{
 		return Secret.IsEmpty() ? TEXT("(not set)") : FString::Printf(TEXT("set, %d chars"), Secret.Len());
+	}
+
+	/**
+	 * Writes the artifact into the in-memory engine config the EOS plugin reads.
+	 * Returns false while the plugin is not loaded yet: its settings object does
+	 * not exist then, so its cached defaults cannot be refreshed.
+	 */
+	bool ApplyEOSArtifact(const FCSBackendConfig& C)
+	{
+		static const TCHAR* EOSSection = TEXT("/Script/OnlineSubsystemEOS.EOSSettings");
+		const FString Artifact = FString::Printf(
+			TEXT("(ArtifactName=\"%s\",ClientId=\"%s\",ClientSecret=\"%s\",ProductId=\"%s\",SandboxId=\"%s\",DeploymentId=\"%s\",ClientEncryptionKey=\"%s\")"),
+			FCSBackendConfig::ArtifactName(), *C.ClientId, *C.ClientSecret, *C.ProductId, *C.SandboxId, *C.DeploymentId, *C.EncryptionKey);
+
+		TArray<FString> Artifacts;
+		Artifacts.Add(Artifact);
+		GConfig->SetArray(EOSSection, TEXT("Artifacts"), Artifacts, GEngineIni);
+		GConfig->SetString(EOSSection, TEXT("DefaultArtifactName"), FCSBackendConfig::ArtifactName(), GEngineIni);
+
+		// The settings object caches its config in the class default object, so
+		// it has to re-read it. Done by name to avoid a compile-time dependency
+		// on the plugin module.
+		if (UClass* SettingsClass = FindObject<UClass>(nullptr, TEXT("/Script/OnlineSubsystemEOS.EOSSettings")))
+		{
+			if (UObject* Settings = SettingsClass->GetDefaultObject())
+			{
+				Settings->ReloadConfig();
+				UE_LOG(LogCS, Log, TEXT("EOS artifact '%s' applied to the engine config."), FCSBackendConfig::ArtifactName());
+				return true;
+			}
+		}
+		return false;
 	}
 }
 
@@ -77,32 +111,32 @@ void FCSBackendConfig::LoadAndApply()
 	}
 
 	// The EOS plugin reads its artifact list from the engine config at
-	// runtime (UEOSSettings, section below). Writing it here keeps the keys
-	// out of the repository: GConfig is the in-memory copy, and nothing is
-	// flushed to disk.
-	static const TCHAR* EOSSection = TEXT("/Script/OnlineSubsystemEOS.EOSSettings");
-	const FString Artifact = FString::Printf(
-		TEXT("(ArtifactName=\"%s\",ClientId=\"%s\",ClientSecret=\"%s\",ProductId=\"%s\",SandboxId=\"%s\",DeploymentId=\"%s\",ClientEncryptionKey=\"%s\")"),
-		ArtifactName(), *C.ClientId, *C.ClientSecret, *C.ProductId, *C.SandboxId, *C.DeploymentId, *C.EncryptionKey);
-
-	TArray<FString> Artifacts;
-	Artifacts.Add(Artifact);
-	GConfig->SetArray(EOSSection, TEXT("Artifacts"), Artifacts, GEngineIni);
-	GConfig->SetString(EOSSection, TEXT("DefaultArtifactName"), ArtifactName(), GEngineIni);
-
-	// The settings object caches its config in the class default object, so it
-	// has to re-read it. Done by name to avoid a compile-time dependency on
-	// the plugin module.
-	if (UClass* SettingsClass = FindObject<UClass>(nullptr, TEXT("/Script/OnlineSubsystemEOS.EOSSettings")))
+	// runtime (UEOSSettings). Writing it here keeps the keys out of the
+	// repository: GConfig is the in-memory copy, and nothing is flushed to
+	// disk.
+	if (ApplyEOSArtifact(C))
 	{
-		if (UObject* Settings = SettingsClass->GetDefaultObject())
-		{
-			Settings->ReloadConfig();
-			UE_LOG(LogCS, Log, TEXT("EOS artifact '%s' applied to the engine config."), ArtifactName());
-		}
+		return;
 	}
-	else
+
+	// This game module starts before the EOS plugin is loaded, so the settings
+	// object does not exist yet. The values are already in GConfig; re-apply
+	// as soon as the plugin arrives so its cached defaults are refreshed too.
+	if (!GModulesChangedHandle.IsValid())
 	{
-		UE_LOG(LogCS, Warning, TEXT("OnlineSubsystemEOS is not loaded; EOS settings were not applied."));
+		GModulesChangedHandle = FModuleManager::Get().OnModulesChanged().AddLambda(
+			[](FName ModuleName, EModuleChangeReason Reason)
+			{
+				if (Reason != EModuleChangeReason::ModuleLoaded || ModuleName != TEXT("OnlineSubsystemEOS"))
+				{
+					return;
+				}
+				if (ApplyEOSArtifact(GConfigValues))
+				{
+					FModuleManager::Get().OnModulesChanged().Remove(GModulesChangedHandle);
+					GModulesChangedHandle.Reset();
+				}
+			});
 	}
+	UE_LOG(LogCS, Log, TEXT("EOS settings are staged; they apply once OnlineSubsystemEOS loads."));
 }

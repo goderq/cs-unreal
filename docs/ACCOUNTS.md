@@ -45,8 +45,10 @@
    - в **Brand Settings** заполни название и политику конфиденциальности —
      без этого вход выдаёт ошибку у чужих аккаунтов;
    - в **Application → Clients** привяжи созданный клиент.
-6. **Product Settings → Encryption**: сгенерируй ключ (64 шестнадцатеричных
-   символа). Он нужен SDK, даже если облачные сохранения не используются.
+6. **EncryptionKey в портале искать не надо** — Epic его не выдаёт. Это любые
+   64 шестнадцатеричных символа, которые ты придумываешь сам: ими SDK шифрует
+   облачные сохранения. Сгенерировать: `openssl rand -hex 32`. Менять ключ
+   после первых сохранений нельзя — старые данные станут нечитаемыми.
 
 Всё вместе даст шесть значений: ProductId, SandboxId, DeploymentId, ClientId,
 ClientSecret, EncryptionKey.
@@ -59,7 +61,14 @@ ClientSecret, EncryptionKey.
    `Backend/supabase/schema.sql` и выполни. Создадутся таблицы `profiles`,
    `player_stats`, `matches`, `match_players`, представление `leaderboard`,
    политики доступа и функция начисления статистики.
-2. Установи Supabase CLI и выложи функции (из корня проекта):
+2. Выложи обе функции из `Backend/supabase/functions/`. Проще всего прямо в
+   дашборде: **Edge Functions → Deploy a new function → Via Editor**, вставить
+   код, задать имя (`eos-login`, затем `report-match`) и нажать Deploy.
+   Переключатель **Verify JWT with legacy secret** оставь включённым: игра
+   всегда присылает в `Authorization` либо anon-ключ, либо свой токен, и оба
+   подписаны старым секретом.
+
+   Через CLI то же самое (из корня проекта):
 
    ```bash
    supabase login
@@ -78,10 +87,20 @@ ClientSecret, EncryptionKey.
    ```
 
    - `EOS_CLIENT_ID` и `EOS_CLIENT_SECRET` — из Epic Dev Portal (шаг 1.4);
-   - `SUPABASE_JWT_SECRET` — **Project Settings → API → JWT Secret**;
+   - `SUPABASE_JWT_SECRET` — **Project Settings → JWT Keys → Legacy JWT
+     Secret**;
    - `SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY` Supabase подставляет сам.
-4. Из **Project Settings → API** скопируй **Project URL** и **anon public**
-   ключ — они пойдут в игру. Ключ `service_role` в игру не попадает никогда.
+4. **Project Settings → General** даст Project URL, а **API Keys → Legacy
+   anon, service_role API keys** — ключ `anon public`. Оба идут в игру. Ключ
+   `service_role` в игру не попадает никогда.
+
+> Нужен именно **старый** `anon`-ключ, а не новый `publishable`: игра сама
+> подписывает свои токены старым JWT-секретом (HS256), и функции проверяют их
+> тем же секретом. В новых проектах Supabase текущий ключ подписи — ECC, а
+> старый секрет числится предыдущим и пока используется для проверки. Если
+> когда-нибудь отключить старые ключи (**Disable JWT-based API keys**), вход
+> сломается, и `eos-login` придётся переводить на выдачу настоящей сессии
+> Supabase Auth.
 
 ---
 
