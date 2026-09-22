@@ -10,7 +10,7 @@
 //
 // Deploy:
 //   supabase functions deploy report-match --no-verify-jwt
-// Secrets: SUPABASE_JWT_SECRET (plus the automatic SUPABASE_URL and
+// Secrets: CS_JWT_SECRET, the legacy JWT secret (plus the automatic SUPABASE_URL and
 // SUPABASE_SERVICE_ROLE_KEY).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -33,7 +33,7 @@ async function callerProfileId(request: Request): Promise<string> {
         throw new Error("missing login token");
     }
     const key = await crypto.subtle.importKey(
-        "raw", new TextEncoder().encode(Deno.env.get("SUPABASE_JWT_SECRET")!),
+        "raw", new TextEncoder().encode(Deno.env.get("CS_JWT_SECRET")!),
         { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"],
     );
     const payload = await verify(token, key) as Record<string, unknown>;

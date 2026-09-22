@@ -83,12 +83,13 @@ ClientSecret, EncryptionKey.
 
    ```bash
    supabase secrets set EOS_CLIENT_ID=... EOS_CLIENT_SECRET=... \
-       SUPABASE_JWT_SECRET=...
+       CS_JWT_SECRET=...
    ```
 
    - `EOS_CLIENT_ID` и `EOS_CLIENT_SECRET` — из Epic Dev Portal (шаг 1.4);
-   - `SUPABASE_JWT_SECRET` — **Project Settings → JWT Keys → Legacy JWT
-     Secret**;
+   - `CS_JWT_SECRET` — **Project Settings → JWT Keys → Legacy JWT Secret**
+     (имя без приставки `SUPABASE_`: её Supabase резервирует за собой и чужие
+     секреты с ней не принимает);
    - `SUPABASE_URL` и `SUPABASE_SERVICE_ROLE_KEY` Supabase подставляет сам.
 4. **Project Settings → General** даст Project URL, а **API Keys → Legacy
    anon, service_role API keys** — ключ `anon public`. Оба идут в игру. Ключ

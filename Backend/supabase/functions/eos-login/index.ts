@@ -10,7 +10,9 @@
 //   supabase functions deploy eos-login --no-verify-jwt
 // Secrets (Dashboard -> Edge Functions -> Secrets, or `supabase secrets set`):
 //   EOS_CLIENT_ID, EOS_CLIENT_SECRET   from the Epic Dev Portal client
-//   SUPABASE_JWT_SECRET                Project Settings -> API -> JWT Secret
+//   CS_JWT_SECRET                      Settings -> JWT Keys -> Legacy JWT Secret.
+//                                      Supabase reserves the SUPABASE_ prefix
+//                                      for its own secrets, hence the name.
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY are provided automatically.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -122,7 +124,7 @@ Deno.serve(async (request) => {
             .maybeSingle();
 
         // Short-lived Supabase JWT: the game talks to PostgREST as this profile.
-        const secret = Deno.env.get("SUPABASE_JWT_SECRET")!;
+        const secret = Deno.env.get("CS_JWT_SECRET")!;
         const key = await crypto.subtle.importKey(
             "raw", new TextEncoder().encode(secret),
             { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"],
