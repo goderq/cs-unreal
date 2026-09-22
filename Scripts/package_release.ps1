@@ -77,7 +77,12 @@ $backend = Join-Path $Root "Config\Backend.ini"
 if ($NoKeys) {
     Write-Host "Account keys left out (-NoKeys): the build cannot sign in." -ForegroundColor Yellow
 } elseif (Test-Path $backend) {
-    Copy-Item $backend (Join-Path $staged "CSFusion\Config\Backend.ini") -Force
+    # Config\ is cooked into the pak, so the staged folder has no such directory
+    # yet; a loose file there is still read at runtime (the pak file system
+    # falls through to the real one).
+    $stagedConfig = Join-Path $staged "CSFusion\Config"
+    New-Item -ItemType Directory -Force $stagedConfig | Out-Null
+    Copy-Item $backend (Join-Path $stagedConfig "Backend.ini") -Force
     Write-Host "Account keys copied into the build (Config\Backend.ini)." -ForegroundColor Yellow
 } else {
     Write-Host "No Config\Backend.ini: the build cannot sign in (see docs/ACCOUNTS.md)." -ForegroundColor Yellow
