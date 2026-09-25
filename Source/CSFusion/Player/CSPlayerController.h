@@ -110,6 +110,12 @@ protected:
 	UFUNCTION(Exec)
 	void CSTestCheat();
 	FTimerHandle TestCheatTimer;
+
+	/** Phase 2 RPC-sender self-test on the non-master client, enabled with -cstestspoof (A1). */
+	void CSTestSpoof();
+	FTimerHandle TestSpoofTimer;
+	int32 SpoofVictimId = 0;
+	int32 SpoofVictimSlot = -1;
 	int32 CheatRoundsBefore = 0;
 	TWeakObjectPtr<class ACSWorldPickup> CheatFarPickup;
 

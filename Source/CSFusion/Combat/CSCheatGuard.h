@@ -46,8 +46,14 @@ enum class ECSCheatReason : uint8
 	None,
 	Speed,
 	Teleport,
-	Flood
+	Flood,
+	/** An RPC sent by someone other than the owner / Master Client (A1). */
+	ForgedRpc,
+	/** A request with NaN, infinite or out-of-range values (B9). */
+	BadInput
 };
+
+CSFUSION_API const TCHAR* LexToString(ECSCheatReason Reason);
 
 class CSFUSION_API FCSCheatGuard
 {
@@ -59,6 +65,9 @@ public:
 	bool AllowRequest(int32 PlayerId, ECSRequestKind Kind, double Now);
 
 	bool IsSuspended(int32 PlayerId, double Now) const;
+
+	/** Authority: a violation found outside the guard (forged RPC, bad input). Weight 3 suspends at once. */
+	void ReportViolation(int32 PlayerId, ECSCheatReason Reason, double Now, float Weight, const FString& Detail);
 
 	/** Forget a player (left the match). */
 	void Forget(int32 PlayerId);

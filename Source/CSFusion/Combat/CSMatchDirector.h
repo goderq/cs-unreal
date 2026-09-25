@@ -418,6 +418,9 @@ public:
 	/** Authority: rate limit + suspension check for one player request. */
 	bool GuardRequest(int32 PlayerId, ECSRequestKind Kind);
 
+	/** Authority: a violation found by a handler (forged RPC, bad input) - a strike against PlayerId. */
+	void ReportViolation(int32 PlayerId, ECSCheatReason Reason, float Weight, const FString& Detail);
+
 	/** Authority-local cheat state, for logs and tests. */
 	const FCSCheatGuard& GetCheatGuard() const { return CheatGuard; }
 
@@ -475,6 +478,13 @@ private:
 	FString CombatWeaponOverride;
 	int32 NextGrenadeSerial = 1;
 	TMap<int32, double> LastThrowTime;
+	/**
+	 * Serials of the grenades this authority launched itself (A1). Only these
+	 * explode with effect here; a grenade that reached this peer any other way
+	 * is only a picture. A new Master Client starts empty, so a grenade in the
+	 * air during a host migration goes off harmlessly.
+	 */
+	TSet<int32> LaunchedGrenades;
 	TMap<int32, double> LastMeleeTime;
 	TMap<int32, double> LastAmmoBuyTime;
 	/** Authority: bots blinded by a flashbang, until this network time. */

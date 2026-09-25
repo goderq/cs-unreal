@@ -166,7 +166,9 @@ foreach ($s in $Suites) {
 $NetScenarios = @(
     @{ Name = "netshoot"; A = "-room={ROOM} -cstestinput -cstestshoot -LogCmds=`"LogCSCombat Verbose`""; B = "-room={ROOM} -cstestinput -cstestshoot";
        DelayB = 5; Done = "B:SHOOT TEST RESULT"; Timeout = 90;
-       Expect = @("A:SHOOT TEST RESULT|master: shot at the other player", "B:NOW the authority|__absent__") },
+       Expect = @("A:SHOOT TEST RESULT|master: shot at the other player", "B:NOW the authority|__absent__",
+                  # Phase 2: honest RPCs are never refused by the sender check.
+                  "A:RPC Rpc\w+ on .* refused|__absent__", "B:RPC Rpc\w+ on .* refused|__absent__") },
     @{ Name = "netcontest"; A = "-room={ROOM} -cstestcontest"; B = "-room={ROOM} -cstestcontest";
        DelayB = 3; Done = "A:CONTEST TEST RESULT"; Timeout = 90;
        Expect = @("A:CONTEST TEST RESULT: player \d+ WON|B:CONTEST TEST RESULT: player \d+ WON|exactly one player won the contested pickup") },
@@ -180,6 +182,17 @@ $NetScenarios = @(
     @{ Name = "netmenu"; A = "-cstestmenu=create:{ROOM} -cstestui"; B = "-cstestmenu=browsejoin:{ROOM}"; Menu = $true;
        DelayB = 15; Done = "B:-> ECSSessionState::InRoom|BROWSER BROKEN"; Timeout = 120;
        Expect = @("B:-> ECSSessionState::InRoom|B joined A's room from the browser") },
+    # Phase 2 (A1): B sends RPCs as a modified client would; A (Master Client) must refuse them.
+    @{ Name = "netspoof"; A = "-room={ROOM}"; B = "-room={ROOM} -cstestspoof";
+       DelayB = 3; Done = "B:SPOOF TEST: done|SPOOF TEST RESULT: .*MISSING"; Timeout = 120;
+       Expect = @("A:RPC RpcRequestSlot on .* refused: sent by player|master refused the slot request on its pawn",
+                  "A:RPC RpcGrenadeExploded on .* refused: sent by player|master refused the forged flashbang",
+                  "B:RPC RpcGrenadeExploded on .* refused|B refused its own forged flashbang") },
+    # Phase 2 (A2): B flags its own pawn as a bot; A shoots it - the damage must still reach player B.
+    @{ Name = "netbotflag"; A = "-room={ROOM} -cstestinput -cstestshoot -cstestexpectbotflag"; B = "-room={ROOM} -cstestbotflag";
+       DelayB = 3; Done = "A:SHOOT TEST RESULT"; Timeout = 120;
+       Expect = @("B:BOTFLAG TEST: my pawn now claims to be bot 4242|B flagged its pawn as a bot",
+                  "A:SHOOT TEST RESULT: victim [1-9] hp 100 -> \d+ -> DAMAGE OK|damage reached the real player, not bot 4242") },
     @{ Name = "netcheat"; A = "-room={ROOM}"; B = "-room={ROOM} -cstestcheat";
        DelayB = 20; Done = "B:suspension lifted"; Timeout = 120;
        Expect = @("A:Cheat guard: player \d+ SUSPENDED|master suspended the cheating client") }

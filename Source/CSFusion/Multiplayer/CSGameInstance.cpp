@@ -6,6 +6,7 @@
 #include UE_INLINE_GENERATED_CPP_BY_NAME(CSGameInstance.fusion)
 
 #include "Core/CSAuthority.h"
+#include "Core/CSRpcGuard.h"
 #include "Core/CSLog.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
@@ -139,6 +140,10 @@ void UCSGameInstance::BroadcastAnnouncement(const FString& Message)
 
 void UCSGameInstance::RpcAnnouncement_Receive(FString& Message)
 {
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcAnnouncement")))
+	{
+		return;
+	}
 	UE_LOG(LogCSNet, Log, TEXT("[Announcement] %s"), *Message);
 	OnAnnouncement.Broadcast(Message);
 }

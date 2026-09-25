@@ -28,7 +28,7 @@ void ACSCharacter::InitAsBot(int32 InBotId)
 
 void ACSCharacter::BotFire(const FVector& Origin, const FVector& Direction)
 {
-	if (!bIsBot || !UCSAuthority::IsGameAuthority(this))
+	if (!IsBot() || !UCSAuthority::IsGameAuthority(this))
 	{
 		return;
 	}
@@ -39,7 +39,7 @@ void ACSCharacter::BotFire(const FVector& Origin, const FVector& Direction)
 
 void ACSCharacter::BotReload()
 {
-	if (!bIsBot || !UCSAuthority::IsGameAuthority(this))
+	if (!IsBot() || !UCSAuthority::IsGameAuthority(this))
 	{
 		return;
 	}
@@ -49,7 +49,7 @@ void ACSCharacter::BotReload()
 
 void ACSCharacter::BotPickup(ACSWorldPickup* Pickup)
 {
-	if (!bIsBot || !Pickup || !UCSAuthority::IsGameAuthority(this))
+	if (!IsBot() || !Pickup || !UCSAuthority::IsGameAuthority(this))
 	{
 		return;
 	}
@@ -59,7 +59,7 @@ void ACSCharacter::BotPickup(ACSWorldPickup* Pickup)
 
 void ACSCharacter::BotSelectSlot(int32 Slot)
 {
-	if (!bIsBot || !UCSAuthority::IsGameAuthority(this))
+	if (!IsBot() || !UCSAuthority::IsGameAuthority(this))
 	{
 		return;
 	}
@@ -70,7 +70,7 @@ void ACSCharacter::BotSelectSlot(int32 Slot)
 bool ACSCharacter::PassesCheatGuard(ECSRequestKind Kind) const
 {
 	// Bots run on the authority itself; only remote requests are policed.
-	if (bIsBot)
+	if (IsBot())
 	{
 		return true;
 	}
@@ -80,7 +80,7 @@ bool ACSCharacter::PassesCheatGuard(ECSRequestKind Kind) const
 
 void ACSCharacter::BotMelee(const FVector& Origin, const FVector& Direction, bool bHeavy)
 {
-	if (!bIsBot || !UCSAuthority::IsGameAuthority(this))
+	if (!IsBot() || !UCSAuthority::IsGameAuthority(this))
 	{
 		return;
 	}
@@ -90,7 +90,7 @@ void ACSCharacter::BotMelee(const FVector& Origin, const FVector& Direction, boo
 
 void ACSCharacter::BotBuyAmmo(ACSAmmoMachine* Machine)
 {
-	if (!bIsBot || !Machine || !UCSAuthority::IsGameAuthority(this))
+	if (!IsBot() || !Machine || !UCSAuthority::IsGameAuthority(this))
 	{
 		return;
 	}

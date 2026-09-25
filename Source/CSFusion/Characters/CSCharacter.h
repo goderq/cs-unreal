@@ -448,7 +448,7 @@ protected:
 	bool bBotAuthorityCall = false;
 
 	/** Handlers refuse bots unless the call came through a Bot* function. */
-	bool RefuseBotRpc() const { return bIsBot && !bBotAuthorityCall; }
+	bool RefuseBotRpc() const { return IsBot() && !bBotAuthorityCall; }
 
 	/** Authority: rate limit and suspension check for a player's request (Stage 8). */
 	bool PassesCheatGuard(ECSRequestKind Kind) const;
@@ -526,7 +526,22 @@ public:
 	/** Authority, before FinishSpawning: turn this pawn into bot BotId. */
 	void InitAsBot(int32 InBotId);
 
-	bool IsBot() const { return bIsBot; }
+	/**
+	 * Is this pawn a bot? bIsBot and BotId are replicated fields written by
+	 * the pawn's owner (A2), so for the authority a pawn is a bot only if the
+	 * authority itself owns it: bots belong to the Master Client, a player's
+	 * pawn to that player. A client that flags its own pawn as a bot is still
+	 * that player to the authority. Other peers use the flag for display.
+	 */
+	bool IsBot() const;
+
+	/** The replicated flag as written by the pawn's owner - display and tests only. */
+	bool ClaimsToBeBot() const { return bIsBot; }
+
+#if !UE_BUILD_SHIPPING
+	/** Self-test only (-cstestbotflag): flag my own pawn as a bot, as a modified client would (A2). */
+	void DebugForgeBotFlags(int32 FakeBotId) { bIsBot = true; BotId = FakeBotId; }
+#endif
 
 	/** Local human view: the pawn this machine's player looks through. False for bots. */
 	bool IsLocalPlayerView() const { return IsLocallyControlled() && IsPlayerControlled(); }

@@ -7,6 +7,7 @@
 #include "Characters/CSCharacter.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Core/CSAuthority.h"
+#include "Core/CSRpcGuard.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "Core/CSModeSettings.h"
@@ -1601,6 +1602,10 @@ void ACSMatchDirector::FlushCombatEvents()
 
 void ACSMatchDirector::RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation)
 {
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcCombatEvent")))
+	{
+		return;
+	}
 	FCSCombatEvent Event;
 	Event.VictimId = VictimId;
 	Event.InstigatorId = InstigatorId;
@@ -1633,6 +1638,14 @@ bool ACSMatchDirector::GuardRequest(int32 PlayerId, ECSRequestKind Kind)
 		UE_LOG(LogCSAuth, Verbose, TEXT("Request %d from player %d dropped by the cheat guard."), static_cast<int32>(Kind), PlayerId);
 	}
 	return bAllowed;
+}
+
+void ACSMatchDirector::ReportViolation(int32 PlayerId, ECSCheatReason Reason, float Weight, const FString& Detail)
+{
+	if (PlayerId != 0 && UCSAuthority::IsGameAuthority(this))
+	{
+		CheatGuard.ReportViolation(PlayerId, Reason, UCSAuthority::GetNetworkTimeSeconds(this), Weight, Detail);
+	}
 }
 
 void ACSMatchDirector::ResetScores()
@@ -1704,6 +1717,7 @@ bool ACSMatchDirector::TryThrowGrenade(int32 PlayerId, const FVector& Origin, co
 	const FVector Velocity = Dir * Settings->GrenadeThrowSpeed + FVector(0.f, 0.f, 160.f) + PawnVelocity * 0.5f;
 	const FVector Start = Origin + Dir * 30.f - FVector(0.f, 0.f, 8.f);
 	const int32 Serial = NextGrenadeSerial++ + PlayerId * 100000;
+	LaunchedGrenades.Add(Serial);
 
 	UE_LOG(LogCSCombat, Log, TEXT("Player %d threw %s %d."), PlayerId,
 		Type == ECSGrenadeType::Flash ? TEXT("a flashbang") : TEXT("a grenade"), Serial);
@@ -1721,6 +1735,10 @@ bool ACSMatchDirector::TryThrowGrenade(int32 PlayerId, const FVector& Origin, co
 
 void ACSMatchDirector::RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, int32 Type, FVector Origin, FVector Velocity)
 {
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcGrenadeThrown")))
+	{
+		return;
+	}
 	UWorld* World = GetWorld();
 	if (!World || ACSGrenade::FindBySerial(this, Serial))
 	{
@@ -1759,6 +1777,13 @@ void ACSMatchDirector::ExplodeGrenade(ACSGrenade* Grenade)
 	const int32 ThrowerId = Grenade->GetThrowerId();
 	const int32 Serial = Grenade->GetSerial();
 	const int32 Type = static_cast<int32>(Grenade->GetType());
+	if (LaunchedGrenades.Remove(Serial) == 0)
+	{
+		UE_LOG(LogCSSecurity, Warning, TEXT("Grenade %d (thrower %d) was not launched by this authority: removed without effect."),
+			Serial, ThrowerId);
+		Grenade->Destroy();
+		return;
+	}
 
 	if (Grenade->GetType() == ECSGrenadeType::Flash)
 	{
@@ -1891,6 +1916,10 @@ bool ACSMatchDirector::IsBlinded(int32 PlayerId) const
 
 void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, int32 Type, FVector Location)
 {
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcGrenadeExploded")))
+	{
+		return;
+	}
 	if (const ACSGrenade* Done = ACSGrenade::FindBySerial(this, Serial, /*bIncludeExploded*/ true); Done && !ACSGrenade::FindBySerial(this, Serial))
 	{
 		return; // already went off here (the authority's own copy)

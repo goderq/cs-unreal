@@ -170,6 +170,25 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestCheatTimer, this, &ACSPlayerController::CSTestCheat, 12.f, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestspoof")))
+	{
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestSpoof, 12.f, false);
+	}
+#if !UE_BUILD_SHIPPING
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestbotflag")))
+	{
+		// A2: as soon as the pawn exists, flag it as bot 4242 (the owner may write it).
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, [this]()
+		{
+			ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn());
+			if (Mine && !Mine->ClaimsToBeBot())
+			{
+				Mine->DebugForgeBotFlags(4242);
+				UE_LOG(LogCS, Log, TEXT("BOTFLAG TEST: my pawn now claims to be bot 4242."));
+			}
+		}, 0.25f, true);
+	}
+#endif
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestbots")))
 	{
 		// Bots start spawning 3 s after the map loads, one per second.
@@ -615,7 +634,11 @@ void ACSPlayerController::CSTestShoot()
 		}
 	}
 
-	if (TestRetryUntil(Target != nullptr, TestShootTimer, &ACSPlayerController::CSTestShoot, TEXT("the other player")))
+	// Phase 2 (A2): with -cstestexpectbotflag the other client flags its own
+	// pawn as a bot first; the authority must still treat it as that player.
+	const bool bWaitForBotFlag = FParse::Param(FCommandLine::Get(), TEXT("cstestexpectbotflag"));
+	if (TestRetryUntil(Target != nullptr && (!bWaitForBotFlag || Target->ClaimsToBeBot()), TestShootTimer,
+		&ACSPlayerController::CSTestShoot, TEXT("the other player")))
 	{
 		return;
 	}

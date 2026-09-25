@@ -15,6 +15,7 @@
 #include "Engine/StaticMesh.h"
 #include "UObject/ConstructorHelpers.h"
 #include "Core/CSAuthority.h"
+#include "Core/CSRpcGuard.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "EnhancedInputComponent.h"
@@ -283,7 +284,17 @@ bool ACSCharacter::IsLocalFirstPersonView() const
 
 int32 ACSCharacter::GetOwningPlayerId() const
 {
-	return bIsBot ? BotId : UCSAuthority::GetOwningPlayerId(this);
+	return IsBot() ? BotId : UCSAuthority::GetOwningPlayerId(this);
+}
+
+bool ACSCharacter::IsBot() const
+{
+	if (bIsBot && UCSAuthority::IsGameAuthority(this))
+	{
+		// Offline everything is ours; in a room the bots are Master-Client-owned.
+		return UCSAuthority::GetOwningPlayerId(this) == UCSAuthority::GetLocalPlayerId(this);
+	}
+	return bIsBot;
 }
 
 bool ACSCharacter::IsAliveAuthoritative() const
@@ -469,10 +480,11 @@ void ACSCharacter::RequestFire(const FVector& Origin, const FVector& Direction, 
 
 void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, bool bAiming)
 {
-	// Runs on the Master Client. `this` is the shooter's pawn, so the sender
-	// cannot be spoofed: the id comes from Fusion ownership, not the payload.
+	// Runs on the Master Client. `this` is the shooter's pawn: the shooter id
+	// comes from Fusion ownership, not the payload, and CSRpcGuard makes sure
+	// the RPC was sent by that owner (any peer can send an RPC to any object).
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestFire")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
 	{
 		return;
 	}
@@ -559,6 +571,10 @@ void ACSCharacter::RpcConfirmShot_Receive(FVector Origin, FVector Impact, bool b
 	// Runs on every peer. The shooter already showed flash, sound and tracer
 	// when they clicked (PlayLocalFireEffects); everyone else shows them now.
 	// The impact is shown by all, at the point the authority decided.
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcConfirmShot")))
+	{
+		return;
+	}
 	if (!IsLocalPlayerView())
 	{
 		PlayShotPresentation(Impact, /*bLocalPrediction*/ false);
@@ -588,7 +604,7 @@ void ACSCharacter::RequestReload()
 void ACSCharacter::RpcRequestReload_Receive()
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Reload))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestReload")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Reload))
 	{
 		return;
 	}
@@ -714,7 +730,7 @@ void ACSCharacter::RequestPickupFocused()
 void ACSCharacter::RpcRequestPickup_Receive(AActor* PickupActor)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Pickup))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestPickup")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Pickup))
 	{
 		return;
 	}
@@ -780,7 +796,7 @@ void ACSCharacter::RequestSlot(int32 Slot)
 void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Slot))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestSlot")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Slot))
 	{
 		return;
 	}
@@ -822,7 +838,7 @@ void ACSCharacter::RequestDropEquipped()
 void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Drop))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestDrop")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Drop))
 	{
 		return;
 	}
@@ -859,7 +875,7 @@ void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 void ACSCharacter::RpcRequestAmmo_Receive(int32 MachineIndex)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Buy))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestAmmo")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Buy))
 	{
 		return;
 	}
@@ -909,7 +925,7 @@ void ACSCharacter::RequestMelee(bool bHeavy)
 void ACSCharacter::RpcRequestMelee_Receive(FVector Origin, FVector Direction, bool bHeavy)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestMelee")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
 	{
 		return;
 	}
@@ -990,6 +1006,10 @@ void ACSCharacter::ResolveMeleeOnAuthority(const FVector& Origin, const FVector&
 
 void ACSCharacter::RpcMeleeSwing_Receive(bool bHeavy, FVector Impact, int32 HitKind)
 {
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcMeleeSwing")))
+	{
+		return;
+	}
 	// The attacker already played the swing locally.
 	if (!IsLocalPlayerView())
 	{
@@ -1080,7 +1100,7 @@ void ACSCharacter::RequestThrowGrenade()
 void ACSCharacter::RpcRequestThrow_Receive(FVector Origin, FVector Direction)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Throw))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestThrow")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Throw))
 	{
 		return;
 	}
@@ -1123,7 +1143,7 @@ void ACSCharacter::RequestBuy(int32 ShopIndex)
 void ACSCharacter::RpcRequestBuy_Receive(int32 ShopIndex)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Buy))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestBuy")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Buy))
 	{
 		return;
 	}
@@ -1695,6 +1715,11 @@ void ACSCharacter::RpcIdentify_Receive(FString& Nickname)
 {
 	// Runs on every peer. Cosmetic: the name in the HUD. Control characters
 	// are dropped so a name cannot break the kill feed or the scoreboard.
+	// Only the pawn's owner names it: nobody renames somebody else's pawn.
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcIdentify")))
+	{
+		return;
+	}
 	FString Clean = Nickname.Left(24);
 	Clean.ReplaceCharInline(TEXT('\n'), TEXT(' '));
 	Clean.ReplaceCharInline(TEXT('\r'), TEXT(' '));
@@ -1774,7 +1799,7 @@ void ACSCharacter::RpcMatchTicket_Receive(FString& MatchId, FString& PlayerTicke
 	// Master Client. The backend verifies the ticket when the match is
 	// reported; here it only has to belong to the running match.
 	CS_AUTHORITY_ONLY(this);
-	if (RefuseBotRpc())
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcMatchTicket")) || RefuseBotRpc())
 	{
 		return;
 	}

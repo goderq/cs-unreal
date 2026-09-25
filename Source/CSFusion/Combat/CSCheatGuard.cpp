@@ -129,6 +129,24 @@ bool FCSCheatGuard::IsSuspended(int32 PlayerId, double Now) const
 	return State && Now < State->SuspendedUntil;
 }
 
+void FCSCheatGuard::ReportViolation(int32 PlayerId, ECSCheatReason Reason, double Now, float Weight, const FString& Detail)
+{
+	AddStrike(PlayerId, Players.FindOrAdd(PlayerId), Reason, Now, Weight, Detail);
+}
+
+const TCHAR* LexToString(ECSCheatReason Reason)
+{
+	switch (Reason)
+	{
+	case ECSCheatReason::Speed:     return TEXT("speed");
+	case ECSCheatReason::Teleport:  return TEXT("teleport");
+	case ECSCheatReason::Flood:     return TEXT("flood");
+	case ECSCheatReason::ForgedRpc: return TEXT("forged rpc");
+	case ECSCheatReason::BadInput:  return TEXT("bad input");
+	default:                        return TEXT("none");
+	}
+}
+
 void FCSCheatGuard::Forget(int32 PlayerId)
 {
 	Players.Remove(PlayerId);
@@ -156,8 +174,7 @@ void FCSCheatGuard::AddStrike(int32 PlayerId, FPlayerState& State, ECSCheatReaso
 	State.LastReason = Reason;
 
 	UE_LOG(LogCSAuth, Warning, TEXT("Cheat guard: player %d strike (%s): %s. Strikes %.1f/%d."),
-		PlayerId, Reason == ECSCheatReason::Speed ? TEXT("speed") : (Reason == ECSCheatReason::Teleport ? TEXT("teleport") : TEXT("flood")),
-		*Detail, State.Strikes, StrikesToSuspend);
+		PlayerId, LexToString(Reason), *Detail, State.Strikes, StrikesToSuspend);
 
 	if (State.Strikes >= StrikesToSuspend && Now >= State.SuspendedUntil)
 	{

@@ -69,11 +69,11 @@ public:
 	 * Photon player id of the peer that OWNS this actor, as resolved by Fusion
 	 * itself - not by anything the actor stores.
 	 *
-	 * This is the only trustworthy way for the authority to answer "who sent
-	 * this?". A Fusion RPC is delivered on the same networked object it was
-	 * sent from, so the receive handler can call this on `this` and learn the
-	 * real sender. Never authorise anything using a player id carried in the
-	 * RPC payload or stored on the PlayerState: both are client-written.
+	 * The authority attributes a request to the owner of the pawn it arrived
+	 * on - but any peer can send an RPC to any object, so every handler first
+	 * checks that the sender IS that owner (CSRpcGuard::FromOwner, A1). Never
+	 * authorise anything using a player id carried in the RPC payload or
+	 * stored on the PlayerState: both are client-written.
 	 *
 	 * Returns 0 offline or when the actor is not networked.
 	 */
