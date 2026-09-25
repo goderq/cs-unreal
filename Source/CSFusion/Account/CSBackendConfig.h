@@ -34,6 +34,15 @@ struct CSFUSION_API FCSBackendConfig
 	FString ClientSecret;
 	FString EncryptionKey;
 
+	// --- Photon (optional) ---
+	/**
+	 * A second Photon app that lets anonymous clients in, for the automated
+	 * network self-tests (they play without accounts). The release app refuses
+	 * them once Custom Authentication is on (docs/ACCOUNTS.md, AUDIT B5).
+	 * Used only by non-Shipping builds, and only without a signed-in account.
+	 */
+	FString PhotonTestAppId;
+
 	/** The artifact name the EOS plugin looks up; must match DefaultEngine.ini. */
 	static const TCHAR* ArtifactName() { return TEXT("CSFusion"); }
 

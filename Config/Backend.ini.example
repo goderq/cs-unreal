@@ -19,3 +19,9 @@ ClientId=
 ClientSecret=
 ; Not issued by Epic: pick any 64 hex characters (openssl rand -hex 32).
 EncryptionKey=
+
+[Photon]
+; Optional: a second Photon app (anonymous clients allowed) for the automated
+; network self-tests, once the main app refuses anonymous clients (AUDIT B5).
+; Non-Shipping builds only. Env: CS_PHOTON_TEST_APP_ID
+TestAppId=

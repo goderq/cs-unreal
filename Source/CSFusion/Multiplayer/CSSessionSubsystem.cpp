@@ -6,6 +6,10 @@
 #include "Core/CSFusionCompat.h"
 #include "Core/CSLog.h"
 #include "Core/CSModeSettings.h"
+#include "Account/CSAccountSubsystem.h"
+#include "Account/CSBackendConfig.h"
+#include "FusionCustomAuth.h"
+#include "FusionOnlineSubsystemSettings.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
@@ -269,6 +273,31 @@ void UCSSessionSubsystem::Connect(const FCSSessionRequest& Request)
 		? EFusionRegionSelectionMode::Best
 		: EFusionRegionSelectionMode::Select;
 	UE_LOG(LogCSNet, Log, TEXT("Connecting to Photon region '%s'."), Region.IsEmpty() ? TEXT("best") : *Region);
+
+	// v2.0 (B5): with Custom Authentication on, Photon asks photon-auth about
+	// the login token before letting the player in - banned players stay out.
+	// Switched on in DefaultGame.ini ([CSFusion.Photon] bCustomAuth) once the
+	// Photon Dashboard points at photon-auth; before that Photon would refuse
+	// an authentication type it does not know.
+	const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	const bool bSignedIn = Account && Account->IsReady();
+	bool bCustomAuth = false;
+	GConfig->GetBool(TEXT("CSFusion.Photon"), TEXT("bCustomAuth"), bCustomAuth, GGameIni);
+	FFusionCustomAuth::bEnabled = bCustomAuth && bSignedIn;
+	FFusionCustomAuth::UserId = bSignedIn ? Account->GetProfileId() : FString();
+	FFusionCustomAuth::Parameters = bSignedIn ? Account->MakePhotonAuthParameters() : FString();
+	UE_LOG(LogCSNet, Log, TEXT("Photon authentication: %s."),
+		FFusionCustomAuth::bEnabled ? TEXT("custom (login token)") : (bCustomAuth ? TEXT("anonymous - not signed in") : TEXT("anonymous - custom auth is off")));
+#if !UE_BUILD_SHIPPING
+	// Automated network tests play without accounts; the release app refuses
+	// anonymous clients once custom auth is on, so they use the test app.
+	const FString& TestAppId = FCSBackendConfig::Get().PhotonTestAppId;
+	if (!bSignedIn && !TestAppId.IsEmpty())
+	{
+		GetMutableDefault<UFusionOnlineSubsystemSettings>()->AppId = TestAppId;
+		UE_LOG(LogCSNet, Log, TEXT("Photon: no account - using the test app from Backend.ini."));
+	}
+#endif
 
 	Fusion->ConnectToPhoton(ConnectOptions, GetGameInstance());
 #endif

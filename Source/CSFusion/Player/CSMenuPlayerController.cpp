@@ -240,6 +240,9 @@ void ACSMenuPlayerController::RunBackendProbe()
 		FString Function;
 		TSharedRef<FJsonObject> Body;
 		TArray<int32> Expected;
+		/** Optional: a number field of the answer that must have this value too. */
+		const TCHAR* Field = nullptr;
+		int32 FieldValue = 0;
 	};
 	auto Body = [](std::initializer_list<TPair<const TCHAR*, FString>> Fields)
 	{
@@ -264,6 +267,8 @@ void ACSMenuPlayerController::RunBackendProbe()
 	Steps->Add({ TEXT("start a match with a bogus mode"), TEXT("match"), Body({ { TEXT("action"), TEXT("start") }, { TEXT("mode"), TEXT("GODMODE") }, { TEXT("map"), TEXT("Depot") } }), { 400 } });
 	// Phase 2 (B11): only the host of a real match reports anti-cheat incidents.
 	Steps->Add({ TEXT("incident for an unknown match"), TEXT("match"), Body({ { TEXT("action"), TEXT("incident") }, { TEXT("match_id"), Nobody }, { TEXT("kind"), TEXT("removed") } }), { 404 } });
+	// Phase 2 (B5): photon-auth lets this (not banned) account into Photon.
+	Steps->Add({ TEXT("photon-auth with my own login"), TEXT("photon-auth"), Body({}), { 200 }, TEXT("ResultCode"), 1 });
 
 	TSharedRef<int32> Index = MakeShared<int32>(0);
 	TSharedRef<int32> Failed = MakeShared<int32>(0);
@@ -287,11 +292,18 @@ void ACSMenuPlayerController::RunBackendProbe()
 		Acc->DebugCallFunction(Step.Function, Step.Body, [Steps, Index, Failed, Next](int32 Code, const TSharedPtr<FJsonObject>& Json)
 		{
 			const FStep& Done = (*Steps)[*Index];
-			const bool bOk = Done.Expected.Contains(Code);
+			bool bOk = Done.Expected.Contains(Code);
 			FString Error;
 			if (Json.IsValid())
 			{
 				Json->TryGetStringField(TEXT("error"), Error);
+				Json->TryGetStringField(TEXT("Message"), Error);
+			}
+			if (Done.Field)
+			{
+				int32 Value = -1;
+				bOk = bOk && Json.IsValid() && Json->TryGetNumberField(Done.Field, Value) && Value == Done.FieldValue;
+				Error += FString::Printf(TEXT(" %s=%d"), Done.Field, Value);
 			}
 			// Staff may look (200); everything else must be refused.
 			const TCHAR* Verdict = bOk ? (Code < 300 ? TEXT("ALLOWED OK") : TEXT("REFUSED OK"))

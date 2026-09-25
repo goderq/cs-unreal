@@ -92,14 +92,42 @@ Edge Functions. Функции проверяют токен, а база про
 
 Функции выкладываются из `Backend/supabase/functions/`: в дашборде через
 **Edge Functions → Deploy a new function → Via Editor** или через CLI.
-Переключатель **Verify JWT with legacy secret** должен быть **включён**.
+Переключатель **Verify JWT with legacy secret** должен быть **включён** у всех,
+кроме `photon-auth`.
 
 | Функция | Для чего |
 |---|---|
 | `eos-login` | Вход: токен Epic → профиль и токен входа на 2 часа |
 | `admin` | AdminService: все действия администрации |
-| `match` | `start` / `ticket` / `report`: учёт матчей |
+| `match` | `start` / `ticket` / `report` / `incident`: учёт матчей и инциденты античита |
 | `report-match` | Заглушка: старые сборки v1.2 получают ответ «обновите игру» (410) |
+| `photon-auth` | Photon Custom Authentication (п. 2.5). **Verify JWT — выключен**: Photon вызывает её без заголовков Supabase, токен функция проверяет сама |
+
+### 2.5 Photon Custom Authentication (docs/AUDIT.md B5)
+
+Без неё бан не мешает играть онлайн: Photon пускает в комнату любого, у кого
+есть AppId, а он публичный. С ней Photon перед входом спрашивает `photon-auth`,
+действителен ли токен входа игрока и не забанен ли он.
+
+Порядок важен: если включить флаг в игре раньше, чем настроен Dashboard, Photon
+откажет всем вошедшим игрокам.
+
+1. **Photon Dashboard → твоё приложение Fusion → Manage → Authentication →
+   Custom Server**:
+   - URL: `https://<ref>.supabase.co/functions/v1/photon-auth`;
+   - остальное — по умолчанию.
+2. Там же пока **оставь** «Allow anonymous clients to connect» **включённым**.
+3. В `Config/DefaultGame.ini` поставь `[CSFusion.Photon] bCustomAuth=True` и
+   проверь вход и игру онлайн.
+4. Для самотестов (играют без аккаунтов) создай второе, тестовое приложение
+   Fusion (бесплатно) и впиши его AppId в `Config/Backend.ini`:
+   `[Photon] TestAppId=...`. Им пользуются только не-Shipping сборки и только
+   без входа.
+5. Выключи «Allow anonymous clients» у **основного** приложения. С этого
+   момента онлайн играют только вошедшие и не забаненные.
+
+Ответ функции — в формате Photon: `ResultCode 1` — пустить (с `UserId` = id
+профиля и ником), `2` — отказ с причиной, `3` — нет токена.
 
 ### 2.3 Секреты функций
 

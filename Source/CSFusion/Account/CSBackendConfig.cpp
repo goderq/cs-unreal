@@ -132,6 +132,7 @@ void FCSBackendConfig::LoadAndApply()
 	C.ClientId = Value(Pairs, TEXT("EOS"), TEXT("ClientId"), TEXT("CS_EOS_CLIENT_ID"));
 	C.ClientSecret = Value(Pairs, TEXT("EOS"), TEXT("ClientSecret"), TEXT("CS_EOS_CLIENT_SECRET"));
 	C.EncryptionKey = Value(Pairs, TEXT("EOS"), TEXT("EncryptionKey"), TEXT("CS_EOS_ENCRYPTION_KEY"));
+	C.PhotonTestAppId = Value(Pairs, TEXT("Photon"), TEXT("TestAppId"), TEXT("CS_PHOTON_TEST_APP_ID"));
 
 	UE_LOG(LogCS, Log, TEXT("Backend config: Supabase %s (key %s), EOS product %s (client %s, secret %s)."),
 		C.SupabaseUrl.IsEmpty() ? TEXT("(not set)") : *C.SupabaseUrl, *Mask(C.SupabaseAnonKey),

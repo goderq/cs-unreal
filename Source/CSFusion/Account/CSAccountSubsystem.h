@@ -115,6 +115,9 @@ public:
 
 	const FString& GetNickname() const { return Nickname; }
 	const FString& GetProfileId() const { return ProfileId; }
+
+	/** Photon custom authentication parameters ("token=..."): the current login token for photon-auth (B5). Empty when not signed in. */
+	FString MakePhotonAuthParameters() const;
 	const FString& GetEpicDisplayName() const { return EpicDisplayName; }
 	const FString& GetLastError() const { return LastError; }
 	const FCSAccountStats& GetStats() const { return Stats; }

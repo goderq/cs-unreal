@@ -6,6 +6,7 @@
 #include "Core/CSLog.h"
 #include "Dom/JsonObject.h"
 #include "Engine/GameInstance.h"
+#include "GenericPlatform/GenericPlatformHttp.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
@@ -753,6 +754,13 @@ void UCSAccountSubsystem::DebugCallFunction(const FString& Function, const TShar
 #else
 	PostAuthenticated(FCSBackendConfig::Get().FunctionUrl(*Function), ToJson(Body), MoveTemp(OnDone));
 #endif
+}
+
+FString UCSAccountSubsystem::MakePhotonAuthParameters() const
+{
+	return IsReady() && !AccessToken.IsEmpty()
+		? FString::Printf(TEXT("token=%s"), *FGenericPlatformHttp::UrlEncode(AccessToken))
+		: FString();
 }
 
 void UCSAccountSubsystem::MatchIncident(const FString& MatchId, const FString& Ticket, int32 PlayerNumber, const FString& Kind, const FString& Reason)
