@@ -38,6 +38,7 @@ namespace
 
 void ACSPlayerController::CSTestWeapons()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self || !Self->IsAliveAuthoritative() || !UCSAuthority::IsGameAuthority(this))
 	{

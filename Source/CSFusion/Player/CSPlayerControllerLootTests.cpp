@@ -167,6 +167,7 @@ void ACSPlayerController::TestWalkUpAndPress(ACSWorldPickup* Pickup, TFunction<v
 
 void ACSPlayerController::CSTestGrab()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self)
 	{
@@ -187,6 +188,7 @@ void ACSPlayerController::CSTestGrab()
 
 void ACSPlayerController::CSTestKill()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self)
 	{
@@ -241,6 +243,7 @@ void ACSPlayerController::CSTestKill()
 
 void ACSPlayerController::TestKillStep()
 {
+	CS_SELF_TEST_ONLY();
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 
@@ -364,6 +367,7 @@ void ACSPlayerController::TestKillVerifyLoot()
 
 void ACSPlayerController::CSTestWatchLeave()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	TestVictimId = 0;
 	for (TActorIterator<ACSCharacter> It(GetWorld()); It; ++It)
@@ -453,6 +457,7 @@ void ACSPlayerController::CSTestWatchLeave()
 
 void ACSPlayerController::CSTestDoubleDrop()
 {
+	CS_SELF_TEST_ONLY();
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	const ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Director || !Self || !UCSAuthority::IsGameAuthority(this))

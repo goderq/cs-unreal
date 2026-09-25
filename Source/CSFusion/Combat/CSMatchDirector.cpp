@@ -856,7 +856,7 @@ void ACSMatchDirector::GiveSpawnLoadout(int32 PlayerId)
 	// Self-tests: -testprimary=ak47 on the authority hands every spawn a primary
 	// (the tests that used to pick a gun up from the floor).
 	FString TestPrimary;
-	if (!Inventory->HasItemInSlot(CSLoadout::Primary) && FParse::Value(FCommandLine::Get(), TEXT("testprimary="), TestPrimary))
+	if (!UE_BUILD_SHIPPING && !Inventory->HasItemInSlot(CSLoadout::Primary) && FParse::Value(FCommandLine::Get(), TEXT("testprimary="), TestPrimary))
 	{
 		GiveItem(PlayerId, Items->FindItemIndex(FName(*TestPrimary)), /*bEquip*/ false);
 	}
@@ -1014,7 +1014,7 @@ void ACSMatchDirector::BeginProtection(FCSPlayerCombatRecord& Record)
 	ProtectionArrived.Remove(Record.PlayerId);
 
 	// -nospawnprotection: the v1.0 regression suites shoot players the moment they appear.
-	static const bool bDisabled = FParse::Param(FCommandLine::Get(), TEXT("nospawnprotection"));
+	static const bool bDisabled = !UE_BUILD_SHIPPING && FParse::Param(FCommandLine::Get(), TEXT("nospawnprotection")); // never in Shipping (B12)
 	const float Seconds = bDisabled ? 0.f : ModeRules(this).ProtectionSeconds;
 	if (Seconds <= 0.f)
 	{

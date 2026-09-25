@@ -131,7 +131,7 @@ void UCSMinimap::Capture(UWorld* World)
 	++Captures;
 
 	// Self-test aid: -cstestminimap writes the picture next to the other screenshots.
-	if (Captures == 2 && FParse::Param(FCommandLine::Get(), TEXT("cstestminimap")))
+	if (!UE_BUILD_SHIPPING && Captures == 2 && FParse::Param(FCommandLine::Get(), TEXT("cstestminimap")))
 	{
 		UKismetRenderingLibrary::ExportRenderTarget(World, Target, FPaths::ProjectSavedDir() / TEXT("CSTest"), TEXT("minimap_full.png"));
 		UE_LOG(LogCS, Log, TEXT("MINIMAP: picture %.0f x %.0f cm around (%.0f, %.0f) exported."), Extent * 2.f, Extent * 2.f, Center.X, Center.Y);

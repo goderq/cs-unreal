@@ -132,7 +132,7 @@ void UCSAccountSubsystem::Deinitialize()
 bool UCSAccountSubsystem::IsSignInRequired() const
 {
 	// Self-tests and offline debugging run without an account.
-	return !FParse::Param(FCommandLine::Get(), TEXT("noaccount"));
+	return UE_BUILD_SHIPPING || !FParse::Param(FCommandLine::Get(), TEXT("noaccount")); // never skipped in Shipping (B12)
 }
 
 FString UCSAccountSubsystem::DescribeBackend()

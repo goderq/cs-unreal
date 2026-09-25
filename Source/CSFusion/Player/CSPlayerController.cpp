@@ -105,8 +105,15 @@ void ACSPlayerController::PostSeamlessTravel()
 	ArmSelfTest();
 }
 
+bool CSSelfTestsDisabled()
+{
+	return UE_BUILD_SHIPPING != 0;
+}
+
 void ACSPlayerController::ArmSelfTest()
 {
+	// -cstest* flags are not read in Shipping (B12).
+	CS_SELF_TEST_ONLY();
 	if (!IsLocalController())
 	{
 		return;
@@ -324,6 +331,7 @@ void ACSPlayerController::TestMoveTo(const FVector& Dest, TFunction<void()> OnAr
 
 void ACSPlayerController::CSTestLoot()
 {
+	CS_SELF_TEST_ONLY();
 	// v2.0 loadout, through real input where the player would use it:
 	// spawn set, knife cannot be dropped, a shot, a bought primary with full
 	// ammunition, drop and pick up keeping the rounds, an ammo machine.
@@ -525,6 +533,7 @@ void ACSPlayerController::CSTestLoot()
 
 void ACSPlayerController::CSTestContest()
 {
+	CS_SELF_TEST_ONLY();
 	// Contested pickup: every client running this goes to the same item (the
 	// single sniper rifle) and presses E at the same Fusion network time.
 	// Exactly one must end up with it.
@@ -623,6 +632,7 @@ void ACSPlayerController::CSTestContest()
 
 void ACSPlayerController::CSTestShoot()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self)
 	{
@@ -735,6 +745,7 @@ void ACSPlayerController::CSTestShoot()
 
 void ACSPlayerController::CSTestInput()
 {
+	CS_SELF_TEST_ONLY();
 	APawn* ControlledPawn = GetPawn();
 	FViewport* Viewport = (GetLocalPlayer() && GetLocalPlayer()->ViewportClient)
 		? GetLocalPlayer()->ViewportClient->Viewport

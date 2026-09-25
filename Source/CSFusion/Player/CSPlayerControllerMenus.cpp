@@ -271,6 +271,7 @@ void ACSPlayerController::TestScreenshot(const FString& Name)
 
 void ACSPlayerController::CSTestUI()
 {
+	CS_SELF_TEST_ONLY();
 	// Drives the real code paths (the same functions the keys and buttons
 	// call) and checks the results against live state.
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());

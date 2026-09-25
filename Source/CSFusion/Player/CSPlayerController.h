@@ -14,6 +14,16 @@
 #include "GameFramework/PlayerController.h"
 #include "CSPlayerController.generated.h"
 
+/**
+ * First statement of every self-test entry point: self-tests never run in
+ * Shipping (docs/AUDIT.md B12). The flags that start them are not even read
+ * there, and the console is off; this also covers any other way in.
+ */
+#define CS_SELF_TEST_ONLY() if (CSSelfTestsDisabled()) { return; }
+
+/** True in Shipping. Out of line on purpose: a compile-time constant here makes MSVC flag the test bodies as unreachable (C4702 is an error). */
+CSFUSION_API bool CSSelfTestsDisabled();
+
 class UCSSessionSubsystem;
 class UUserWidget;
 

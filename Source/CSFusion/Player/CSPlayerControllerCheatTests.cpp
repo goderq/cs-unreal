@@ -34,6 +34,7 @@ namespace
 
 void ACSPlayerController::CSTestCheat()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self || !Self->IsAliveAuthoritative())
 	{

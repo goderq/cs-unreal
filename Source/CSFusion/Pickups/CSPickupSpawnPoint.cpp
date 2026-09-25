@@ -44,7 +44,7 @@ ACSWorldPickup* ACSPickupSpawnPoint::SpawnPickup() const
 
 	// v1.1: weapons are bought in the shop, never lying around the map.
 	// -mapweapons brings them back for the self-tests that pick weapons up.
-	if (Item->IsWeapon() && !FParse::Param(FCommandLine::Get(), TEXT("mapweapons")))
+	if (Item->IsWeapon() && (UE_BUILD_SHIPPING || !FParse::Param(FCommandLine::Get(), TEXT("mapweapons"))))
 	{
 		return nullptr;
 	}

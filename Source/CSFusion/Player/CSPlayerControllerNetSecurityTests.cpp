@@ -37,6 +37,7 @@
 //                   the match, and B's game leaves for the menu with the reason
 void ACSPlayerController::CSTestFreeze()
 {
+	CS_SELF_TEST_ONLY();
 #if !UE_BUILD_SHIPPING
 	ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn());
 	if (!Mine)
@@ -59,6 +60,7 @@ void ACSPlayerController::CSTestFreeze()
 
 void ACSPlayerController::CSTestRemoval()
 {
+	CS_SELF_TEST_ONLY();
 #if !UE_BUILD_SHIPPING
 	if (ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn()))
 	{
@@ -77,6 +79,7 @@ void ACSPlayerController::CSTestRemoval()
 
 void ACSPlayerController::CSTestSpoof()
 {
+	CS_SELF_TEST_ONLY();
 #if !UE_BUILD_SHIPPING
 	const int32 Me = UCSAuthority::GetLocalPlayerId(this);
 	ACSCharacter* Victim = nullptr;

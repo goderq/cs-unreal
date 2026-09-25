@@ -25,6 +25,7 @@ namespace
 
 void ACSPlayerController::CSTestPerf()
 {
+	CS_SELF_TEST_ONLY();
 	PerfFrameMs.Reset();
 	PerfGameMs = PerfRenderMs = PerfGpuMs = 0.0;
 	FCoreDelegates::OnEndFrame.Remove(TestPerfTickHandle);

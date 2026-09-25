@@ -546,6 +546,7 @@
   - Объявления `UFUNCTION` остаются тонкими: UHT не понимает свои `#if` (см. `CSFusionCompat.h`).
 - **Multiplayer:** нет.
 - **Данные:** нет.
+- **Итог фазы 2:** в Shipping не читаются `-cstest*`, `-testprimary`, `-nospawnprotection`, `-roundtime`, `-mapweapons`, `-noaccount`; каждая точка входа самотеста начинается с `CS_SELF_TEST_ONLY()`, отладочные крючки подделки (`DebugForge*`, `DebugPauseHeartbeat`) в Shipping не компилируются. Параметры подключения (`-room`, `-mode`, `-bots`, `-region`) остаются: они делают то же, что меню. Editor, Development и Shipping собираются. **Закрыто.**
 
 #### B13. Регресс: строки магазина рисуются друг поверх друга
 

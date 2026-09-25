@@ -33,6 +33,7 @@ namespace
 
 void ACSPlayerController::CSTestVisual()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self)
 	{

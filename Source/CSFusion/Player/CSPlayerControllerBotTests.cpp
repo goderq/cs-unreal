@@ -18,6 +18,7 @@
 
 void ACSPlayerController::CSTestBots()
 {
+	CS_SELF_TEST_ONLY();
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	if (!Director)
 	{

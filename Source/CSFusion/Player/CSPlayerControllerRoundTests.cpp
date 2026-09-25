@@ -28,6 +28,7 @@ namespace
 
 void ACSPlayerController::CSTestRound()
 {
+	CS_SELF_TEST_ONLY();
 	ACSHUD* Hud = Cast<ACSHUD>(GetHUD());
 	if (!Hud || !GetPawn())
 	{

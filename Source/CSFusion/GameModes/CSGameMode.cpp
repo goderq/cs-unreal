@@ -44,7 +44,7 @@ void ACSGameMode::BeginPlay()
 	// Test hook: -roundtime=N shortens the round so the end-of-round flow
 	// (banner, scoreboard, score reset) can be exercised in an automated run.
 	float RoundOverride = 0.f;
-	if (FParse::Value(FCommandLine::Get(), TEXT("roundtime="), RoundOverride) && RoundOverride > 0.f)
+	if (!UE_BUILD_SHIPPING && FParse::Value(FCommandLine::Get(), TEXT("roundtime="), RoundOverride) && RoundOverride > 0.f)
 	{
 		RoundSecondsOverride = FMath::Max(10.f, RoundOverride);
 	}

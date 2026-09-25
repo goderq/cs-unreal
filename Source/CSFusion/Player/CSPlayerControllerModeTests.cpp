@@ -103,6 +103,7 @@ namespace
 
 void ACSPlayerController::CSTestTour()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	if (!Self)
 	{
@@ -166,6 +167,7 @@ void ACSPlayerController::CSTestTour()
 
 void ACSPlayerController::CSTestModes()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
@@ -308,6 +310,7 @@ void ACSPlayerController::CSTestModes()
 
 void ACSPlayerController::CSTestComp()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	const ACSGameState* GS = GetWorld()->GetGameState<ACSGameState>();
@@ -399,6 +402,7 @@ void ACSPlayerController::CSTestComp()
 
 void ACSPlayerController::CSTestPoses()
 {
+	CS_SELF_TEST_ONLY();
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
 	ACSCharacter* Bot = nullptr;
 	for (TActorIterator<ACSCharacter> It(GetWorld()); It; ++It)

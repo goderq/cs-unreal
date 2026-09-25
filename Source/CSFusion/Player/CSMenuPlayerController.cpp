@@ -99,7 +99,7 @@ void ACSMenuPlayerController::ShowLoginScreen()
 	UE_LOG(LogCS, Log, TEXT("Sign-in screen shown."));
 
 	// -cstestlogin: screenshot the sign-in screen and report its state.
-	if (FParse::Param(FCommandLine::Get(), TEXT("cstestlogin")))
+	if (!UE_BUILD_SHIPPING && FParse::Param(FCommandLine::Get(), TEXT("cstestlogin")))
 	{
 		GetWorldTimerManager().SetTimer(MenuTestTimer, [this]()
 		{
@@ -142,7 +142,7 @@ void ACSMenuPlayerController::ShowMainMenu()
 	static int32 MenuVisits = 0;
 	++MenuVisits;
 	FString RejoinRoom;
-	if (MenuVisits == 2 && FParse::Value(FCommandLine::Get(), TEXT("cstestrejoin="), RejoinRoom))
+	if (!UE_BUILD_SHIPPING && MenuVisits == 2 && FParse::Value(FCommandLine::Get(), TEXT("cstestrejoin="), RejoinRoom))
 	{
 		FTimerHandle RejoinTimer;
 		GetWorldTimerManager().SetTimer(RejoinTimer, [this, RejoinRoom]()
@@ -163,7 +163,7 @@ void ACSMenuPlayerController::ShowMainMenu()
 		return;
 	}
 
-	if (FParse::Param(FCommandLine::Get(), TEXT("cstestmenu")) || FParse::Value(FCommandLine::Get(), TEXT("cstestmenu="), MenuTestAction))
+	if (!UE_BUILD_SHIPPING && (FParse::Param(FCommandLine::Get(), TEXT("cstestmenu")) || FParse::Value(FCommandLine::Get(), TEXT("cstestmenu="), MenuTestAction)))
 	{
 		FParse::Value(FCommandLine::Get(), TEXT("cstestmenu="), MenuTestAction);
 		GetWorldTimerManager().SetTimer(MenuTestTimer, this, &ACSMenuPlayerController::RunMenuTest, 3.f, false);
