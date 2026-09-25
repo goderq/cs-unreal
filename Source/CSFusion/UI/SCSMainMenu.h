@@ -40,6 +40,8 @@ public:
 
 	void ShowPage(EPage Page);
 	EPage GetPage() const { return CurrentPage; }
+	/** v2.0 admin page (the self-test reaches its tabs through it). */
+	TSharedPtr<SCSAdminPanel> GetAdminPanel() const { return AdminPanel; }
 
 	// --- Actions (buttons call these; so does the menu self-test) ------------
 	void QuickMatch();

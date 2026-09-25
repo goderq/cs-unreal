@@ -95,6 +95,12 @@ namespace
 		return Role == TEXT("moderator") ? CSUI::Warning : CSUI::Text;
 	}
 
+	/** Same order as cs_role_rank in the database (migration 003). */
+	int32 RoleRank(const FString& Role)
+	{
+		return Role == TEXT("superadmin") ? 3 : Role == TEXT("admin") ? 2 : Role == TEXT("moderator") ? 1 : 0;
+	}
+
 	TSharedRef<SWidget> Line(const FText& Text, const FLinearColor& Color, int32 Size = 13, bool bBold = false)
 	{
 		return SNew(STextBlock).Text(Text).Font(CSUI::Font(Size, bBold)).ColorAndOpacity(Color).AutoWrapText(true);
@@ -167,6 +173,14 @@ void SCSAdminPanel::SetStatus(const FText& Text, bool bError)
 	bStatusError = bError;
 }
 
+void SCSAdminPanel::SetLoadedStatus(const FText& Text)
+{
+	if (FPlatformTime::Seconds() >= ActionStatusUntil)
+	{
+		SetStatus(Text, false);
+	}
+}
+
 TSharedRef<SWidget> SCSAdminPanel::MakeTabButton(const FText& Label, ETab Tab)
 {
 	return SNew(SButton).IsFocusable(false)
@@ -189,10 +203,18 @@ TSharedRef<SWidget> SCSAdminPanel::ActionButton(const TAttribute<FText>& Label, 
 				static_cast<CSUI::EButtonKind>(Kind),
 				TAttribute<bool>::CreateLambda([this, Perm, bNeedsPlayer]()
 				{
-					const bool bTarget = bNeedsPlayer ? !SelectedPlayer.IsEmpty() : !SelectedMatch.IsEmpty();
+					const bool bTarget = bNeedsPlayer ? CanActOnSelectedPlayer() : !SelectedMatch.IsEmpty();
 					return !bBusy && bTarget && (Perm.IsEmpty() || Can(*Perm));
 				}), 13)
 		];
+}
+
+bool SCSAdminPanel::CanActOnSelectedPlayer() const
+{
+	const FCSAdminPlayerRow* Row = Players.FindByPredicate([this](const FCSAdminPlayerRow& R) { return R.Id == SelectedPlayer; });
+	const UCSAccountSubsystem* Account = GetAccount();
+	// The server refuses actions on yourself and on an equal or higher role.
+	return Row && Account && Row->Id != Account->GetProfileId() && RoleRank(Row->Role) < RoleRank(MyRole);
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +630,8 @@ void SCSAdminPanel::RebuildMatches()
 		const FString Flags = FString(Row.bVoided ? TEXT("  VOID") : TEXT(""))
 			+ (Row.bSuspicious ? TEXT("  SUSPICIOUS") : TEXT(""))
 			+ (Row.Status == TEXT("open") ? TEXT("  running") : (Row.bRanked ? TEXT("  ranked") : TEXT("  practice")));
+		// v1.2 matches (and a host whose profile was deleted) have no host.
+		const FString Host = Row.Host.IsEmpty() ? FString() : TEXT("  host ") + Row.Host;
 		const FLinearColor Color = Row.bVoided ? CSUI::TextDim : (Row.bSuspicious ? CSUI::Warning : CSUI::Text);
 		MatchesBox->AddSlot().AutoHeight().Padding(0.f, 1.f)
 		[
@@ -624,8 +648,8 @@ void SCSAdminPanel::RebuildMatches()
 			})
 			[
 				SNew(STextBlock).Font(CSUI::Font(14))
-				.Text(FText::FromString(FString::Printf(TEXT("%s  %s %s  %d player(s)  host %s%s"), *ShortDate(Row.StartedAt),
-					*Row.Mode, *Row.Map, Row.Players, *Row.Host, *Flags)))
+				.Text(FText::FromString(FString::Printf(TEXT("%s  %s %s  %d player(s)%s%s"), *ShortDate(Row.StartedAt),
+					*Row.Mode, *Row.Map, Row.Players, *Host, *Flags)))
 				.ColorAndOpacity_Lambda([this, Id, Color]() { return FSlateColor(SelectedMatch == Id ? CSUI::Accent : Color); })
 			]
 		];
@@ -779,6 +803,9 @@ void SCSAdminPanel::ShowTab(ETab Tab)
 	{
 		Switcher->SetActiveWidgetIndex(static_cast<int32>(Tab));
 	}
+	// The status line speaks about the open tab; its loader fills it in again.
+	ActionStatusUntil = 0.0;
+	SetStatus(FText::GetEmpty(), false);
 	switch (Tab)
 	{
 	case ETab::Players: LoadPlayers(); break;
@@ -786,6 +813,36 @@ void SCSAdminPanel::ShowTab(ETab Tab)
 	case ETab::Log:     LoadLog(); break;
 	}
 }
+
+#if !UE_BUILD_SHIPPING
+bool SCSAdminPanel::TestSelectFirstRow()
+{
+	if (CurrentTab == ETab::Players && Players.Num() > 0)
+	{
+		SelectedPlayer = Players[0].Id;
+		PlayerDetails.Reset();
+		RebuildPlayerDetails();
+		LoadPlayerDetails();
+		return true;
+	}
+	if (CurrentTab == ETab::Matches && Matches.Num() > 0)
+	{
+		SelectedMatch = Matches[0].Id;
+		MatchDetails.Reset();
+		RebuildMatchDetails();
+		LoadMatchDetails();
+		return true;
+	}
+	return false;
+}
+
+FString SCSAdminPanel::TestDescribe() const
+{
+	return FString::Printf(TEXT("role '%s', %d permission(s), %d player(s)%s, %d match(es)%s, %d log row(s), status '%s'"),
+		*MyRole, Permissions.Num(), Players.Num(), PlayerDetails.IsValid() ? TEXT(" + details") : TEXT(""),
+		Matches.Num(), MatchDetails.IsValid() ? TEXT(" + details") : TEXT(""), LogRows.Num(), *Status.ToString());
+}
+#endif
 
 void SCSAdminPanel::LoadWhoAmI()
 {
@@ -861,7 +918,7 @@ void SCSAdminPanel::LoadPlayers()
 				Row.Kills = Num(Json, TEXT("kills"));
 				Row.Deaths = Num(Json, TEXT("deaths"));
 			}
-			Self->SetStatus(FText::Format(LOCTEXT("Loaded", "{0} player(s)."), FText::AsNumber(Self->Players.Num())), false);
+			Self->SetLoadedStatus(FText::Format(LOCTEXT("Loaded", "{0} player(s)."), FText::AsNumber(Self->Players.Num())));
 		}
 		else
 		{
@@ -939,7 +996,7 @@ void SCSAdminPanel::LoadMatches()
 				Row.bApplied = Bool(Json, TEXT("applied"));
 				Row.Players = Num(Json, TEXT("players"));
 			}
-			Self->SetStatus(FText::Format(LOCTEXT("MatchesLoaded", "{0} match(es)."), FText::AsNumber(Self->Matches.Num())), false);
+			Self->SetLoadedStatus(FText::Format(LOCTEXT("MatchesLoaded", "{0} match(es)."), FText::AsNumber(Self->Matches.Num())));
 		}
 		else
 		{
@@ -991,7 +1048,11 @@ void SCSAdminPanel::LoadLog()
 			return;
 		}
 		Self->LogRows = bOk ? Rows(Response, TEXT("result")) : TArray<TSharedPtr<FJsonObject>>();
-		if (!bOk)
+		if (bOk)
+		{
+			Self->SetLoadedStatus(FText::Format(LOCTEXT("LogLoaded", "{0} log {0}|plural(one=entry,other=entries)."), Self->LogRows.Num()));
+		}
+		else
 		{
 			Self->SetStatus(FText::Format(LOCTEXT("LogFailed", "Could not load the log ({0})."), FText::AsNumber(Code)), true);
 		}
@@ -1035,6 +1096,7 @@ void SCSAdminPanel::Act(const FString& Action, TSharedRef<FJsonObject> Params, c
 			return;
 		}
 		Self->SetStatus(Done, false);
+		Self->ActionStatusUntil = FPlatformTime::Seconds() + 5.0;
 		if (Self->ReasonBox.IsValid())
 		{
 			Self->ReasonBox->SetText(FText::GetEmpty());

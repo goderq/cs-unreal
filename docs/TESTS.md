@@ -446,11 +446,50 @@ UnrealEditor.exe CSFusion.uproject -game -cstestmenu=backendprobe
 - отчёт и билет для несуществующего матча (404);
 - матч с выдуманным режимом (400).
 
-Итог — строка `BACKEND PROBE RESULT: ... -> BACKEND PROBE OK`. В Shipping
-этого кода нет.
+Итог — строка `BACKEND PROBE RESULT: ... -> BACKEND PROBE OK`. Каждый шаг
+помечен `REFUSED OK` (отказ, как и должно быть) или `ALLOWED OK` (персонал
+смотрит списки). В Shipping запрос не уходит.
+
+### Страница ADMIN с живыми данными: `-cstestmenu=admin`
+
+```
+UnrealEditor.exe CSFusion.uproject -game -cstestmenu=admin
+```
+
+Нужен аккаунт модератора или выше. Тест открывает ADMIN и снимает в
+`Saved/CSTest/`:
+
+- `admin_players` — список игроков;
+- `admin_player` — карточка первого игрока;
+- `admin_matches` — список матчей;
+- `admin_match` — первый матч с участниками;
+- `admin_log` — журнал безопасности.
+
+Никаких действий тест не выполняет. Итог —
+`ADMIN TEST RESULT: ... -> ADMIN OK`. У обычного игрока — `ADMIN SKIPPED`.
 
 ### Вход без окна: `-cstestlogin`
 
 При втором и следующих запусках в логе должно быть
 `Accounts: Epic sign-in OK (saved session, no window)`. Токены в лог не
 пишутся.
+
+### Прогон на живом проекте, 25.09.2026
+
+- **Миграции 001–007** применены. Перед этим снята копия четырёх таблиц в
+  схему `cs_backup`.
+- **SQL-тесты:** 61 из 61. Первый прогон дал 60/61, и это была ошибка самого
+  теста: поддельный билет стоял 17-м, а читаются только первые 16 записей.
+  Теперь отчёт больше чем на 16 игроков сам помечается `too_many_players`.
+- **Функции** `eos-login` (новая версия), `admin`, `match`, `report-match`
+  (заглушка 410): у всех включён «Verify JWT with legacy secret».
+  Код в панели сверен с репозиторием по SHA-256.
+- **`backendprobe` как игрок:** 8/8. Все пять админ-действий — 403 «staff only»,
+  неизвестный матч — 404, выдуманный режим — 400.
+- **`backendprobe` как superadmin:** 8/8. `whoami` и список игроков — 200.
+  Бан себя, выдача себе `superadmin` и смена своего ника — 403
+  «not on yourself».
+- **`-cstestmenu=admin`:** `ADMIN OK`. Роль superadmin (18 прав), игрок с
+  карточкой, 2 матча с участниками, запись журнала о назначении роли.
+  Кнопки действий над собой погашены.
+- **Вход без окна:** `Epic sign-in OK (saved session, no window)`.

@@ -273,8 +273,9 @@ begin
     v_got := pg_temp.cs_call(format('select public.match_report(%L, %L, ''{"players": []}''::jsonb)', v_player, v_match));
     if v_got = '23505' then v_pass := v_pass + 1; else v_fail := v_fail || ('match reported twice: ' || v_got); end if;
 
-    -- The same player 16 times, 300 kills in five minutes, a forged ticket:
-    -- counted for nobody, marked suspicious.
+    -- A forged ticket, then the same player 16 times with 300 kills in five
+    -- minutes (17 entries, more than a room holds): counted for nobody,
+    -- marked suspicious.
     v_start := public.match_start(v_player, 'DM', 'Depot', v_tag || ' room 2', false);
     v_match := (v_start->>'match_id')::uuid;
     v_ticket1 := (v_start->>'ticket')::uuid;
@@ -282,12 +283,13 @@ begin
     select kills into v_kills from public.player_stats where profile_id = v_player;
     v_result := public.match_report(v_player, v_match, jsonb_build_object(
         'winner_team', 0, 'rounds', 0, 'bots', false, 'humans', 1,
-        'players', (select jsonb_agg(jsonb_build_object('ticket', v_ticket1, 'team', 0, 'kills', 300, 'deaths', 0,
-                                                        'headshots', 300, 'damage', 30000, 'won', true))
-                    from generate_series(1, 16))
-                   || jsonb_build_array(jsonb_build_object('ticket', gen_random_uuid(), 'kills', 50))));
+        'players', jsonb_build_array(jsonb_build_object('ticket', gen_random_uuid(), 'kills', 50))
+                   || (select jsonb_agg(jsonb_build_object('ticket', v_ticket1, 'team', 0, 'kills', 300, 'deaths', 0,
+                                                           'headshots', 300, 'damage', 30000, 'won', true))
+                       from generate_series(1, 16))));
     if (v_result->>'suspicious')::boolean
-       and v_result->'reasons' ? 'duplicate_player' and v_result->'reasons' ? 'kill_rate' and v_result->'reasons' ? 'bad_ticket' then
+       and v_result->'reasons' ? 'duplicate_player' and v_result->'reasons' ? 'kill_rate'
+       and v_result->'reasons' ? 'bad_ticket' and v_result->'reasons' ? 'too_many_players' then
         v_pass := v_pass + 1;
     else
         v_fail := v_fail || ('forged report not flagged: ' || v_result::text);

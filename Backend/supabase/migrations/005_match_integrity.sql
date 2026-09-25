@@ -47,6 +47,10 @@ begin
     end if;
 end $$;
 
+-- v1.2 stored no host: the Master Client that reported a match was its host.
+update public.matches set host_id = reported_by
+where host_id is null and reported_by is not null and status = 'reported';
+
 -- An open match has no end yet.
 alter table public.matches alter column ended_at drop not null;
 alter table public.matches alter column ended_at drop default;
@@ -295,6 +299,10 @@ begin
         v_reasons := array_append(v_reasons, 'too_short');
     elsif v_minutes > 180 then
         v_reasons := array_append(v_reasons, 'too_long');
+    end if;
+    -- A room holds at most 16 players; only the first 16 entries are read.
+    if jsonb_typeof(p_payload->'players') = 'array' and jsonb_array_length(p_payload->'players') > 16 then
+        v_reasons := array_append(v_reasons, 'too_many_players');
     end if;
 
     for v_player in select value from jsonb_array_elements(

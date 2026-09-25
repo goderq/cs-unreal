@@ -33,12 +33,17 @@ protected:
 	 *   =create:NAME        Create Session NAME through the menu
 	 *   =browsejoin:NAME    open the Session Browser, wait until NAME is
 	 *                       listed, then join it from the list
+	 *   =backendprobe       the live backend, as a modified client would call it
+	 *   =admin              the ADMIN page with live data, a screenshot of every
+	 *                       tab and of the first row of each (staff accounts)
 	 */
 	void RunMenuTest();
 	void MenuTestStep();
 	void Screenshot(const FString& Name);
 	/** -cstestmenu=backendprobe: the real backend must refuse what this account may not do. */
 	void RunBackendProbe();
+	/** -cstestmenu=admin: one step of the admin page tour, once a second. */
+	void AdminTestStep();
 
 	/** v1.2: the sign-in screen shown before the menu. */
 	TSharedPtr<SCSLoginScreen> LoginScreen;

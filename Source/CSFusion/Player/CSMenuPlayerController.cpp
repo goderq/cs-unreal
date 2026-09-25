@@ -17,6 +17,7 @@
 #include "Misc/Paths.h"
 #include "Multiplayer/CSSessionSubsystem.h"
 #include "TimerManager.h"
+#include "UI/SCSAdminPanel.h"
 #include "UI/SCSLoginScreen.h"
 #include "UI/SCSMainMenu.h"
 #include "Account/CSAccountSubsystem.h"
@@ -276,7 +277,7 @@ void ACSMenuPlayerController::RunBackendProbe()
 		}
 		if (*Index >= Steps->Num())
 		{
-			UE_LOG(LogCS, Log, TEXT("BACKEND PROBE RESULT: %d step(s), %d refused as expected -> %s"),
+			UE_LOG(LogCS, Log, TEXT("BACKEND PROBE RESULT: %d step(s), %d answered as expected -> %s"),
 				Steps->Num(), Steps->Num() - *Failed, *Failed == 0 ? TEXT("BACKEND PROBE OK") : TEXT("BACKEND PROBE BROKEN"));
 			return;
 		}
@@ -290,14 +291,70 @@ void ACSMenuPlayerController::RunBackendProbe()
 			{
 				Json->TryGetStringField(TEXT("error"), Error);
 			}
-			UE_LOG(LogCS, Log, TEXT("BACKEND PROBE RESULT: %s -> %d '%s' -> %s"), *Done.Name, Code, *Error,
-				bOk ? TEXT("REFUSED OK") : TEXT("NOT STOPPED"));
+			// Staff may look (200); everything else must be refused.
+			const TCHAR* Verdict = bOk ? (Code < 300 ? TEXT("ALLOWED OK") : TEXT("REFUSED OK"))
+				: (Code < 300 ? TEXT("NOT STOPPED") : TEXT("WRONG ANSWER - BROKEN"));
+			UE_LOG(LogCS, Log, TEXT("BACKEND PROBE RESULT: %s -> %d '%s' -> %s"), *Done.Name, Code, *Error, Verdict);
 			*Failed += bOk ? 0 : 1;
 			++(*Index);
 			(*Next)();
 		});
 	};
 	(*Next)();
+}
+
+void ACSMenuPlayerController::AdminTestStep()
+{
+#if UE_BUILD_SHIPPING
+	GetWorldTimerManager().ClearTimer(MenuTestTimer);
+#else
+	const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	const TSharedPtr<SCSAdminPanel> Panel = Menu.IsValid() ? Menu->GetAdminPanel() : nullptr;
+	if (!Account || !Account->IsStaff() || !Panel.IsValid())
+	{
+		UE_LOG(LogCS, Log, TEXT("ADMIN TEST RESULT: this account is not staff -> ADMIN SKIPPED"));
+		GetWorldTimerManager().ClearTimer(MenuTestTimer);
+		return;
+	}
+	if (MenuTestStage == 0)
+	{
+		Menu->ShowPage(SCSMainMenu::EPage::Admin);
+		MenuTestWaited = 0.f;
+		++MenuTestStage;
+		return;
+	}
+	// Each view gets three seconds for the backend to answer, then a screenshot,
+	// and one more second for the screenshot to be taken (it is taken with a
+	// later frame) before the next view: player list, a player, match list, a
+	// match, the log.
+	static const TCHAR* Shots[] = { TEXT("admin_players"), TEXT("admin_player"), TEXT("admin_matches"), TEXT("admin_match"), TEXT("admin_log") };
+	const int32 Shot = MenuTestStage - 1;
+	MenuTestWaited += 1.f;
+	if (MenuTestWaited < 3.f)
+	{
+		return;
+	}
+	if (MenuTestWaited < 4.f)
+	{
+		Screenshot(Shots[Shot]);
+		UE_LOG(LogCS, Log, TEXT("ADMIN TEST: %s - %s"), Shots[Shot], *Panel->TestDescribe());
+		return;
+	}
+	MenuTestWaited = 0.f;
+	switch (Shot)
+	{
+	case 0: Panel->TestSelectFirstRow(); break;
+	case 1: Panel->TestShowTab(1); break;
+	case 2: Panel->TestSelectFirstRow(); break;
+	case 3: Panel->TestShowTab(2); break;
+	default:
+		UE_LOG(LogCS, Log, TEXT("ADMIN TEST RESULT: %s -> %s"), *Panel->TestDescribe(),
+			Panel->TestHasData() ? TEXT("ADMIN OK") : TEXT("ADMIN BROKEN"));
+		GetWorldTimerManager().ClearTimer(MenuTestTimer);
+		return;
+	}
+	++MenuTestStage;
+#endif
 }
 
 void ACSMenuPlayerController::RunMenuTest()
@@ -325,6 +382,13 @@ void ACSMenuPlayerController::MenuTestStep()
 	{
 		GetWorldTimerManager().ClearTimer(MenuTestTimer);
 		RunBackendProbe();
+		return;
+	}
+
+	// v2.0 admin page with live data: every tab and the first row of each.
+	if (MenuTestAction == TEXT("admin"))
+	{
+		AdminTestStep();
 		return;
 	}
 

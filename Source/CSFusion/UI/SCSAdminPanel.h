@@ -70,12 +70,25 @@ public:
 	/** Page opened: who am I, then the current tab's data. */
 	void Refresh();
 
+#if !UE_BUILD_SHIPPING
+	/** Self-test (-cstestmenu=admin) only: open tab 0 players / 1 matches / 2 log. */
+	void TestShowTab(int32 Tab) { ShowTab(static_cast<ETab>(FMath::Clamp(Tab, 0, 2))); }
+	/** Self-test only: select the first row of the open tab, as a click would. False when it is empty. */
+	bool TestSelectFirstRow();
+	/** Self-test only: what the page holds, in one line. */
+	FString TestDescribe() const;
+	/** Self-test only: the server accepted this account as staff and the lists came back. */
+	bool TestHasData() const { return !MyRole.IsEmpty() && Players.Num() > 0 && !bStatusError; }
+#endif
+
 private:
 	enum class ETab : int32 { Players, Matches, Log };
 
 	UCSAccountSubsystem* GetAccount() const;
 	/** The role may do this (from whoami). A hint for the buttons only. */
 	bool Can(const TCHAR* Permission) const { return Permissions.Contains(Permission); }
+	/** A player is selected who is neither me nor of my role or higher (a hint; the server decides). */
+	bool CanActOnSelectedPlayer() const;
 	FString GetReason() const;
 
 	TSharedRef<SWidget> MakeTabButton(const FText& Label, ETab Tab);
@@ -107,6 +120,8 @@ private:
 	void ActOnMatch(const FString& Action, const FText& Done);
 
 	void SetStatus(const FText& Text, bool bError);
+	/** "N player(s)." after a list loads - unless an action just reported its result there. */
+	void SetLoadedStatus(const FText& Text);
 
 	TWeakObjectPtr<UObject> WorldContext;
 	ETab CurrentTab = ETab::Players;
@@ -137,6 +152,8 @@ private:
 
 	FText Status;
 	bool bStatusError = false;
+	/** An action's result stays on the status line until then; the list reload after it does not replace it. */
+	double ActionStatusUntil = 0.0;
 	bool bBusy = false;
 	/** Reset stats asks twice: the first click arms it for a few seconds. */
 	double ResetArmedUntil = 0.0;
