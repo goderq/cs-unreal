@@ -262,6 +262,8 @@ protected:
 	void CSTestShoot();
 	FTimerHandle TestShootTimer;
 	int32 TestShootVictimId = 0;
+	/** The pawn being shot at: re-aimed at right before the trigger, as it may be walking. */
+	TWeakObjectPtr<class ACSCharacter> TestShootTarget;
 	float TestShootVictimHpBefore = -1.f;
 	virtual void PostSeamlessTravel() override;
 	void TestInputRelease();

@@ -253,6 +253,7 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 	}
 
 	CheatGuard.Forget(PlayerId);
+	FireBudgets.Remove(PlayerId);
 
 	const int32 Index = FindRecordIndex(PlayerId);
 	if (Index == INDEX_NONE)
@@ -508,10 +509,10 @@ ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const FCSLoadout
 		return ECSFireRejection::OutOfAmmo;
 	}
 
-	// Fire-rate check against Fusion's room clock, with a tolerance for
-	// ordinary jitter. Anything faster is a rate hack.
-	const double MinInterval = Weapon->GetFireInterval() * (1.0 - Settings->FireRateTolerance);
-	if (Record.LastFireNetworkTime > 0.0 && (Now - Record.LastFireNetworkTime) < MinInterval)
+	// Fire rate against Fusion's room clock (B15): a budget that refills at
+	// the weapon's rate, so the average is capped while two shots the network
+	// delivered close together both count. Anything faster is a rate hack.
+	if (FCSFireBudget::Available(FireBudgets.Find(PlayerId), Weapon->GetFireInterval(), Settings->FireJitterSeconds, Now) < 1.0 - 1.0e-6)
 	{
 		return ECSFireRejection::FireRate;
 	}
@@ -544,7 +545,14 @@ void ACSMatchDirector::CommitFire(int32 PlayerId)
 		Inventory->SetSlotAmmo(Loadout.Slot, Loadout.RoundsInMag - 1, Loadout.Reserve);
 	}
 
-	Record->LastFireNetworkTime = UCSAuthority::GetNetworkTimeSeconds(this);
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+	Record->LastFireNetworkTime = Now;
+	if (Loadout.Weapon)
+	{
+		const double Interval = Loadout.Weapon->GetFireInterval();
+		const double Shots = FCSFireBudget::Available(FireBudgets.Find(PlayerId), Interval, UCSCombatSettings::Get()->FireJitterSeconds, Now);
+		FireBudgets.Add(PlayerId, FCSFireBudget{ FMath::Max(0.0, Shots - 1.0), Now });
+	}
 	OnRecordsChanged.Broadcast(PlayerId);
 
 	// Shooting from under spawn protection ends it.

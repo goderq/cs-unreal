@@ -189,6 +189,22 @@ struct FCSCombatEvent
 };
 DECLARE_MULTICAST_DELEGATE_OneParam(FCSCombatEventSignature, const FCSCombatEvent&);
 
+/** Fire-rate budget of one player (B15), authority-local. See UCSCombatSettings::FireJitterSeconds. */
+struct FCSFireBudget
+{
+	/** Shots available at Time. */
+	double Shots = 0.0;
+	double Time = 0.0;
+
+	/** Shots available at Now for a weapon firing every Interval seconds. */
+	static double Available(const FCSFireBudget* Budget, double Interval, double JitterSeconds, double Now)
+	{
+		const double SafeInterval = FMath::Max(Interval, 0.01);
+		const double Cap = FMath::Min(2.0, 1.0 + JitterSeconds / SafeInterval);
+		return Budget ? FMath::Min(Cap, Budget->Shots + (Now - Budget->Time) / SafeInterval) : Cap;
+	}
+};
+
 UCLASS()
 class CSFUSION_API ACSMatchDirector : public AActor
 {
@@ -485,6 +501,9 @@ private:
 	 * air during a host migration goes off harmlessly.
 	 */
 	TSet<int32> LaunchedGrenades;
+
+	/** Fire-rate budgets (B15). Not replicated; a new Master Client starts everyone full. */
+	TMap<int32, FCSFireBudget> FireBudgets;
 	TMap<int32, double> LastMeleeTime;
 	TMap<int32, double> LastAmmoBuyTime;
 	/** Authority: bots blinded by a flashbang, until this network time. */

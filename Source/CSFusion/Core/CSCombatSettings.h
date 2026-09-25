@@ -55,11 +55,14 @@ public:
 	float MaxFireOriginDeviation = 400.f;
 
 	/**
-	 * Fraction of the weapon's fire interval a shot may arrive early.
-	 * Covers jitter; anything faster is a fire-rate hack and is dropped.
+	 * Fire rate (B15): a budget of shots per player. It refills at the
+	 * weapon's rate, so the average never exceeds its rounds per minute, and
+	 * holds up to 1 + FireJitterSeconds / interval shots (at most 2): two
+	 * honest shots that the network delivered close together both count,
+	 * while a slow weapon still cannot fire twice in a row.
 	 */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0.0", ClampMax = "0.9"))
-	float FireRateTolerance = 0.15f;
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float FireJitterSeconds = 0.2f;
 
 	/** Log every rejected request. Noisy, but the only way to see cheating. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat")

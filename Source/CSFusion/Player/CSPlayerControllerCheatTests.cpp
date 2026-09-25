@@ -58,7 +58,8 @@ void ACSPlayerController::CSTestCheat()
 	{
 		ACSCharacter* Self1 = Cast<ACSCharacter>(GetPawn());
 		const int32 After = Rounds(this, Me);
-		Report(TEXT("fire-rate hack (10 shots in one frame)"), CheatRoundsBefore - After <= 1,
+		// B15: the fire-rate budget allows a burst of two (network jitter), never ten.
+		Report(TEXT("fire-rate hack (10 shots in one frame)"), CheatRoundsBefore - After <= 2,
 			FString::Printf(TEXT("rounds %d -> %d"), CheatRoundsBefore, After));
 		if (!Self1)
 		{

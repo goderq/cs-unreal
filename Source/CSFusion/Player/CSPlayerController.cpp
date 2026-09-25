@@ -649,6 +649,7 @@ void ACSPlayerController::CSTestShoot()
 	}
 
 	TestShootVictimId = Target->GetOwningPlayerId();
+	TestShootTarget = Target;
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	TestShootVictimHpBefore = Director ? Director->GetHealth(TestShootVictimId) : -1.f;
 
@@ -693,6 +694,16 @@ void ACSPlayerController::CSTestShoot()
 	}
 	GetWorldTimerManager().SetTimer(TestShootTimer, [this]()
 	{
+		// The other client may be walking too (it runs the same test): aim at
+		// where it is now, not where it was when the aim started.
+		const ACSCharacter* Shooter = Cast<ACSCharacter>(GetPawn());
+		if (Shooter && TestShootTarget.IsValid())
+		{
+			FVector Eye;
+			FVector Unused2;
+			Shooter->GetAimRay(Eye, Unused2);
+			SetControlRotation((TestShootTarget->GetActorLocation() - Eye).Rotation());
+		}
 		const FInputDeviceId Device = IPlatformInputDeviceMapper::Get().GetDefaultInputDevice();
 		FViewport* Viewport = (GetLocalPlayer() && GetLocalPlayer()->ViewportClient)
 			? GetLocalPlayer()->ViewportClient->Viewport : nullptr;

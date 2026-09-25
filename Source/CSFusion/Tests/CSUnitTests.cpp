@@ -11,6 +11,7 @@
 
 #include "AI/CSBotTuning.h"
 #include "Combat/CSCheatGuard.h"
+#include "Combat/CSMatchDirector.h"
 #include "Misc/AutomationTest.h"
 #include "Settings/CSSettingsSubsystem.h"
 #include "Weapons/CSWeaponComponent.h"
@@ -265,6 +266,70 @@ bool FCSUnitCheatFloodTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("13 shots/s for 30 s: none refused"), Refused, 0);
 	TestEqual(TEXT("13 shots/s: no strikes"), Legit.GetStrikes(7), 0);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCSUnitFireBudgetTest, "CSFusion.Unit.AntiCheat.FireRate", CSUnitFlags)
+bool FCSUnitFireBudgetTest::RunTest(const FString& Parameters)
+{
+	// Phase 2 (B15): the fire-rate budget. Same arithmetic as ValidateFire / CommitFire.
+	auto Fire = [](FCSFireBudget& Budget, bool& bFirst, double Interval, double Now)
+	{
+		const double Shots = FCSFireBudget::Available(bFirst ? nullptr : &Budget, Interval, 0.2, Now);
+		if (Shots < 1.0 - 1.0e-6)
+		{
+			return false;
+		}
+		Budget = FCSFireBudget{ FMath::Max(0.0, Shots - 1.0), Now };
+		bFirst = false;
+		return true;
+	};
+
+	// A rifle (0.1 s) at its exact rate; every other packet arrives 80 ms late (gaps of 20 and 180 ms): all shots count.
+	{
+		FCSFireBudget Budget;
+		bool bFirst = true;
+		int32 Refused = 0;
+		for (int32 i = 0; i < 300; ++i)
+		{
+			const double Jitter = (i % 2 == 0) ? 0.08 : 0.0; // network delay 0..80 ms
+			Refused += Fire(Budget, bFirst, 0.1, 10.0 + i * 0.1 + Jitter) ? 0 : 1;
+		}
+		TestEqual(TEXT("rifle, packets delayed 0-80 ms: none refused"), Refused, 0);
+	}
+
+	// Ten shots in one frame: at most two (the jitter allowance), never ten.
+	{
+		FCSFireBudget Budget;
+		bool bFirst = true;
+		int32 Accepted = 0;
+		for (int32 i = 0; i < 10; ++i)
+		{
+			Accepted += Fire(Budget, bFirst, 0.1, 20.0) ? 1 : 0;
+		}
+		TestEqual(TEXT("10 shots in one frame"), Accepted, 2);
+	}
+
+	// A rate hack at 2x for 10 s gets no more than the weapon rate (+ the burst).
+	{
+		FCSFireBudget Budget;
+		bool bFirst = true;
+		int32 Accepted = 0;
+		for (int32 i = 0; i < 200; ++i)
+		{
+			Accepted += Fire(Budget, bFirst, 0.1, 30.0 + i * 0.05) ? 1 : 0;
+		}
+		TestTrue(TEXT("2x rate hack capped at the weapon rate"), Accepted <= 102);
+	}
+
+	// A sniper rifle (1.5 s) cannot double-tap, but 150 ms of jitter is fine.
+	{
+		FCSFireBudget Budget;
+		bool bFirst = true;
+		TestTrue(TEXT("sniper first shot"), Fire(Budget, bFirst, 1.5, 40.0));
+		TestFalse(TEXT("sniper double tap"), Fire(Budget, bFirst, 1.5, 40.3));
+		TestTrue(TEXT("sniper shot 150 ms early"), Fire(Budget, bFirst, 1.5, 41.35));
+	}
 	return true;
 }
 
