@@ -1,197 +1,171 @@
-// CS-Fusion: admin actions from the in-game admin panel.
+// CS-Fusion: AdminService - every administration action goes through here.
 //
-// The caller proves who they are with the login token from eos-login (same
-// check as report-match). Only a profile with is_admin = true may do
-// anything here; the check runs against the database on every call, so
-// revoking admin takes effect immediately. Every action is written to
-// admin_log so there is a trail of who did what.
+//   game (admin panel) -> this function -> login token checked -> SQL function
+//   (migration 006): role + permission + target rank -> change -> security_log
 //
-// Actions (POST JSON { action, ... }):
-//   players      { query?, limit? }             list/search profiles with stats
-//   ban          { profile_id, hours }          hours <= 0 means permanent
-//   unban        { profile_id }
-//   set_admin    { profile_id, is_admin }       an admin cannot demote themselves
-//   rename       { profile_id, nickname }       3..20 characters, unique
-//   reset_stats  { profile_id }
-//   log          { limit? }                     the latest admin actions
+// The caller is whoever the login token (from eos-login) says, and nothing the
+// client sends changes that: the actor id passed to the database is the
+// token's subject. Roles and bans are read from the database on every call,
+// so taking a role away or banning a staff member works at once. Hiding the
+// admin page in the game is only cosmetics; this is the check.
 //
-// Deploy with "Verify JWT with legacy secret" on (the dashboard default).
-// Secrets: CS_JWT_SECRET (plus the automatic SUPABASE_URL and
-// SUPABASE_SERVICE_ROLE_KEY).
+// POST { "action": "...", ... } ->
+//   200 { "result": ... }    403 forbidden    404 not found
+//   400 bad input            409 conflict      429 too many requests
+//
+// Deploy with "Verify JWT with legacy secret" ON. Secrets: CS_JWT_SECRET (plus
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, provided by Supabase).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { verify } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 
+class HttpError extends Error {
+    constructor(public status: number, message: string) {
+        super(message);
+    }
+}
+
 const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function uuid(value: unknown, name: string): string {
+    if (typeof value !== "string" || !UUID.test(value)) {
+        throw new HttpError(400, `${name} is required`);
+    }
+    return value;
+}
+
+function text(value: unknown, max: number): string {
+    return typeof value === "string" ? value.slice(0, max) : "";
+}
+
+function int(value: unknown, fallback: number): number {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
+/** Letters of any script, digits, space, _ - #; 3..20. The database adds its own checks. */
+function nickname(value: unknown): string {
+    const name = text(value, 64).normalize("NFKC").replace(/\s+/g, " ").trim();
+    if (!/^[\p{L}\p{N}_\- #]{3,20}$/u.test(name)) {
+        throw new HttpError(400, "a nickname has 3 to 20 letters, digits, spaces, _ - or #");
+    }
+    return name;
+}
 
 async function callerProfileId(request: Request): Promise<string> {
     const header = request.headers.get("authorization") ?? "";
     const token = header.toLowerCase().startsWith("bearer ") ? header.slice(7) : "";
     if (!token) {
-        throw new Error("missing login token");
+        throw new HttpError(401, "sign in first");
     }
-    const key = await crypto.subtle.importKey(
-        "raw", new TextEncoder().encode(Deno.env.get("CS_JWT_SECRET")!),
-        { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"],
-    );
-    const payload = await verify(token, key) as Record<string, unknown>;
-    if (!payload.sub) {
-        throw new Error("token has no subject");
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(Deno.env.get("CS_JWT_SECRET")!),
+        { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+    let payload: Record<string, unknown>;
+    try {
+        payload = await verify(token, key) as Record<string, unknown>;
+    } catch {
+        throw new HttpError(401, "the login has expired - sign in again");
     }
-    return String(payload.sub);
+    // Only a player login token; the anon key and service keys carry no subject.
+    if (payload.role !== "authenticated" || payload.aud !== "authenticated" || typeof payload.sub !== "string"
+        || !UUID.test(payload.sub)) {
+        throw new HttpError(401, "not a player login token");
+    }
+    return payload.sub;
 }
 
-const isUuid = (value: unknown) =>
-    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+type Call = [fn: string, args: Record<string, unknown>];
+
+const ACTIONS: Record<string, (actor: string, b: Record<string, unknown>) => Call> = {
+    whoami: (actor) => ["admin_whoami", { p_actor: actor }],
+    players: (actor, b) => ["admin_players_search", { p_actor: actor, p_query: text(b.query, 64), p_limit: int(b.limit, 50) }],
+    player: (actor, b) => ["admin_player_get", { p_actor: actor, p_target: uuid(b.profile_id, "profile_id") }],
+    ban: (actor, b) => ["admin_ban", {
+        p_actor: actor, p_target: uuid(b.profile_id, "profile_id"), p_hours: int(b.hours, 0), p_reason: text(b.reason, 300),
+    }],
+    unban: (actor, b) => ["admin_unban", { p_actor: actor, p_target: uuid(b.profile_id, "profile_id"), p_reason: text(b.reason, 300) }],
+    kick: (actor, b) => ["admin_kick", {
+        p_actor: actor, p_target: uuid(b.profile_id, "profile_id"), p_minutes: int(b.minutes, 10), p_reason: text(b.reason, 300),
+    }],
+    set_role: (actor, b) => ["admin_set_role", {
+        p_actor: actor, p_target: uuid(b.profile_id, "profile_id"), p_role: text(b.role, 16), p_reason: text(b.reason, 300),
+    }],
+    reset_nickname: (actor, b) => ["admin_reset_nickname", {
+        p_actor: actor, p_target: uuid(b.profile_id, "profile_id"), p_reason: text(b.reason, 300),
+    }],
+    set_nickname: (actor, b) => ["admin_set_nickname", {
+        p_actor: actor, p_target: uuid(b.profile_id, "profile_id"), p_nickname: nickname(b.nickname), p_reason: text(b.reason, 300),
+    }],
+    reset_stats: (actor, b) => ["admin_reset_stats", { p_actor: actor, p_target: uuid(b.profile_id, "profile_id"), p_reason: text(b.reason, 300) }],
+    matches: (actor, b) => ["admin_matches_list", { p_actor: actor, p_filter: text(b.filter, 16) || "all", p_limit: int(b.limit, 50) }],
+    match: (actor, b) => ["admin_match_get", { p_actor: actor, p_match: uuid(b.match_id, "match_id") }],
+    match_flag: (actor, b) => ["admin_match_flag", { p_actor: actor, p_match: uuid(b.match_id, "match_id"), p_reason: text(b.reason, 300) }],
+    match_void: (actor, b) => ["admin_match_void", { p_actor: actor, p_match: uuid(b.match_id, "match_id"), p_reason: text(b.reason, 300) }],
+    match_approve: (actor, b) => ["admin_match_approve", { p_actor: actor, p_match: uuid(b.match_id, "match_id"), p_reason: text(b.reason, 300) }],
+    log: (actor, b) => ["admin_security_log", {
+        p_actor: actor, p_limit: int(b.limit, 100), p_target: b.profile_id ? uuid(b.profile_id, "profile_id") : null,
+    }],
+};
+
+/** SQLSTATE from the database -> HTTP status. */
+function statusFor(code: string | undefined, hint: string | undefined): number {
+    switch (code) {
+        case "42501": return 403;
+        case "P0002": return 404;
+        case "22023": case "22P02": case "23514": case "22001": return 400;
+        case "23505": return 409;
+        case "P0001": return hint === "rate_limited" ? 429 : 400;
+        default: return 500;
+    }
+}
 
 Deno.serve(async (request) => {
     if (request.method !== "POST") {
         return json(405, { error: "POST only" });
     }
     try {
-        const caller = await callerProfileId(request);
-        const body = await request.json();
-        const action = String(body.action ?? "");
-
-        const admin = createClient(
-            Deno.env.get("SUPABASE_URL")!,
-            Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-            { auth: { persistSession: false } },
-        );
-
-        // Admin right now, according to the database - not to the token.
-        const { data: me, error: meError } = await admin
-            .from("profiles").select("id, nickname, is_admin").eq("id", caller).maybeSingle();
-        if (meError) {
-            return json(500, { error: meError.message });
+        const actor = await callerProfileId(request);
+        let body: Record<string, unknown>;
+        try {
+            body = await request.json();
+        } catch {
+            throw new HttpError(400, "the request is not JSON");
         }
-        if (!me?.is_admin) {
-            return json(403, { error: "not an admin" });
+        const build = ACTIONS[String(body.action ?? "")];
+        if (!build) {
+            throw new HttpError(400, "unknown action");
         }
+        const [fn, args] = build(actor, body);
 
-        const audit = async (target: string | null, details: Record<string, unknown>) => {
-            await admin.from("admin_log").insert({ admin_id: caller, action, target_id: target, details });
-        };
-
-        switch (action) {
-        case "players": {
-            const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 200);
-            let query = admin
-                .from("profiles")
-                .select("id, nickname, epic_account_id, created_at, last_seen_at, banned_until, is_admin, player_stats(matches, wins, kills, deaths, headshots, playtime_seconds)")
-                .order("last_seen_at", { ascending: false })
-                .limit(limit);
-            const text = String(body.query ?? "").trim();
-            if (text) {
-                query = query.ilike("nickname", `%${text.replace(/[%_]/g, "")}%`);
-            }
-            const { data, error } = await query;
-            if (error) {
-                return json(500, { error: error.message });
-            }
-            return json(200, { players: data ?? [] });
+        const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+            { auth: { persistSession: false } });
+        const { data: allowed, error: limitError } = await db.rpc("cs_rate_limit",
+            { p_key: `admin:${actor}`, p_max: 120, p_window_seconds: 60 });
+        if (limitError) {
+            throw limitError;
+        }
+        if (!allowed) {
+            throw new HttpError(429, "too many requests");
         }
 
-        case "ban": {
-            if (!isUuid(body.profile_id)) {
-                return json(400, { error: "profile_id is required" });
+        const { data, error } = await db.rpc(fn, args);
+        if (error) {
+            const status = statusFor(error.code, error.hint);
+            if (status === 500) {
+                console.error(fn, error);
+                return json(500, { error: "server error" });
             }
-            if (body.profile_id === caller) {
-                return json(400, { error: "you cannot ban yourself" });
-            }
-            const hours = Number(body.hours) || 0;
-            // Permanent = far in the future; the game only compares dates.
-            const until = hours > 0
-                ? new Date(Date.now() + Math.min(hours, 24 * 365 * 10) * 3600 * 1000)
-                : new Date("2999-01-01T00:00:00Z");
-            const { error } = await admin.from("profiles").update({ banned_until: until.toISOString() }).eq("id", body.profile_id);
-            if (error) {
-                return json(500, { error: error.message });
-            }
-            await audit(body.profile_id, { hours, until: until.toISOString() });
-            return json(200, { ok: true, banned_until: until.toISOString() });
+            return json(status, { error: error.message, code: error.code });
         }
-
-        case "unban": {
-            if (!isUuid(body.profile_id)) {
-                return json(400, { error: "profile_id is required" });
-            }
-            const { error } = await admin.from("profiles").update({ banned_until: null }).eq("id", body.profile_id);
-            if (error) {
-                return json(500, { error: error.message });
-            }
-            await audit(body.profile_id, {});
-            return json(200, { ok: true });
-        }
-
-        case "set_admin": {
-            if (!isUuid(body.profile_id)) {
-                return json(400, { error: "profile_id is required" });
-            }
-            const makeAdmin = Boolean(body.is_admin);
-            if (body.profile_id === caller && !makeAdmin) {
-                return json(400, { error: "you cannot remove your own admin rights" });
-            }
-            // profiles_guard lets only the service role change is_admin.
-            const { error } = await admin.from("profiles").update({ is_admin: makeAdmin }).eq("id", body.profile_id);
-            if (error) {
-                return json(500, { error: error.message });
-            }
-            await audit(body.profile_id, { is_admin: makeAdmin });
-            return json(200, { ok: true });
-        }
-
-        case "rename": {
-            if (!isUuid(body.profile_id)) {
-                return json(400, { error: "profile_id is required" });
-            }
-            const nickname = String(body.nickname ?? "").normalize("NFKC").replace(/[^\p{L}\p{N}_\- #]/gu, "").trim();
-            if (nickname.length < 3 || nickname.length > 20) {
-                return json(400, { error: "the name must be 3 to 20 characters" });
-            }
-            const { error } = await admin.from("profiles").update({ nickname }).eq("id", body.profile_id);
-            if (error) {
-                return json(String(error.message).includes("duplicate") ? 409 : 500,
-                    { error: String(error.message).includes("duplicate") ? "that name is taken" : error.message });
-            }
-            await audit(body.profile_id, { nickname });
-            return json(200, { ok: true, nickname });
-        }
-
-        case "reset_stats": {
-            if (!isUuid(body.profile_id)) {
-                return json(400, { error: "profile_id is required" });
-            }
-            const { error } = await admin.from("player_stats").update({
-                matches: 0, wins: 0, rounds_won: 0, kills: 0, deaths: 0, headshots: 0, damage: 0, playtime_seconds: 0,
-                updated_at: new Date().toISOString(),
-            }).eq("profile_id", body.profile_id);
-            if (error) {
-                return json(500, { error: error.message });
-            }
-            await audit(body.profile_id, {});
-            return json(200, { ok: true });
-        }
-
-        case "log": {
-            const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 200);
-            const { data, error } = await admin
-                .from("admin_log")
-                .select("created_at, action, details, admin:admin_id(nickname), target:target_id(nickname)")
-                .order("created_at", { ascending: false })
-                .limit(limit);
-            if (error) {
-                return json(500, { error: error.message });
-            }
-            return json(200, { log: data ?? [] });
-        }
-
-        default:
-            return json(400, { error: "unknown action" });
-        }
+        return json(200, { result: data });
     } catch (error) {
+        if (error instanceof HttpError) {
+            return json(error.status, { error: error.message });
+        }
         console.error(error);
-        return json(401, { error: String((error as Error)?.message ?? error) });
+        return json(500, { error: "server error" });
     }
 });
