@@ -47,6 +47,8 @@ enum class ECSRequestKind : uint8
 	Drop,
 	Buy,
 	Throw,
+	/** Aim down sights on / off (B8). */
+	Aim,
 	Count
 };
 

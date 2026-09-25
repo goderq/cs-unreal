@@ -286,6 +286,9 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 
 	CheatGuard.Forget(PlayerId);
 	FireBudgets.Remove(PlayerId);
+	SprayStates.Remove(PlayerId);
+	AimStates.Remove(PlayerId);
+	ObservedMotion.Remove(PlayerId);
 
 	const int32 Index = FindRecordIndex(PlayerId);
 	if (Index == INDEX_NONE)
@@ -586,6 +589,7 @@ void ACSMatchDirector::CommitFire(int32 PlayerId)
 		const double Interval = Loadout.Weapon->GetFireInterval();
 		const double Shots = FCSFireBudget::Available(FireBudgets.Find(PlayerId), Interval, UCSCombatSettings::Get()->FireJitterSeconds, Now);
 		FireBudgets.Add(PlayerId, FCSFireBudget{ FMath::Max(0.0, Shots - 1.0), Now });
+		CSShotModel::CommitShot(SprayStates.FindOrAdd(PlayerId), *Loadout.Weapon, Now);
 	}
 	OnRecordsChanged.Broadcast(PlayerId);
 
@@ -827,6 +831,9 @@ void ACSMatchDirector::ResetLife(FCSPlayerCombatRecord& Record, int32 SpawnPoint
 	Record.LastFireNetworkTime = 0.0;
 	Record.ReloadCompleteNetworkTime = 0.0;
 	Record.ReloadSlot = INDEX_NONE;
+	// A new life starts with a steady weapon and not aiming (B8).
+	SprayStates.Remove(Record.PlayerId);
+	AimStates.Remove(Record.PlayerId);
 	Record.RespawnAtNetworkTime = 0.0;
 	Record.RespawnPointIndex = SpawnPointIndex;
 	Record.RespawnCounter += 1;
@@ -1460,7 +1467,9 @@ void ACSMatchDirector::TickAuthority()
 			// position is only a claim. See FCSCheatGuard.
 			if (Record.bAlive)
 			{
-				CheatGuard.Observe(Record.PlayerId, MakeMoveSample(Record, Pawn, Previous.GetPtrOrNull(), Now));
+				const FCSMoveSample Sample = MakeMoveSample(Record, Pawn, Previous.GetPtrOrNull(), Now);
+				CheatGuard.Observe(Record.PlayerId, Sample);
+				ObserveMotion(Record.PlayerId, Sample.Location, Sample.HeightAboveFloor, Now);
 			}
 
 			// Liveness: the client bumps a counter every second on its
@@ -1698,6 +1707,69 @@ void ACSMatchDirector::ReportViolation(int32 PlayerId, ECSCheatReason Reason, fl
 	{
 		CheatGuard.ReportViolation(PlayerId, Reason, UCSAuthority::GetNetworkTimeSeconds(this), Weight, Detail);
 	}
+}
+
+// ---------------------------------------------------------------------------
+// v2.0 (B8): what the authority knows about a shooter
+// ---------------------------------------------------------------------------
+
+void ACSMatchDirector::ObserveMotion(int32 PlayerId, const FVector& Location, float HeightAboveFloor, double Now)
+{
+	FObservedMotion& Motion = ObservedMotion.FindOrAdd(PlayerId);
+	if (Motion.LastTime >= 0.0 && Now > Motion.LastTime)
+	{
+		const double Dt = Now - Motion.LastTime;
+		const float Instant = FVector::Dist2D(Location, Motion.LastLocation) / static_cast<float>(Dt);
+		// Smoothed over ~0.15 s: replicated positions arrive in uneven steps.
+		const float Alpha = 1.f - FMath::Exp(-static_cast<float>(Dt) / 0.15f);
+		Motion.Speed = FMath::Lerp(Motion.Speed, FMath::Min(Instant, 3000.f), Alpha);
+	}
+	Motion.LastLocation = Location;
+	Motion.LastTime = Now;
+	Motion.bAirborne = HeightAboveFloor > 40.f;
+}
+
+void ACSMatchDirector::SetAiming(int32 PlayerId, bool bAiming)
+{
+	CS_AUTHORITY_ONLY(this);
+	TPair<bool, double>& Aim = AimStates.FindOrAdd(PlayerId, TPair<bool, double>(false, 0.0));
+	if (Aim.Key != bAiming)
+	{
+		Aim = TPair<bool, double>(bAiming, UCSAuthority::GetNetworkTimeSeconds(this));
+	}
+}
+
+FCSShooterState ACSMatchDirector::GetShooterState(int32 PlayerId, const ACSCharacter* Pawn) const
+{
+	FCSShooterState State;
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+	if (const TPair<bool, double>* Aim = AimStates.Find(PlayerId))
+	{
+		State.bAimed = Aim->Key && Now - Aim->Value >= UCSCombatSettings::Get()->MinAimSeconds;
+	}
+	if (CSBots::IsBotId(PlayerId) || !UCSAuthority::IsSessionActive(this))
+	{
+		// Bots, and everyone offline, move on this machine: their own movement is the truth.
+		if (Pawn)
+		{
+			State.SpeedRatio = CSShotModel::SpeedRatioFor(Pawn->GetVelocity().Size2D());
+			const UCharacterMovementComponent* Move = Pawn->GetCharacterMovement();
+			State.bAirborne = Move && Move->IsFalling();
+		}
+	}
+	else if (const FObservedMotion* Motion = ObservedMotion.Find(PlayerId))
+	{
+		// A remote client moves its own pawn: only what the authority saw counts.
+		State.SpeedRatio = CSShotModel::SpeedRatioFor(Motion->Speed);
+		State.bAirborne = Motion->bAirborne;
+	}
+	return State;
+}
+
+float ACSMatchDirector::GetShotSeries(int32 PlayerId, const UCSWeaponDefinition& Weapon) const
+{
+	const FCSSprayState* Spray = SprayStates.Find(PlayerId);
+	return Spray ? CSShotModel::SeriesAt(*Spray, Weapon, UCSAuthority::GetNetworkTimeSeconds(this)) : 0.f;
 }
 
 FCSMoveSample ACSMatchDirector::MakeMoveSample(const FCSPlayerCombatRecord& Record, const ACSCharacter* Pawn, const FVector* Previous, double Now)

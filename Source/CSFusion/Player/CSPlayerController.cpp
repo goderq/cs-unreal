@@ -187,6 +187,10 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestFreeze, 12.f, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestnorecoil")))
+	{
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestNoRecoil, 12.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestwallhop")))
 	{
 		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestWallHop, 12.f, false);

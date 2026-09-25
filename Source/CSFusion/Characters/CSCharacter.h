@@ -250,6 +250,13 @@ public:
 	void RpcRequestReload();
 	void RpcRequestReload_Receive();
 
+	/** v2.0 (B8): aim down sights on / off. The authority keeps and times it; the spread follows its record. */
+	void RequestSetAiming(bool bAiming);
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcSetAiming(bool bAiming);
+	void RpcSetAiming_Receive(bool bAiming);
+
 	/** Cosmetic confirmation of a shot the authority accepted. */
 	SEND_FUSIONRPC(TargetAllClients)
 	void RpcConfirmShot(FVector Origin, FVector Impact, bool bHitPlayer);

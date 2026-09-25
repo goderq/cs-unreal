@@ -482,14 +482,35 @@ void ACSCharacter::PlayLocalFireEffects(const UCSWeaponDefinition* Weapon)
 		End = Hit.ImpactPoint;
 	}
 	PlayShotPresentation(End, /*bLocalPrediction*/ true);
-
-	AddControllerPitchInput(-Weapon->RecoilPitch);
-	AddControllerYawInput(FMath::RandRange(-Weapon->RecoilYaw, Weapon->RecoilYaw));
+	// v2.0 (B8): the view kick follows the recoil pattern (UCSWeaponComponent).
 }
 
 // ---------------------------------------------------------------------------
 // Combat wire contract
 // ---------------------------------------------------------------------------
+void ACSCharacter::RequestSetAiming(bool bAiming)
+{
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcSetAiming(bAiming);
+		return;
+	}
+	RpcSetAiming_Receive(bAiming);
+}
+
+void ACSCharacter::RpcSetAiming_Receive(bool bAiming)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcSetAiming")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Aim))
+	{
+		return;
+	}
+	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+	{
+		Director->SetAiming(GetOwningPlayerId(), bAiming);
+	}
+}
+
 void ACSCharacter::RequestFire(const FVector& Origin, const FVector& Direction, bool bAiming)
 {
 	if (UCSAuthority::IsSessionActive(this))
@@ -546,14 +567,25 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 		return;
 	}
 
+	// v2.0 (B8): where the shot goes is the authority's decision. The client
+	// only says where it aims; the recoil pattern for this shot's place in the
+	// series and the spread cone come from the authority's own state - its
+	// aim-down-sights record (bAiming in the request is ignored), the speed
+	// and height it observed, and the series it keeps. A client that skips
+	// its camera kick or claims to be aiming gains nothing.
+	const FCSShooterState Shooter = Director->GetShooterState(ShooterId, this);
+	const float Series = Director->GetShotSeries(ShooterId, *Weapon);
+	const FRotator Kick = CSShotModel::RecoilAt(*Weapon, Series);
+	const float SpreadDeg = CSShotModel::SpreadDegrees(*Weapon, Shooter, Series);
+	UE_LOG(LogCSCombat, Verbose, TEXT("Shot by %d: series %.1f, kick (%.2f, %.2f), spread %.2f deg (aimed %s, speed %.2f, air %s)"),
+		ShooterId, Series, Kick.Pitch, Kick.Yaw, SpreadDeg, Shooter.bAimed ? TEXT("yes") : TEXT("no"), Shooter.SpeedRatio,
+		Shooter.bAirborne ? TEXT("yes") : TEXT("no"));
+
 	Director->CommitFire(ShooterId);
 
-	// Spread is applied HERE, by the authority, so a client cannot shoot a
-	// perfectly accurate shotgun by sending a clean direction. Each pellet of
-	// a multi-pellet weapon gets its own random offset inside the cone.
-	const float SpreadDeg = bAiming ? Weapon->AimSpreadDegrees : Weapon->HipSpreadDegrees;
+	// Each pellet of a multi-pellet weapon gets its own random offset inside the cone.
 	const float SpreadRad = FMath::DegreesToRadians(SpreadDeg);
-	const FVector AimDir = Direction.GetSafeNormal();
+	const FVector AimDir = (Direction.GetSafeNormal().Rotation() + Kick).Vector();
 
 	FVector FirstImpact = AuthoritativeOrigin + AimDir * Weapon->Range;
 	bool bAnyPlayerHit = false;
@@ -839,6 +871,8 @@ void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
 	{
 		Director->CancelReload(PlayerId);
 		Inventory->SetEquippedSlot(Slot);
+		// Another weapon: not aimed yet (B8).
+		Director->SetAiming(PlayerId, false);
 	}
 }
 

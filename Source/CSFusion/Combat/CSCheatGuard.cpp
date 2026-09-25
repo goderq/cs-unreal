@@ -23,6 +23,7 @@ namespace
 		{ 4.0, 6.0 },	// Drop
 		{ 5.0, 8.0 },	// Buy
 		{ 2.0, 3.0 },	// Throw
+		{ 10.0, 16.0 },	// Aim
 	};
 	static_assert(UE_ARRAY_COUNT(GBuckets) == static_cast<int32>(ECSRequestKind::Count), "one bucket per request kind");
 }

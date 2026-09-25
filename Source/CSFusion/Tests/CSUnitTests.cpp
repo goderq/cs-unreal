@@ -451,4 +451,90 @@ bool FCSUnitFireBudgetTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCSUnitShotModelTest, "CSFusion.Unit.Weapon.ShotModel", CSUnitFlags)
+bool FCSUnitShotModelTest::RunTest(const FString& Parameters)
+{
+	// Phase 3 (B8, C6): the authority's shot model and the light hitboxes.
+	UCSWeaponDefinition* Rifle = NewObject<UCSWeaponDefinition>();
+	Rifle->RoundsPerMinute = 600.f;
+	Rifle->RecoilPitch = 1.2f;
+	Rifle->RecoilYaw = 0.35f;
+	Rifle->RecoilPatternShots = 9;
+	Rifle->RecoilRecoverySeconds = 0.45f;
+	Rifle->HipSpreadDegrees = 2.2f;
+	Rifle->AimSpreadDegrees = 0.35f;
+	Rifle->SpreadPerShot = 0.6f;
+	Rifle->MaxBloomSpreadDegrees = 5.f;
+	Rifle->MoveSpreadDegrees = 4.5f;
+	Rifle->JumpSpreadDegrees = 9.f;
+
+	// A spray at the fire rate: the series counts shots, the kick climbs to the top of the pattern.
+	FCSSprayState Spray;
+	double Now = 100.0;
+	TArray<FRotator> Kicks;
+	for (int32 i = 0; i < 12; ++i)
+	{
+		const float Series = CSShotModel::SeriesAt(Spray, *Rifle, Now);
+		TestTrue(FString::Printf(TEXT("series counts shots (%d)"), i), FMath::IsNearlyEqual(Series, static_cast<float>(FMath::Min(i, 13)), 0.01f));
+		Kicks.Add(CSShotModel::RecoilAt(*Rifle, Series));
+		CSShotModel::CommitShot(Spray, *Rifle, Now);
+		Now += Rifle->GetFireInterval();
+	}
+	TestTrue(TEXT("first shot: no kick"), Kicks[0].IsNearlyZero());
+	TestTrue(TEXT("the pattern climbs"), Kicks[1].Pitch > 0.f && Kicks[5].Pitch > Kicks[1].Pitch);
+	TestTrue(TEXT("the climb stops at the top"), FMath::IsNearlyEqual(Kicks[11].Pitch, 1.2f * 9.f, 0.01f));
+	TestTrue(TEXT("the pattern sways sideways"), FMath::Abs(Kicks[6].Yaw) > 0.05f);
+
+	// The same spray gives the same pattern: deterministic.
+	FCSSprayState Again;
+	double Then = 100.0;
+	bool bSame = true;
+	for (int32 i = 0; i < 12; ++i)
+	{
+		bSame &= CSShotModel::RecoilAt(*Rifle, CSShotModel::SeriesAt(Again, *Rifle, Then)).Equals(Kicks[i], 0.0001f);
+		CSShotModel::CommitShot(Again, *Rifle, Then);
+		Then += Rifle->GetFireInterval();
+	}
+	TestTrue(TEXT("deterministic pattern"), bSame);
+
+	// Released: held for 1.25 intervals, then gone after the recovery time.
+	const double Last = Now - Rifle->GetFireInterval();
+	TestTrue(TEXT("held right after the last shot"), CSShotModel::SeriesAt(Spray, *Rifle, Last + 0.1) >= 11.99f);
+	TestTrue(TEXT("recovering"), CSShotModel::SeriesAt(Spray, *Rifle, Last + 0.3) < 12.f);
+	TestEqual(TEXT("recovered"), CSShotModel::SeriesAt(Spray, *Rifle, Last + 0.125 + 0.45 * 13.f / 9.f + 0.01), 0.f);
+
+	// Spread: aimed and still vs running from the hip vs in the air; bloom capped.
+	FCSShooterState Still;
+	Still.bAimed = true;
+	TestTrue(TEXT("aimed, still, first shot"), FMath::IsNearlyEqual(CSShotModel::SpreadDegrees(*Rifle, Still, 0.f), 0.35f, 0.001f));
+	FCSShooterState Running;
+	Running.SpeedRatio = CSShotModel::SpeedRatioFor(620.f);
+	TestTrue(TEXT("hip fire at a run"), FMath::IsNearlyEqual(CSShotModel::SpreadDegrees(*Rifle, Running, 0.f), 2.2f + 4.5f, 0.001f));
+	TestEqual(TEXT("a slow walk is free"), CSShotModel::SpeedRatioFor(140.f), 0.f);
+	FCSShooterState Air;
+	Air.bAirborne = true;
+	TestTrue(TEXT("in the air"), FMath::IsNearlyEqual(CSShotModel::SpreadDegrees(*Rifle, Air, 0.f), 2.2f + 9.f, 0.001f));
+	TestTrue(TEXT("bloom capped"), FMath::IsNearlyEqual(CSShotModel::SpreadDegrees(*Rifle, FCSShooterState(), 30.f), 2.2f + 5.f, 0.001f));
+
+	// Hitboxes (C6): a body with its feet at the origin, facing +X, shot along +X.
+	auto Shoot = [](bool bCrouched, float Y, float Z, ECSHitZone& Zone)
+	{
+		float Distance = 0.f;
+		return CSShotModel::TraceHitboxes(FVector::ZeroVector, FVector(-1.f, 0.f, 0.f), bCrouched,
+			FVector(-500.f, Y, Z), FVector(1.f, 0.f, 0.f), 10000.f, Zone, Distance);
+	};
+	ECSHitZone Zone = ECSHitZone::None;
+	TestTrue(TEXT("standing: head"), Shoot(false, 0.f, 164.f, Zone) && Zone == ECSHitZone::Head);
+	TestTrue(TEXT("standing: torso"), Shoot(false, 0.f, 120.f, Zone) && Zone == ECSHitZone::Torso);
+	TestTrue(TEXT("standing: legs"), Shoot(false, 0.f, 50.f, Zone) && Zone == ECSHitZone::Limb);
+	TestFalse(TEXT("beside the chest (inside the old capsule): miss"), Shoot(false, 25.f, 120.f, Zone));
+	TestFalse(TEXT("over the head: miss"), Shoot(false, 0.f, 182.f, Zone));
+	TestFalse(TEXT("crouched: standing head height is empty"), Shoot(true, 0.f, 164.f, Zone));
+	TestTrue(TEXT("crouched: head"), Shoot(true, 0.f, 111.f, Zone) && Zone == ECSHitZone::Head);
+	float Straight = -1.f;
+	TestTrue(TEXT("ray-sphere distance"), FMath::IsNearlyEqual(
+		Straight = CSShotModel::RayCapsule(FVector(-100.f, 0.f, 0.f), FVector(1.f, 0.f, 0.f), FVector::ZeroVector, FVector::ZeroVector, 10.f), 90.f, 0.01f));
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

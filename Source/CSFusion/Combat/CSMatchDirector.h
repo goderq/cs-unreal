@@ -31,6 +31,7 @@
 #include "Core/CSFusionCompat.h"
 #include "Combat/CSCheatGuard.h"
 #include "Items/CSShopSettings.h"
+#include "Weapons/CSShotModel.h"
 #include "GameFramework/Actor.h"
 
 // Required because Records uses the FusionArraySize meta tag.
@@ -446,6 +447,17 @@ public:
 	/** Authority: a violation found by a handler (forged RPC, bad input) - a strike against PlayerId. */
 	void ReportViolation(int32 PlayerId, ECSCheatReason Reason, float Weight, const FString& Detail);
 
+	// --- v2.0 (B8): shots decided by the authority --------------------------------
+
+	/** Authority: the player's aim-down-sights request. */
+	void SetAiming(int32 PlayerId, bool bAiming);
+
+	/** Authority: aim, speed and height of the shooter right now, from the authority's own state. */
+	FCSShooterState GetShooterState(int32 PlayerId, const class ACSCharacter* Pawn) const;
+
+	/** Authority: the player's series before the next shot (recoil pattern, bloom). */
+	float GetShotSeries(int32 PlayerId, const UCSWeaponDefinition& Weapon) const;
+
 	/** Authority-local cheat state, for logs and tests. */
 	const FCSCheatGuard& GetCheatGuard() const { return CheatGuard; }
 
@@ -532,6 +544,22 @@ private:
 
 	/** Fire-rate budgets (B15). Not replicated; a new Master Client starts everyone full. */
 	TMap<int32, FCSFireBudget> FireBudgets;
+
+	// --- v2.0 (B8): what the authority knows about each shooter -----------------
+	/** Series of shots per player (recoil pattern and bloom). */
+	TMap<int32, FCSSprayState> SprayStates;
+	/** Aim down sights per player: on / off, and since when (network time). */
+	TMap<int32, TPair<bool, double>> AimStates;
+	/** Speed and height as the authority observes them (humans; bots use their own movement). */
+	struct FObservedMotion
+	{
+		FVector LastLocation = FVector::ZeroVector;
+		double LastTime = -1.0;
+		float Speed = 0.f;
+		bool bAirborne = false;
+	};
+	TMap<int32, FObservedMotion> ObservedMotion;
+	void ObserveMotion(int32 PlayerId, const FVector& Location, float HeightAboveFloor, double Now);
 	TMap<int32, double> LastMeleeTime;
 	TMap<int32, double> LastAmmoBuyTime;
 	/** Authority: bots blinded by a flashbang, until this network time. */

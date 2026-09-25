@@ -8,10 +8,11 @@
 //   ACSMatchDirector     authoritative mutable state (ammo, last shot, alive)
 //   UCSWeaponComponent   local feel and the authority-side shot resolution
 //
-// This component holds NO authoritative state. Its local fields are cosmetic
-// only - spread bloom and the predicted shot time that keeps the trigger
-// responsive. Everything that decides whether a shot counted lives on the
-// director and is validated by the Master Client.
+// This component holds NO authoritative state. Its local fields are a
+// prediction only - the series that moves the view with the recoil pattern
+// and sizes the crosshair, and the predicted shot time that keeps the trigger
+// responsive. Everything that decides whether a shot counted, and where it
+// went, lives on the director and is decided by the Master Client (B8).
 //
 // Why the RPCs are on ACSCharacter and not here: Fusion does support RPCs on
 // subobjects of networked actors, but the character is the surface already
@@ -24,6 +25,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Core/CSCoreTypes.h"
+#include "Weapons/CSShotModel.h"
 #include "CSWeaponComponent.generated.h"
 
 class ACSCharacter;
@@ -117,13 +119,30 @@ public:
 	/** Maps a hit bone to a damage zone. */
 	static ECSHitZone ResolveHitZone(const FName& BoneName);
 
+	/**
+	 * v2.0 (C6): the ray against the victim's light hitboxes (head sphere,
+	 * torso and legs capsules, sized to the replicated stance). True with the
+	 * zone and the distance of the nearest one it enters.
+	 */
+	static bool TraceHitboxes(const ACSCharacter* Victim, const FVector& Origin, const FVector& Direction,
+		float MaxDistance, ECSHitZone& OutZone, float& OutDistance);
+
 protected:
 	/** Owning character, cached. */
 	UPROPERTY(Transient)
 	TObjectPtr<ACSCharacter> OwnerCharacter;
 
-	/** Local, cosmetic: extra spread accumulated by firing. */
-	float CurrentBloomDegrees = 0.f;
+	/** Local prediction of the authority's series (B8): moves the view, sizes the crosshair. */
+	FCSSprayState LocalSpray;
+	/** The recoil the view shows right now, added to the control rotation. */
+	FRotator AppliedKick = FRotator::ZeroRotator;
+	/** The weapon the local series belongs to; a switch starts afresh. */
+	TWeakObjectPtr<const UCSWeaponDefinition> SprayWeapon;
+	/** When aiming started locally (network time), for the crosshair. */
+	double LocalAimSince = 0.0;
+
+	/** Moves the view so it shows Target as the recoil (the delta from what it shows now). */
+	void ApplyKick(const FRotator& Target);
 
 	/** Local predicted shot time, so the trigger feels immediate. */
 	double LocalLastFireTime = 0.0;

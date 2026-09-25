@@ -28,6 +28,7 @@
 #include "NavigationSystem.h"
 #include "TimerManager.h"
 #include "Weapons/CSGrenade.h"
+#include "Weapons/CSWeaponDefinition.h"
 
 #include <limits>
 
@@ -125,6 +126,51 @@ void ACSPlayerController::CSTestWallHop()
 	{
 		TestMoveTo(Elsewhere.Location + FVector(0.f, 0.f, 95.f), [this]() { CSTestWallHop(); });
 	}
+#endif
+}
+
+// -cstestnorecoil (B8): B holds an automatic rifle and fires a burst straight
+// at one point - no view kick, no compensation - claiming in every request to
+// aim down sights without ever asking to aim. The Master Client must still
+// climb the recoil pattern and use hip spread (checked in A's log).
+void ACSPlayerController::CSTestNoRecoil()
+{
+	CS_SELF_TEST_ONLY();
+#if !UE_BUILD_SHIPPING
+	ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn());
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const FCSLoadoutView Loadout = (Mine && Director) ? Director->GetLoadout(Mine->GetOwningPlayerId()) : FCSLoadoutView();
+	const bool bReady = Loadout.Weapon && Loadout.Weapon->bAutomatic && Loadout.RoundsInMag >= 10;
+	if (TestRetryUntil(bReady, TestSpoofTimer, &ACSPlayerController::CSTestNoRecoil, TEXT("an automatic rifle in hand")))
+	{
+		return;
+	}
+	if (!bReady)
+	{
+		UE_LOG(LogCS, Log, TEXT("NORECOIL TEST RESULT: no automatic rifle in hand -> MISSING"));
+		return;
+	}
+	FVector Eye;
+	FVector Dir;
+	Mine->GetAimRay(Eye, Dir);
+	NoRecoilAim = FVector(Dir.X, Dir.Y, 0.f).GetSafeNormal();
+	NoRecoilShots = 0;
+	const float Interval = Loadout.Weapon->GetFireInterval() * 1.05f;
+	UE_LOG(LogCS, Log, TEXT("NORECOIL TEST: 10 shots at one point, every %.3f s, 'aiming' without an aim request."), Interval);
+	GetWorldTimerManager().SetTimer(TestSpoofTimer, [this]()
+	{
+		ACSCharacter* Shooter = Cast<ACSCharacter>(GetPawn());
+		if (!Shooter || ++NoRecoilShots > 10)
+		{
+			GetWorldTimerManager().ClearTimer(TestSpoofTimer);
+			UE_LOG(LogCS, Log, TEXT("NORECOIL TEST: done"));
+			return;
+		}
+		FVector Origin;
+		FVector Unused;
+		Shooter->GetAimRay(Origin, Unused);
+		Shooter->RequestFire(Origin, NoRecoilAim, /*bAiming*/ true);
+	}, Interval, true);
 #endif
 }
 

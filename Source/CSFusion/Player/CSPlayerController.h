@@ -133,6 +133,10 @@ protected:
 	/** -cstestwallhop (B10): step through walls at a legal average speed. */
 	void CSTestWallHop();
 	int32 WallHops = 0;
+	/** -cstestnorecoil (B8): a burst at one point claiming to aim, as a no-recoil cheat would. */
+	void CSTestNoRecoil();
+	FVector NoRecoilAim = FVector::ForwardVector;
+	int32 NoRecoilShots = 0;
 	int32 CheatRoundsBefore = 0;
 	TWeakObjectPtr<class ACSWorldPickup> CheatFarPickup;
 

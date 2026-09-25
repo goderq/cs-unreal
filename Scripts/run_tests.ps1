@@ -202,6 +202,10 @@ $NetScenarios = @(
        Expect = @("A:no heartbeat for .* marked inactive \(kept in the match\)|master marked the frozen B inactive",
                   "A:heartbeat is back - active again|master saw B come back",
                   "A:Player \d+ left \(|__absent__") },
+    # Phase 3 (B8): a burst at one point that claims to aim still climbs the recoil pattern with hip spread.
+    @{ Name = "netnorecoil"; A = "-room={ROOM} -testprimary=m4 -LogCmds=`"LogCSCombat Verbose`""; B = "-room={ROOM} -cstestnorecoil";
+       DelayB = 3; Done = "B:NORECOIL TEST: done|NORECOIL TEST RESULT: .*MISSING"; Timeout = 150;
+       Expect = @("A:Shot by \d+: series [4-9]\.\d, kick \([1-9][0-9.]*, [-0-9.]+\), spread [0-9.]+ deg \(aimed no|master climbed the pattern and refused the fake aim") },
     # Phase 2 (B10): stepping through walls at a legal average speed is still caught.
     @{ Name = "netwallhop"; A = "-room={ROOM} -LogCmds=`"LogCSSecurity Verbose`""; B = "-room={ROOM} -cstestwallhop";
        DelayB = 3; Done = "B:WALLHOP TEST: done"; Timeout = 150;

@@ -64,6 +64,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float FireJitterSeconds = 0.2f;
 
+	/**
+	 * Aiming down sights counts for the spread only after this long (B8): the
+	 * authority keeps each player's aim state from their aim requests, so
+	 * hip-fire with sight accuracy is not possible.
+	 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MinAimSeconds = 0.2f;
+
 	// --- Movement checks and the ladder of measures (B10, B11) -----------------
 	// See FCSCheatGuard. Defaults are tuned for the current maps; raise, never
 	// lower, the speed limits when levels get faster movement.

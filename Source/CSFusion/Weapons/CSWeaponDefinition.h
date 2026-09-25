@@ -163,12 +163,35 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling", meta = (ClampMin = "0.0"))
 	float SpreadRecoveryPerSecond = 6.f;
 
-	/** Per-shot view kick, degrees. Applied locally; purely cosmetic/feel. */
+	/**
+	 * Recoil pattern (v2.0, B8): how far each shot of a series climbs, degrees.
+	 * The authority applies the pattern to the bullet; the owner's view follows
+	 * it and recovers once the trigger is released, so the crosshair shows
+	 * where the next bullet goes and holding a spray on target means pulling
+	 * the mouse down - as in CS. See CSShotModel.
+	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling")
 	float RecoilPitch = 0.6f;
 
+	/** Sideways sway of the pattern once the climb is under way, degrees. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling")
 	float RecoilYaw = 0.18f;
+
+	/** Shots over which the pattern climbs; later shots stay at the top and sway. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling", meta = (ClampMin = "1", ClampMax = "30"))
+	int32 RecoilPatternShots = 8;
+
+	/** Seconds for a full series to recover once the trigger is released. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling", meta = (ClampMin = "0.05"))
+	float RecoilRecoverySeconds = 0.45f;
+
+	/** Extra cone half-angle at full running speed, degrees (B8). Walking slowly costs little. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling", meta = (ClampMin = "0.0"))
+	float MoveSpreadDegrees = 3.f;
+
+	/** Extra cone half-angle while in the air, degrees (B8). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling", meta = (ClampMin = "0.0"))
+	float JumpSpreadDegrees = 8.f;
 
 	// --- Presentation -------------------------------------------------------
 
