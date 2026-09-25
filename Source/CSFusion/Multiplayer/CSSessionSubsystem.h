@@ -148,6 +148,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
 	void LeaveToMainMenu();
 
+	/** LeaveToMainMenu, and the menu shows Message (as an error) when it opens. */
+	void LeaveToMainMenuWithMessage(const FString& Message);
+
 	/** Full teardown of the Photon connection. */
 	UFUNCTION(BlueprintCallable, Category = "CS|Session")
 	void Disconnect();

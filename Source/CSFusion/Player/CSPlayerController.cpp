@@ -174,6 +174,14 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestSpoof, 12.f, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestfreeze")))
+	{
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestFreeze, 12.f, false);
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestremoval")))
+	{
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestRemoval, 12.f, false);
+	}
 #if !UE_BUILD_SHIPPING
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestbotflag")))
 	{

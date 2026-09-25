@@ -29,6 +29,52 @@
 
 #include <limits>
 
+// B11 self-tests on the non-master client B (scenarios netfreeze, netremoval).
+//   -cstestfreeze   the heartbeat stops for 15 s, as if the game froze: the
+//                   Master Client must keep B in the match
+//   -cstestremoval  B teleports three times, each time after the previous
+//                   suspension ran out: the third suspension removes B from
+//                   the match, and B's game leaves for the menu with the reason
+void ACSPlayerController::CSTestFreeze()
+{
+#if !UE_BUILD_SHIPPING
+	ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn());
+	if (!Mine)
+	{
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestFreeze, 2.f, false);
+		return;
+	}
+	Mine->DebugPauseHeartbeat(15.f);
+	UE_LOG(LogCS, Log, TEXT("FREEZE TEST: heartbeat paused for 15 s."));
+	GetWorldTimerManager().SetTimer(TestSpoofTimer, [this]()
+	{
+		const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+		FCSPlayerCombatRecord Record;
+		const bool bKept = Director && Director->GetRecord(UCSAuthority::GetLocalPlayerId(this), Record);
+		UE_LOG(LogCS, Log, TEXT("FREEZE TEST RESULT: after a 15 s freeze -> %s"),
+			bKept ? TEXT("KEPT OK (still in the match)") : TEXT("DROPPED BROKEN (removed from the match)"));
+	}, 22.f, false);
+#endif
+}
+
+void ACSPlayerController::CSTestRemoval()
+{
+#if !UE_BUILD_SHIPPING
+	if (ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn()))
+	{
+		++RemovalTeleports;
+		UE_LOG(LogCS, Log, TEXT("REMOVAL TEST: teleport %d."), RemovalTeleports);
+		Mine->SetActorLocation(Mine->GetActorLocation() + FVector(0.f, RemovalTeleports % 2 ? 1500.f : -1500.f, 0.f),
+			false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	if (RemovalTeleports < 3)
+	{
+		// Past the suspension (10 s), so the next teleport is a new one.
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestRemoval, 12.f, false);
+	}
+#endif
+}
+
 void ACSPlayerController::CSTestSpoof()
 {
 #if !UE_BUILD_SHIPPING

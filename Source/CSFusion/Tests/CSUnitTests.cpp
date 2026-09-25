@@ -186,7 +186,7 @@ bool FCSUnitCheatMovementTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("teleport: reason"), Guard.GetLastReason(3) == ECSCheatReason::Teleport);
 		TestFalse(TEXT("teleport: fire refused"), Guard.AllowRequest(3, ECSRequestKind::Fire, Now));
 		TestTrue(TEXT("teleport: reload still allowed"), Guard.AllowRequest(3, ECSRequestKind::Reload, Now));
-		const double Later = Walk(Guard, 3, Pos, Now, 300.f, FCSCheatGuard::SuspensionSeconds + 0.5);
+		const double Later = Walk(Guard, 3, Pos, Now, 300.f, FCSCheatTuning().SuspensionSeconds + 0.5);
 		TestFalse(TEXT("teleport: suspension lifted"), Guard.IsSuspended(3, Later));
 		TestTrue(TEXT("teleport: fire allowed again"), Guard.AllowRequest(3, ECSRequestKind::Fire, Later));
 	}
@@ -225,6 +225,124 @@ bool FCSUnitCheatMovementTest::RunTest(const FString& Parameters)
 		Guard.Forget(6);
 		TestFalse(TEXT("forget: not suspended"), Guard.IsSuspended(6, Now + 0.2));
 		TestTrue(TEXT("forget: no reason"), Guard.GetLastReason(6) == ECSCheatReason::None);
+	}
+	return true;
+}
+
+namespace
+{
+	/** One 30 Hz step of a full sample: moves by Velocity, reports the floor gap and walls. */
+	double Step(FCSCheatGuard& Guard, int32 Id, FVector& Pos, double Now, const FVector& Velocity, float AboveFloor,
+		bool bBlocked = false, int32 Respawn = 0, const FVector* Spawn = nullptr)
+	{
+		Now += 1.0 / 30.0;
+		Pos += Velocity / 30.0;
+		FCSMoveSample Sample;
+		Sample.Location = Pos;
+		Sample.Now = Now;
+		Sample.RespawnCounter = Respawn;
+		Sample.HeightAboveFloor = AboveFloor;
+		Sample.bPathBlocked = bBlocked;
+		if (Spawn)
+		{
+			Sample.SpawnPoint = *Spawn;
+			Sample.bHasSpawnPoint = true;
+		}
+		Guard.Observe(Id, Sample);
+		return Now;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCSUnitCheatMovement2Test, "CSFusion.Unit.AntiCheat.Movement2", CSUnitFlags)
+bool FCSUnitCheatMovement2Test::RunTest(const FString& Parameters)
+{
+	// Phase 2 (B10): flying, walls, spawn points; B11: the ladder.
+
+	// Stairs at a sprint (rising ~430 cm/s) and a normal jump: no strikes.
+	{
+		FCSCheatGuard Guard;
+		FVector Pos = FVector::ZeroVector;
+		double Now = 100.0;
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Guard, 1, Pos, Now, FVector(0.f, 0.f, 0.f), 0.f); }
+		for (int32 i = 0; i < 60; ++i) { Now = Step(Guard, 1, Pos, Now, FVector(600.f, 0.f, 430.f), 0.f); }
+		for (int32 i = 0; i < 24; ++i)
+		{
+			const float T = i / 30.f;
+			const float Height = FMath::Max(0.f, 420.f * T - 490.f * T * T); // a 0.86 s jump, 90 cm high
+			Now = Step(Guard, 1, Pos, Now, FVector(600.f, 0.f, 0.f), Height);
+		}
+		TestEqual(TEXT("stairs and a jump: no strikes"), Guard.GetStrikes(1), 0);
+	}
+
+	// Hovering 200 cm above the floor: a strike every 3 s, suspended by the second one.
+	{
+		FCSCheatGuard Guard;
+		FVector Pos = FVector::ZeroVector;
+		double Now = 100.0;
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Guard, 2, Pos, Now, FVector::ZeroVector, 0.f); }
+		for (int32 i = 0; i < 30 * 7; ++i) { Now = Step(Guard, 2, Pos, Now, FVector::ZeroVector, 200.f); }
+		TestTrue(TEXT("hovering: suspended"), Guard.IsSuspended(2, Now));
+		TestTrue(TEXT("hovering: reason"), Guard.GetLastReason(2) == ECSCheatReason::Flying);
+	}
+
+	// Rising at 900 cm/s (a fly hack going up): a strike for flying.
+	{
+		FCSCheatGuard Guard;
+		FVector Pos = FVector::ZeroVector;
+		double Now = 100.0;
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Guard, 3, Pos, Now, FVector::ZeroVector, 0.f); }
+		for (int32 i = 0; i < 45; ++i) { Now = Step(Guard, 3, Pos, Now, FVector(0.f, 0.f, 900.f), 0.f); }
+		TestTrue(TEXT("rising: reason"), Guard.GetLastReason(3) == ECSCheatReason::Flying);
+	}
+
+	// Four steps through walls in quick succession: suspended (three decay to just under the limit).
+	{
+		FCSCheatGuard Guard;
+		FVector Pos = FVector::ZeroVector;
+		double Now = 100.0;
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Guard, 4, Pos, Now, FVector::ZeroVector, 0.f); }
+		for (int32 i = 0; i < 4; ++i) { Now = Step(Guard, 4, Pos, Now, FVector(300.f, 0.f, 0.f), 0.f, /*bBlocked*/ true); }
+		TestTrue(TEXT("walls: suspended"), Guard.IsSuspended(4, Now));
+		TestTrue(TEXT("walls: reason"), Guard.GetLastReason(4) == ECSCheatReason::Wall);
+	}
+
+	// Respawn: near the spawn point is fine, 50 m away is not.
+	{
+		FCSCheatGuard Guard;
+		FVector Pos = FVector::ZeroVector;
+		const FVector Spawn(8000.f, 0.f, 0.f);
+		double Now = 100.0;
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Guard, 5, Pos, Now, FVector::ZeroVector, 0.f, false, 1, &Spawn); }
+		Pos = Spawn + FVector(200.f, 0.f, 0.f);
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Guard, 5, Pos, Now, FVector::ZeroVector, 0.f, false, 2, &Spawn); }
+		TestEqual(TEXT("respawn at the spawn point: no strikes"), Guard.GetStrikes(5), 0);
+
+		FCSCheatGuard Cheat;
+		FVector Other = FVector::ZeroVector;
+		Now = 100.0;
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Cheat, 6, Other, Now, FVector::ZeroVector, 0.f, false, 1, &Spawn); }
+		Other = Spawn + FVector(0.f, 5000.f, 0.f); // "respawned" somewhere else entirely
+		for (int32 i = 0; i < 90; ++i) { Now = Step(Cheat, 6, Other, Now, FVector::ZeroVector, 0.f, false, 2, &Spawn); }
+		TestTrue(TEXT("respawn 50 m away: suspended"), Cheat.IsSuspended(6, Now));
+		TestTrue(TEXT("respawn 50 m away: reason"), Cheat.GetLastReason(6) == ECSCheatReason::SpawnPoint);
+	}
+
+	// The ladder: the third suspension removes the player; every step is an incident.
+	{
+		FCSCheatGuard Guard;
+		double Now = 100.0;
+		for (int32 i = 0; i < 3; ++i)
+		{
+			Guard.ReportViolation(7, ECSCheatReason::ForgedRpc, Now, 3.f, TEXT("test"));
+			Now += Guard.Tuning.SuspensionSeconds + 1.0;
+		}
+		const TArray<FCSCheatIncident> Incidents = Guard.TakeIncidents();
+		TestEqual(TEXT("ladder: three incidents"), Incidents.Num(), 3);
+		TestEqual(TEXT("ladder: three suspensions"), Guard.GetSuspensions(7), 3);
+		TestTrue(TEXT("ladder: removed"), Guard.ShouldRemove(7));
+		TestTrue(TEXT("ladder: last incident is the removal"), Incidents.Num() == 3 && Incidents[2].bRemoved && !Incidents[1].bRemoved);
+		TestFalse(TEXT("ladder: removed player's requests refused"), Guard.AllowRequest(7, ECSRequestKind::Reload, Now));
+		TestEqual(TEXT("ladder: incidents taken once"), Guard.TakeIncidents().Num(), 0);
 	}
 	return true;
 }

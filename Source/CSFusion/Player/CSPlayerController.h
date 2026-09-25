@@ -116,6 +116,10 @@ protected:
 	FTimerHandle TestSpoofTimer;
 	int32 SpoofVictimId = 0;
 	int32 SpoofVictimSlot = -1;
+	/** Phase 2 B11 self-tests on the non-master client: -cstestfreeze, -cstestremoval. */
+	void CSTestFreeze();
+	void CSTestRemoval();
+	int32 RemovalTeleports = 0;
 	int32 CheatRoundsBefore = 0;
 	TWeakObjectPtr<class ACSWorldPickup> CheatFarPickup;
 

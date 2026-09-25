@@ -544,6 +544,9 @@ public:
 #if !UE_BUILD_SHIPPING
 	/** Self-test only (-cstestbotflag): flag my own pawn as a bot, as a modified client would (A2). */
 	void DebugForgeBotFlags(int32 FakeBotId) { bIsBot = true; BotId = FakeBotId; }
+	/** Self-test only (-cstestfreeze): stop the heartbeat for a while, like a frozen game (B11). */
+	void DebugPauseHeartbeat(float Seconds) { DebugHeartbeatPauseUntil = FPlatformTime::Seconds() + Seconds; }
+	double DebugHeartbeatPauseUntil = 0.0;
 #endif
 
 	/** Local human view: the pawn this machine's player looks through. False for bots. */

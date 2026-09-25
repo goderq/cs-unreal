@@ -116,8 +116,17 @@ void ACSPlayerController::CSTestCheat()
 			Report(TEXT("fire from 20 m away"), After2 == CheatRoundsBefore,
 				FString::Printf(TEXT("rounds %d -> %d"), CheatRoundsBefore, After2));
 			const bool bFarTaken = CheatFarPickup.IsValid() ? !CheatFarPickup->IsAvailable() : false;
-			Report(TEXT("pickup from 15+ m away"), CheatFarPickup.IsValid() && !bFarTaken,
-				CheatFarPickup.IsValid() ? TEXT("pickup still on the floor") : TEXT("no far pickup found"));
+			if (!CheatFarPickup.IsValid() && !UCSAuthority::IsGameAuthority(this))
+			{
+				// v2.0 maps have nothing on the floor and only the authority can
+				// put something there; the offline run of this test covers the reach check.
+				UE_LOG(LogCS, Log, TEXT("CHEAT TEST RESULT: pickup from 15+ m away -> SKIPPED (no pickup on the map for a non-master client; checked offline)"));
+			}
+			else
+			{
+				Report(TEXT("pickup from 15+ m away"), CheatFarPickup.IsValid() && !bFarTaken,
+					CheatFarPickup.IsValid() ? TEXT("pickup still on the floor") : TEXT("no far pickup found"));
+			}
 			if (!Self2)
 			{
 				return;

@@ -262,6 +262,8 @@ void ACSMenuPlayerController::RunBackendProbe()
 	Steps->Add({ TEXT("report an unknown match"), TEXT("match"), Body({ { TEXT("action"), TEXT("report") }, { TEXT("match_id"), Nobody } }), { 404 } });
 	Steps->Add({ TEXT("ticket for an unknown match"), TEXT("match"), Body({ { TEXT("action"), TEXT("ticket") }, { TEXT("match_id"), Nobody } }), { 404 } });
 	Steps->Add({ TEXT("start a match with a bogus mode"), TEXT("match"), Body({ { TEXT("action"), TEXT("start") }, { TEXT("mode"), TEXT("GODMODE") }, { TEXT("map"), TEXT("Depot") } }), { 400 } });
+	// Phase 2 (B11): only the host of a real match reports anti-cheat incidents.
+	Steps->Add({ TEXT("incident for an unknown match"), TEXT("match"), Body({ { TEXT("action"), TEXT("incident") }, { TEXT("match_id"), Nobody }, { TEXT("kind"), TEXT("removed") } }), { 404 } });
 
 	TSharedRef<int32> Index = MakeShared<int32>(0);
 	TSharedRef<int32> Failed = MakeShared<int32>(0);

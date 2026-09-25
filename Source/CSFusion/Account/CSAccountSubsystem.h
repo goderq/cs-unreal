@@ -144,6 +144,8 @@ public:
 	void MatchTicket(const FString& MatchId, TFunction<void(bool bOk, const FString& Ticket)> OnDone);
 	/** Host: the result, per ticket. The server checks and counts it. */
 	void MatchReport(const FString& MatchId, const TSharedRef<FJsonObject>& Report);
+	/** Host: an anti-cheat measure (Kind "suspended" / "removed") against the holder of Ticket, for the security log. */
+	void MatchIncident(const FString& MatchId, const FString& Ticket, int32 PlayerNumber, const FString& Kind, const FString& Reason);
 
 	/** Fires whenever the state, the nickname or the stats change. */
 	FCSAccountChanged OnAccountChanged;

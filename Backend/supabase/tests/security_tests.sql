@@ -5,7 +5,7 @@
 -- the tests create is rolled back and nothing stays in the database. The
 -- result is the error message:
 --
---     CS-FUSION SECURITY TESTS: 57 passed, 0 failed.
+--     CS-FUSION SECURITY TESTS: 66 passed, 0 failed.
 --
 -- or, when something fails, the list of failed checks.
 --
@@ -338,6 +338,29 @@ begin
     update public.profiles set banned_until = now() + interval '1 hour' where id = v_player;
     v_got := pg_temp.cs_call(format('select public.match_ticket(%L, %L)', v_player, v_start->>'match_id'));
     if v_got = '42501' then v_pass := v_pass + 1; else v_fail := v_fail || ('banned player got a ticket: ' || v_got); end if;
+
+    -- Anti-cheat incidents (008): only the host, known kinds, the target from a ticket.
+    v_match := (v_start->>'match_id')::uuid;
+    v_ticket2 := public.match_ticket(v_player2, v_match);
+    v_got := pg_temp.cs_call(format('select public.match_incident(%L, %L, ''{"kind": "removed"}''::jsonb)', v_player2, v_match));
+    if v_got = '42501' then v_pass := v_pass + 1; else v_fail := v_fail || ('non-host reported an incident: ' || v_got); end if;
+    v_got := pg_temp.cs_call(format('select public.match_incident(%L, %L, ''{"kind": "banned"}''::jsonb)', v_super, v_match));
+    if v_got = '22023' then v_pass := v_pass + 1; else v_fail := v_fail || ('unknown incident kind accepted: ' || v_got); end if;
+    v_got := pg_temp.cs_try('authenticated', v_super, format('select public.match_incident(%L, %L, ''{"kind": "removed"}''::jsonb)', v_super, v_match));
+    if v_got = '42501' then v_pass := v_pass + 1; else v_fail := v_fail || ('player token executes match_incident: ' || v_got); end if;
+    perform public.match_incident(v_super, v_match, jsonb_build_object('kind', 'removed', 'ticket', v_ticket2, 'player', 3, 'reason', 'teleport x3'));
+    if exists (select 1 from public.security_log where source = 'anticheat' and action = 'anticheat.removed'
+               and match_id = v_match and target_id = v_player2 and actor_id = v_super and reason = 'teleport x3') then
+        v_pass := v_pass + 1;
+    else
+        v_fail := v_fail || 'host incident not logged against the ticket holder';
+    end if;
+    perform public.match_incident(v_super, v_match, jsonb_build_object('kind', 'suspended', 'ticket', gen_random_uuid()));
+    if exists (select 1 from public.security_log where action = 'anticheat.suspended' and match_id = v_match and target_id is null) then
+        v_pass := v_pass + 1;
+    else
+        v_fail := v_fail || 'incident with a foreign ticket named somebody';
+    end if;
 
     -- Rate limit: the 31st match start within an hour is refused.
     begin

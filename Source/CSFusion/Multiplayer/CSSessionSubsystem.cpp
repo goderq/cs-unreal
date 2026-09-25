@@ -364,6 +364,14 @@ void UCSSessionSubsystem::LeaveToMainMenu()
 	OpenMainMenu();
 }
 
+void UCSSessionSubsystem::LeaveToMainMenuWithMessage(const FString& Message)
+{
+	LeaveToMainMenu();
+	// After LeaveToMainMenu: nothing on the way to the menu clears it.
+	LastError = Message;
+	UE_LOG(LogCSNet, Warning, TEXT("Leaving for the menu: %s"), *Message);
+}
+
 void UCSSessionSubsystem::OpenMainMenu()
 {
 	bReturningToMenu = false;

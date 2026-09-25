@@ -7,6 +7,9 @@
 //           login, and hands it to the host only. The ticket proves that this
 //           profile played in this match.
 //   report  the host reports stats per ticket when the match ends.
+//   incident  the host reports an anti-cheat measure (a player suspended or
+//           removed from the match), naming the player by their ticket; it
+//           goes to the security log (migration 008).
 //
 // The checks themselves live in the database (migration 005): tickets,
 // duplicates, the server's clock, rate limits, plausibility. A report that
@@ -121,6 +124,19 @@ Deno.serve(async (request) => {
                 };
                 break;
             }
+            case "incident":
+                fn = "match_incident";
+                args = {
+                    p_reporter: caller,
+                    p_match: uuid(body.match_id, "match_id"),
+                    p_payload: {
+                        kind: String(body.kind ?? "").slice(0, 16),
+                        ticket: typeof body.ticket === "string" ? body.ticket.slice(0, 36) : null,
+                        player: Number.isFinite(Number(body.player)) ? Math.trunc(Number(body.player)) : null,
+                        reason: String(body.reason ?? "").slice(0, 200),
+                    },
+                };
+                break;
             default:
                 throw new HttpError(400, "unknown action");
         }

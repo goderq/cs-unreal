@@ -755,6 +755,37 @@ void UCSAccountSubsystem::DebugCallFunction(const FString& Function, const TShar
 #endif
 }
 
+void UCSAccountSubsystem::MatchIncident(const FString& MatchId, const FString& Ticket, int32 PlayerNumber, const FString& Kind, const FString& Reason)
+{
+	if (!IsReady() || MatchId.IsEmpty())
+	{
+		return;
+	}
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("action"), TEXT("incident"));
+	Body->SetStringField(TEXT("match_id"), MatchId);
+	Body->SetStringField(TEXT("kind"), Kind);
+	if (!Ticket.IsEmpty())
+	{
+		Body->SetStringField(TEXT("ticket"), Ticket);
+	}
+	Body->SetNumberField(TEXT("player"), PlayerNumber);
+	Body->SetStringField(TEXT("reason"), Reason.Left(200));
+	PostAuthenticated(FCSBackendConfig::Get().FunctionUrl(TEXT("match")), ToJson(Body),
+		[Kind, PlayerNumber](int32 Code, const TSharedPtr<FJsonObject>& Json)
+		{
+			if (Code == 200)
+			{
+				UE_LOG(LogCSSecurity, Log, TEXT("Accounts: incident '%s' for player %d is in the security log."), *Kind, PlayerNumber);
+			}
+			else
+			{
+				UE_LOG(LogCSSecurity, Warning, TEXT("Accounts: incident '%s' for player %d not logged (%d: %s)."), *Kind, PlayerNumber,
+					Code, *ErrorFromJson(Json, TEXT("no answer")));
+			}
+		});
+}
+
 void UCSAccountSubsystem::MatchReport(const FString& MatchId, const TSharedRef<FJsonObject>& Report)
 {
 	if (!IsReady() || MatchId.IsEmpty())

@@ -377,6 +377,12 @@ void ACSCharacter::Tick(float DeltaSeconds)
 
 		// Liveness beacon: see Heartbeat in the header. Only the owner writes it.
 		HeartbeatAccumulator += DeltaSeconds;
+#if !UE_BUILD_SHIPPING
+		if (FPlatformTime::Seconds() < DebugHeartbeatPauseUntil)
+		{
+			HeartbeatAccumulator = 0.f;
+		}
+#endif
 		if (HeartbeatAccumulator >= 1.f)
 		{
 			HeartbeatAccumulator = 0.f;
@@ -1222,6 +1228,16 @@ void ACSCharacter::SyncWithDirector()
 	}
 
 	bHadRecord = true;
+
+	// v2.0 (B11): a player who came back to the room gets a new record - show
+	// the pawn that was hidden as departed, and apply the new life below.
+	if (bDepartedHidden)
+	{
+		bDepartedHidden = false;
+		GetMesh()->SetVisibility(true, true);
+		bLocalAliveState = !Record.bAlive;
+		UE_LOG(LogCSNet, Log, TEXT("%s: player %d is back."), *GetName(), PlayerId);
+	}
 
 	if (Record.bAlive != bLocalAliveState)
 	{

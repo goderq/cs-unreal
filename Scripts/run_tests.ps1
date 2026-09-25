@@ -196,6 +196,16 @@ $NetScenarios = @(
        DelayB = 3; Done = "A:SHOOT TEST RESULT"; Timeout = 120;
        Expect = @("B:BOTFLAG TEST: my pawn now claims to be bot 4242|B flagged its pawn as a bot",
                   "A:SHOOT TEST RESULT: victim [1-9] hp 100 -> \d+ -> DAMAGE OK|damage reached the real player, not bot 4242") },
+    # Phase 2 (B11): a frozen game is not a departure; repeated cheating removes the player.
+    @{ Name = "netfreeze"; A = "-room={ROOM}"; B = "-room={ROOM} -cstestfreeze";
+       DelayB = 3; Done = "B:FREEZE TEST RESULT"; Timeout = 150;
+       Expect = @("A:no heartbeat for .* marked inactive \(kept in the match\)|master marked the frozen B inactive",
+                  "A:heartbeat is back - active again|master saw B come back",
+                  "A:Player \d+ left \(|__absent__") },
+    @{ Name = "netremoval"; A = "-room={ROOM}"; B = "-room={ROOM} -cstestremoval";
+       DelayB = 3; Done = "B:Leaving for the menu: You were removed"; Timeout = 150;
+       Expect = @("A:REMOVED from the match after 3 suspensions|master removed B after three suspensions",
+                  "B:Leaving for the menu: You were removed|B's game left for the menu with the reason") },
     @{ Name = "netcheat"; A = "-room={ROOM}"; B = "-room={ROOM} -cstestcheat";
        DelayB = 20; Done = "B:suspension lifted"; Timeout = 120;
        Expect = @("A:Cheat guard: player \d+ SUSPENDED|master suspended the cheating client") }

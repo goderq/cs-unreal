@@ -4,7 +4,10 @@
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(CSMatchDirector.fusion)
 
+#include "Account/CSAccountSubsystem.h"
 #include "Characters/CSCharacter.h"
+#include "Components/CapsuleComponent.h"
+#include "Multiplayer/CSSessionSubsystem.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSRpcGuard.h"
@@ -61,6 +64,17 @@ ACSMatchDirector::ACSMatchDirector()
 void ACSMatchDirector::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// Every peer loads the thresholds: any of them may become the Master Client.
+	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
+	FCSCheatTuning& Tuning = CheatGuard.Tuning;
+	Tuning.MaxLegalSpeed = Settings->MaxLegalSpeed;
+	Tuning.MaxRiseSpeed = Settings->MaxRiseSpeed;
+	Tuning.AirborneHeight = Settings->AirborneHeight;
+	Tuning.MaxAirborneSeconds = Settings->MaxAirborneSeconds;
+	Tuning.StrikesToSuspend = Settings->StrikesToSuspend;
+	Tuning.SuspensionSeconds = Settings->SuspensionSeconds;
+	Tuning.SuspensionsToRemove = Settings->SuspensionsToRemove;
 
 	UE_LOG(LogCSAuth, Log, TEXT("MatchDirector ready. Local peer is authority: %s"),
 		UCSAuthority::IsGameAuthority(this) ? TEXT("YES") : TEXT("no"));
@@ -166,12 +180,27 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 		return;
 	}
 
-	// A departed player must not be resurrected by their pawn lingering for a
-	// frame after the leave notification. Photon player numbers are never
-	// reused within a room, so refusing them is safe.
-	if (HandledDepartures.Contains(PlayerId))
+	// Removed by the anti-cheat: out for the rest of the match (B11).
+	if (RemovedByAntiCheat.Contains(PlayerId))
 	{
 		return;
+	}
+
+	// A departed player must not be resurrected by their pawn lingering for a
+	// frame after the leave notification. Photon player numbers are never
+	// reused within a room, so a departed number that the room lists as
+	// active again is that same player back (v2.0, B11) - they get a fresh
+	// record; anything else is the lingering pawn and is refused.
+	if (HandledDepartures.Contains(PlayerId))
+	{
+		TArray<int32> Active;
+		TArray<int32> Inactive;
+		if (!UCSAuthority::GetRoomPlayers(this, Active, Inactive) || !Active.Contains(PlayerId))
+		{
+			return;
+		}
+		HandledDepartures.Remove(PlayerId);
+		UE_LOG(LogCSAuth, Log, TEXT("Player %d is in the room again - registering them anew."), PlayerId);
 	}
 
 	if (Records.Num() >= Settings->MaxTrackedPlayers)
@@ -278,6 +307,8 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 	LastKnownLocation.Remove(PlayerId);
 	HeartbeatSeen.Remove(PlayerId);
 	PawnMissingSince.Remove(PlayerId);
+	Stalled.Remove(PlayerId);
+	LastMovedTime.Remove(PlayerId);
 
 	if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
 	{
@@ -1417,6 +1448,8 @@ void ACSMatchDirector::TickAuthority()
 
 		if (const ACSCharacter* Pawn = FindPawnForPlayer(this, Record.PlayerId))
 		{
+			const TOptional<FVector> Previous = LastKnownLocation.Contains(Record.PlayerId)
+				? TOptional<FVector>(LastKnownLocation[Record.PlayerId]) : TOptional<FVector>();
 			LastKnownLocation.Add(Record.PlayerId, Pawn->GetActorLocation());
 			PawnMissingSince.Remove(Record.PlayerId);
 
@@ -1424,25 +1457,28 @@ void ACSMatchDirector::TickAuthority()
 			// position is only a claim. See FCSCheatGuard.
 			if (Record.bAlive)
 			{
-				const UCharacterMovementComponent* Move = Pawn->GetCharacterMovement();
-				CheatGuard.ObservePosition(Record.PlayerId, Pawn->GetActorLocation(), Now,
-					Move && Move->IsFalling(), Record.RespawnCounter);
+				CheatGuard.Observe(Record.PlayerId, MakeMoveSample(Record, Pawn, Previous.GetPtrOrNull(), Now));
 			}
 
-			// Unexpected-disconnect detector that does not wait on the Photon
-			// server's own timeout: the client bumps a counter every second on
-			// its (player-owned, hence replicated) pawn. Frozen for too long
-			// means the process or its connection is gone.
+			// Liveness: the client bumps a counter every second on its
+			// (player-owned, hence replicated) pawn. Frozen means the game is
+			// not running right now - a hang, a shader compile, a minimised
+			// window. v2.0 (B11): that marks the player inactive and nothing
+			// more; the room list below decides whether they are gone.
 			TPair<int32, double>& Seen = HeartbeatSeen.FindOrAdd(Record.PlayerId, TPair<int32, double>(Pawn->GetHeartbeat(), Now));
 			if (Seen.Key != Pawn->GetHeartbeat())
 			{
 				Seen = TPair<int32, double>(Pawn->GetHeartbeat(), Now);
+				if (Stalled.Remove(Record.PlayerId) > 0)
+				{
+					UE_LOG(LogCSAuth, Log, TEXT("Player %d: heartbeat is back - active again."), Record.PlayerId);
+				}
 			}
-			else if (bInSession && Now - Seen.Value > HeartbeatTimeoutSeconds)
+			else if (bInSession && Now - Seen.Value > HeartbeatTimeoutSeconds && !Stalled.Contains(Record.PlayerId))
 			{
-				UE_LOG(LogCSAuth, Log, TEXT("Player %d: no heartbeat for %.1fs - treating as disconnected."),
+				Stalled.Add(Record.PlayerId);
+				UE_LOG(LogCSAuth, Log, TEXT("Player %d: no heartbeat for %.1fs - marked inactive (kept in the match)."),
 					Record.PlayerId, Now - Seen.Value);
-				Vanished.Add(Record.PlayerId);
 			}
 		}
 		else if (bInSession)
@@ -1482,6 +1518,9 @@ void ACSMatchDirector::TickAuthority()
 	{
 		RemovePlayer(PlayerId, ECSDeathReason::Disconnected);
 	}
+
+	// Suspensions and removals the cheat guard decided since the last tick (B11).
+	ProcessCheatIncidents();
 
 	// v2.0: a match with bots at any moment is practice, not ranked.
 	if (!bMatchHadBots)
@@ -1655,6 +1694,119 @@ void ACSMatchDirector::ReportViolation(int32 PlayerId, ECSCheatReason Reason, fl
 	if (PlayerId != 0 && UCSAuthority::IsGameAuthority(this))
 	{
 		CheatGuard.ReportViolation(PlayerId, Reason, UCSAuthority::GetNetworkTimeSeconds(this), Weight, Detail);
+	}
+}
+
+FCSMoveSample ACSMatchDirector::MakeMoveSample(const FCSPlayerCombatRecord& Record, const ACSCharacter* Pawn, const FVector* Previous, double Now)
+{
+	FCSMoveSample Sample;
+	Sample.Location = Pawn->GetActorLocation();
+	Sample.Now = Now;
+	const UCharacterMovementComponent* Move = Pawn->GetCharacterMovement();
+	Sample.bFalling = Move && Move->IsFalling();
+	Sample.RespawnCounter = Record.RespawnCounter;
+
+	const ACSGameMode* GameMode = GetWorld()->GetAuthGameMode<ACSGameMode>();
+	if (const AActor* Start = GameMode ? GameMode->GetPlayerStartByIndex(Record.RespawnPointIndex) : nullptr)
+	{
+		Sample.SpawnPoint = Start->GetActorLocation();
+		Sample.bHasSpawnPoint = true;
+	}
+
+	// Floor below the feet. Pawns count as floor: standing on a teammate is legal.
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CSCheatGuardProbe), false, Pawn);
+	const float HalfHeight = Pawn->GetCapsuleComponent() ? Pawn->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 96.f;
+	const FVector Feet = Sample.Location - FVector(0.f, 0.f, HalfHeight);
+	constexpr float Probe = 1000.f;
+	FHitResult Floor;
+	Sample.HeightAboveFloor = GetWorld()->LineTraceSingleByChannel(Floor, Sample.Location, Feet - FVector(0.f, 0.f, Probe), ECC_Pawn, Params)
+		? FMath::Max(0.f, static_cast<float>(Feet.Z - Floor.ImpactPoint.Z)) : Probe;
+
+	// Through a wall: the straight line from the previous position crosses
+	// static geometry that blocks pawns. Only for a step right after another
+	// one - after a lag spike the real path may have gone round a corner, and
+	// the teleport check covers long jumps.
+	if (Previous && !Previous->Equals(Sample.Location, 1.f))
+	{
+		const double* LastMoved = LastMovedTime.Find(Record.PlayerId);
+		if (LastMoved && Now - *LastMoved <= 0.25)
+		{
+			TArray<FHitResult> Hits;
+			GetWorld()->LineTraceMultiByObjectType(Hits, *Previous, Sample.Location, FCollisionObjectQueryParams(ECC_WorldStatic), Params);
+			for (const FHitResult& Hit : Hits)
+			{
+				const UPrimitiveComponent* Component = Hit.GetComponent();
+				if (!Hit.bStartPenetrating && Component && Component->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block)
+				{
+					Sample.bPathBlocked = true;
+					UE_LOG(LogCSSecurity, Verbose, TEXT("Player %d moved through %s."), Record.PlayerId, *GetNameSafe(Hit.GetActor()));
+					break;
+				}
+			}
+		}
+		LastMovedTime.Add(Record.PlayerId, Now);
+	}
+	return Sample;
+}
+
+void ACSMatchDirector::ProcessCheatIncidents()
+{
+	for (const FCSCheatIncident& Incident : CheatGuard.TakeIncidents())
+	{
+		UE_LOG(LogCSSecurity, Warning, TEXT("Anti-cheat: player %d %s (%s: %s)."), Incident.PlayerId,
+			Incident.bRemoved ? TEXT("removed from the match") : TEXT("suspended"), LexToString(Incident.Reason), *Incident.Detail);
+		ReportIncidentToBackend(Incident);
+
+		if (!Incident.bRemoved || RemovedByAntiCheat.Contains(Incident.PlayerId))
+		{
+			continue;
+		}
+		// Photon Cloud has no way for a player to disconnect another (AUDIT K8):
+		// out of the match means no record here - no requests, no damage, no
+		// respawn - and the player's own game leaves for the menu.
+		RemovedByAntiCheat.Add(Incident.PlayerId);
+		constexpr int32 ReasonAntiCheat = 1;
+		if (UCSAuthority::IsSessionActive(this))
+		{
+			RpcPlayerRemoved(Incident.PlayerId, ReasonAntiCheat);
+		}
+		else
+		{
+			RpcPlayerRemoved_Receive(Incident.PlayerId, ReasonAntiCheat);
+		}
+		RemovePlayer(Incident.PlayerId, ECSDeathReason::Disconnected);
+	}
+}
+
+void ACSMatchDirector::ReportIncidentToBackend(const FCSCheatIncident& Incident)
+{
+	const ACSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ACSGameState>() : nullptr;
+	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	if (!GS || !Account || !Account->IsReady() || GS->GetBackendMatchId().IsEmpty() || CSBots::IsBotId(Incident.PlayerId))
+	{
+		return;
+	}
+	const FString* Ticket = Tickets.Find(Incident.PlayerId);
+	Account->MatchIncident(GS->GetBackendMatchId(), Ticket ? *Ticket : FString(), Incident.PlayerId,
+		Incident.bRemoved ? TEXT("removed") : TEXT("suspended"),
+		FString::Printf(TEXT("%s: %s"), LexToString(Incident.Reason), *Incident.Detail));
+}
+
+void ACSMatchDirector::RpcPlayerRemoved_Receive(int32 PlayerId, int32 Reason)
+{
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcPlayerRemoved")))
+	{
+		return;
+	}
+	UE_LOG(LogCSSecurity, Log, TEXT("Player %d was removed from the match by the anti-cheat."), PlayerId);
+	if (PlayerId != UCSAuthority::GetLocalPlayerId(this) || !UCSAuthority::IsSessionActive(this))
+	{
+		return;
+	}
+	if (UCSSessionSubsystem* Session = GetGameInstance() ? GetGameInstance()->GetSubsystem<UCSSessionSubsystem>() : nullptr)
+	{
+		Session->LeaveToMainMenuWithMessage(TEXT("You were removed from the match: the anti-cheat saw repeated violations. ")
+			TEXT("If this is a mistake, report it to the administration."));
 	}
 }
 

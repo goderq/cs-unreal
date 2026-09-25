@@ -64,6 +64,36 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float FireJitterSeconds = 0.2f;
 
+	// --- Movement checks and the ladder of measures (B10, B11) -----------------
+	// See FCSCheatGuard. Defaults are tuned for the current maps; raise, never
+	// lower, the speed limits when levels get faster movement.
+
+	/** Legal ground speed ceiling, cm/s (sprint 620 plus 35 % margin). */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "100.0"))
+	float MaxLegalSpeed = 837.f;
+
+	/** Upward speed averaged over one second, cm/s. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "100.0"))
+	float MaxRiseSpeed = 550.f;
+
+	/** Feet this far above any floor for longer than MaxAirborneSeconds is flying. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "50.0"))
+	float AirborneHeight = 150.f;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "1.0"))
+	float MaxAirborneSeconds = 3.f;
+
+	/** Strikes (decaying) that suspend a player. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "1.0"))
+	float StrikesToSuspend = 3.f;
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "1.0"))
+	float SuspensionSeconds = 10.f;
+
+	/** Suspensions in one match that remove the player from it; 0 = never. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat", meta = (ClampMin = "0"))
+	int32 SuspensionsToRemove = 3;
+
 	/** Log every rejected request. Noisy, but the only way to see cheating. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Anti-Cheat")
 	bool bLogRejections = true;

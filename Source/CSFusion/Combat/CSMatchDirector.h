@@ -300,6 +300,15 @@ public:
 	/** The authority's copy of a grenade reached its fuse: damage, then tell everyone. */
 	void ExplodeGrenade(class ACSGrenade* Grenade);
 
+	/**
+	 * v2.0 (B11): the Master Client removed a player from the match (Reason 1 =
+	 * anti-cheat). That player's own peer leaves for the menu with the reason;
+	 * everyone else just logs it.
+	 */
+	SEND_FUSIONRPC(TargetAllClients)
+	void RpcPlayerRemoved(int32 PlayerId, int32 Reason);
+	void RpcPlayerRemoved_Receive(int32 PlayerId, int32 Reason);
+
 	SEND_FUSIONRPC(TargetAllClients)
 	void RpcGrenadeThrown(int32 Serial, int32 ThrowerId, int32 Type, FVector Origin, FVector Velocity);
 	void RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, int32 Type, FVector Origin, FVector Velocity);
@@ -479,11 +488,30 @@ private:
 	TMap<int32, TPair<int32, double>> HeartbeatSeen;
 
 	/**
-	 * How long a heartbeat may stay frozen before the player is treated as
-	 * disconnected. Long enough to ride out a hitch or a slow frame on a
-	 * background window, short enough that loot appears promptly.
+	 * How long a heartbeat may stay frozen before the player is marked
+	 * inactive. v2.0 (B11): only marked - a game frozen by shader compilation
+	 * or a minimised window comes back. Whether a player LEFT is decided by
+	 * the room list the Photon server keeps.
 	 */
 	static constexpr double HeartbeatTimeoutSeconds = 10.0;
+
+	/** Players whose heartbeat is frozen right now (B11). */
+	TSet<int32> Stalled;
+
+	/** Players the anti-cheat removed from this match; they are not registered again (B11). */
+	TSet<int32> RemovedByAntiCheat;
+
+	/** Last time each player's observed position changed, so a lag spike is not taken for a wall pass. */
+	TMap<int32, double> LastMovedTime;
+
+	/** Authority: what the cheat guard is fed for one pawn this tick (floor, walls, spawn point). */
+	FCSMoveSample MakeMoveSample(const FCSPlayerCombatRecord& Record, const class ACSCharacter* Pawn, const FVector* Previous, double Now);
+
+	/** Authority: log the guard's suspensions and removals, report them, remove who must go. */
+	void ProcessCheatIncidents();
+
+	/** Authority: tell the backend about a suspension or removal (online matches with a backend id). */
+	void ReportIncidentToBackend(const FCSCheatIncident& Incident);
 
 	/** Authority: hits collected this frame, sent at the end of it. */
 	TArray<FCSCombatEvent> PendingCombatEvents;
