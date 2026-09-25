@@ -85,7 +85,7 @@ namespace CSEffects
 			Blood.StartScale = FVector(0.08f);
 			Blood.EndScale = FVector(0.32f);
 			ACSTransientFX::Spawn(World, FTransform(Location + N * 5.f), Blood);
-			CSAudio::PlayAt(World, Audio->BodyHit, Location, 0.9f, FMath::FRandRange(0.92f, 1.08f));
+			CSAudio::PlayAt(World, Audio->BodyHit, Location + N * 5.f, 0.9f, FMath::FRandRange(0.92f, 1.08f), ECSSound::Impact);
 			return;
 		}
 
@@ -123,6 +123,6 @@ namespace CSEffects
 			}
 		}
 
-		CSAudio::PlayAt(World, Audio->BulletImpact, Location, 0.7f, FMath::FRandRange(0.85f, 1.15f));
+		CSAudio::PlayAt(World, Audio->BulletImpact, Location + N * 5.f, 0.7f, FMath::FRandRange(0.85f, 1.15f), ECSSound::Impact);
 	}
 }

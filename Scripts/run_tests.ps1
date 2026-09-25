@@ -48,6 +48,7 @@ $Suites = @(
     @{ Name = "modes";     Flags = "-mode=dm -cstestmodes";   Done = "MODES TEST: done";              Timeout = 120; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "comp";      Flags = "-mode=5v5 -roundtime=40 -cstestcomp"; Done = "ROUNDS OK|ROUNDS BROKEN"; Timeout = 240; Map = "/Game/Maps/Lvl_OldTown" },
     @{ Name = "poses";     Flags = "-mode=dm -bots=1 -cstestposes"; Done = "RESPAWN POSE"; Timeout = 90; Map = "/Game/Maps/Lvl_Depot" },
+    @{ Name = "surfaces";  Flags = "-cstestsurfaces";         Done = "SURFACE TEST RESULT";           Timeout = 60; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "tourdepot"; Flags = "-cstesttour";             Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "touroldtown"; Flags = "-cstesttour";           Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_OldTown" },
     @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT";              Timeout = 120 }

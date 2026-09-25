@@ -138,6 +138,9 @@ protected:
 	FVector NoRecoilAim = FVector::ForwardVector;
 	int32 NoRecoilShots = 0;
 	int32 CheatRoundsBefore = 0;
+	/** -cstestsurfaces (C9): footstep surfaces and sound occlusion on the real level. */
+	void CSTestSurfaces();
+	FTimerHandle TestSurfacesTimer;
 	TWeakObjectPtr<class ACSWorldPickup> CheatFarPickup;
 
 	/** Stage 8 performance sample, enabled with -cstestperf: 20 s of frame times. */

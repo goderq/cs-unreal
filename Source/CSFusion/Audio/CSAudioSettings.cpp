@@ -5,6 +5,7 @@
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundClass.h"
+#include "Sound/SoundConcurrency.h"
 
 namespace
 {
@@ -23,13 +24,29 @@ UCSAudioSettings::UCSAudioSettings()
 	MusicClass = At<USoundClass>(TEXT("/Game/Audio/Mix/SC_Music"));
 	EffectsClass = At<USoundClass>(TEXT("/Game/Audio/Mix/SC_Effects"));
 	WorldAttenuation = At<USoundAttenuation>(TEXT("/Game/Audio/Mix/ATT_World"));
+	// v2.0 phase 3 (Scripts/bootstrap_phase3_audio.py)
+	WeaponAttenuation = At<USoundAttenuation>(TEXT("/Game/Audio/Mix/ATT_Weapon"));
+	FootstepAttenuation = At<USoundAttenuation>(TEXT("/Game/Audio/Mix/ATT_Footstep"));
+	ImpactAttenuation = At<USoundAttenuation>(TEXT("/Game/Audio/Mix/ATT_Impact"));
+	ExplosionAttenuation = At<USoundAttenuation>(TEXT("/Game/Audio/Mix/ATT_Explosion"));
+	WeaponConcurrency = At<USoundConcurrency>(TEXT("/Game/Audio/Mix/SCON_Weapon"));
+	FootstepConcurrency = At<USoundConcurrency>(TEXT("/Game/Audio/Mix/SCON_Footstep"));
+	ImpactConcurrency = At<USoundConcurrency>(TEXT("/Game/Audio/Mix/SCON_Impact"));
+	ExplosionConcurrency = At<USoundConcurrency>(TEXT("/Game/Audio/Mix/SCON_Explosion"));
 
-	Footsteps = {
-		At<USoundBase>(TEXT("/Game/Audio/Player/S_Footstep_01")),
-		At<USoundBase>(TEXT("/Game/Audio/Player/S_Footstep_02")),
-		At<USoundBase>(TEXT("/Game/Audio/Player/S_Footstep_03")),
-		At<USoundBase>(TEXT("/Game/Audio/Player/S_Footstep_04")),
+	const auto StepSet = [](const TCHAR* Surface)
+	{
+		TArray<TSoftObjectPtr<USoundBase>> Set;
+		for (int32 i = 1; i <= 4; ++i)
+		{
+			Set.Add(At<USoundBase>(*FString::Printf(TEXT("/Game/Audio/Player/S_Footstep_%s%02d"), Surface, i)));
+		}
+		return Set;
 	};
+	Footsteps = StepSet(TEXT(""));
+	FootstepsMetal = StepSet(TEXT("Metal_"));
+	FootstepsWood = StepSet(TEXT("Wood_"));
+	FootstepsDirt = StepSet(TEXT("Dirt_"));
 	JumpLand = At<USoundBase>(TEXT("/Game/Audio/Player/S_Land"));
 	GrenadeExplode = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Explode"));
 	GrenadeBounce = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Bounce"));

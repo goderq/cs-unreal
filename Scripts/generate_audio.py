@@ -353,6 +353,29 @@ def make_v20():
     write("Weapons", "S_AmmoMachine_Buy", clunk, peak=0.7)
 
 
+def make_phase3():
+    """v2.0 phase 3 (AUDIT C9): footsteps per surface. Generated last, so every
+    earlier file keeps its exact samples (the random generator is shared)."""
+    for i in range(4):
+        # Metal floor, grating, containers: the step plus a short ring.
+        base = gain(footstep(i), 0.7)
+        ring = env_exp(resonator(bandpass(noise(0.2), 600, 4000), 1050 + i * 140, 0.9975), 0.07)
+        write("Player", "S_Footstep_Metal_%02d" % (i + 1), mix(base, gain(ring, 0.55)), peak=0.7)
+    for i in range(4):
+        # Wooden planks and crates: a hollow body and a dry tap.
+        thud = env_exp(lowpass(noise(0.14), 380 + i * 40), 0.03)
+        body = env_exp(resonator(lowpass(noise(0.16), 1200), 230 + i * 30, 0.993), 0.05)
+        tap = env_exp(bandpass(noise(0.05), 2000, 6000), 0.008)
+        write("Player", "S_Footstep_Wood_%02d" % (i + 1), mix(thud, gain(body, 0.6), gain(tap, 0.25)), peak=0.7)
+    for i in range(4):
+        # Dirt and gravel: a soft thud under a grainy crunch.
+        thud = env_exp(lowpass(noise(0.12), 300 + i * 30), 0.028)
+        crunch = env_exp(bandpass(noise(0.18), 700, 3200 + i * 300), 0.045)
+        grains = mix(*[env_exp(highpass(noise(0.02), 2500), 0.004) for _ in range(5)],
+                     offsets=[0.01 + 0.012 * k + rng.uniform(0.0, 0.006) for k in range(5)])
+        write("Player", "S_Footstep_Dirt_%02d" % (i + 1), mix(thud, gain(crunch, 0.55), gain(grains, 0.3)), peak=0.7)
+
+
 if __name__ == "__main__":
     make_weapons()
     make_player()
@@ -362,4 +385,5 @@ if __name__ == "__main__":
     make_music()
     make_grenade()
     make_v20()
+    make_phase3()
     print("done ->", ROOT)

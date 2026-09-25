@@ -96,7 +96,7 @@ void ACSGrenade::HandleBounce(const FHitResult& ImpactResult, const FVector& Imp
 	{
 		LastBounceSound = Now;
 		CSAudio::PlayAt(this, UCSAudioSettings::Get()->GrenadeBounce, GetActorLocation(),
-			FMath::Clamp(ImpactVelocity.Size() / 900.f, 0.25f, 1.f), FMath::FRandRange(0.9f, 1.1f));
+			FMath::Clamp(ImpactVelocity.Size() / 900.f, 0.25f, 1.f), FMath::FRandRange(0.9f, 1.1f), ECSSound::Impact);
 	}
 }
 
@@ -201,7 +201,8 @@ void ACSGrenade::Explode(const FVector& Location)
 		}
 	}
 
-	CSAudio::PlayAt(World, UCSAudioSettings::Get()->GrenadeExplode, Location, 1.f, FMath::FRandRange(0.95f, 1.05f));
+	CSAudio::PlayAt(World, UCSAudioSettings::Get()->GrenadeExplode, Location + FVector(0.f, 0.f, 30.f), 1.f, FMath::FRandRange(0.95f, 1.05f),
+		ECSSound::Explosion);
 
 	// Nearby cameras shake (the local player only).
 	if (APlayerController* PC = World->GetFirstPlayerController())
@@ -243,7 +244,8 @@ void ACSGrenade::ExplodeFlash(const FVector& Location)
 	Wisp.EndScale = FVector(1.4f);
 	ACSTransientFX::Spawn(World, FTransform(Location + FVector(0.f, 0.f, 20.f)), Wisp);
 
-	CSAudio::PlayAt(World, UCSAudioSettings::Get()->FlashbangExplode, Location, 1.f, FMath::FRandRange(0.97f, 1.03f));
+	CSAudio::PlayAt(World, UCSAudioSettings::Get()->FlashbangExplode, Location + FVector(0.f, 0.f, 30.f), 1.f, FMath::FRandRange(0.97f, 1.03f),
+		ECSSound::Explosion);
 
 	// Blind the local player according to what they can see of it. Every peer
 	// decides this for its own camera; the authority separately blinds bots.

@@ -10,10 +10,18 @@
 // (Scripts/run_tests.ps1 runs these plus the in-game self-tests.)
 
 #include "AI/CSBotTuning.h"
+#include "Audio/CSAudio.h"
+#include "Audio/CSAudioSettings.h"
+#include "Characters/CSCharacter.h"
 #include "Combat/CSCheatGuard.h"
 #include "Combat/CSMatchDirector.h"
+#include "Components/CapsuleComponent.h"
 #include "Misc/AutomationTest.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 #include "Settings/CSSettingsSubsystem.h"
+#include "Sound/SoundAttenuation.h"
+#include "Sound/SoundBase.h"
+#include "Sound/SoundConcurrency.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
 
@@ -534,6 +542,82 @@ bool FCSUnitShotModelTest::RunTest(const FString& Parameters)
 	float Straight = -1.f;
 	TestTrue(TEXT("ray-sphere distance"), FMath::IsNearlyEqual(
 		Straight = CSShotModel::RayCapsule(FVector(-100.f, 0.f, 0.f), FVector(1.f, 0.f, 0.f), FVector::ZeroVector, FVector::ZeroVector, 10.f), 90.f, 0.01f));
+	return true;
+}
+
+
+// ---------------------------------------------------------------------------
+// Audio mixing (v2.0 phase 3, AUDIT C9)
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCSUnitAudioMixingTest, "CSFusion.Unit.Audio.Mixing", CSUnitFlags)
+bool FCSUnitAudioMixingTest::RunTest(const FString& Parameters)
+{
+	const UCSAudioSettings* Audio = UCSAudioSettings::Get();
+
+	// Each surface has its own complete footstep set; unknown surfaces play stone.
+	const auto AllLoad = [this](const TCHAR* What, const TArray<TSoftObjectPtr<USoundBase>>& Set)
+	{
+		TestEqual(FString::Printf(TEXT("%s: four steps"), What), Set.Num(), 4);
+		for (const TSoftObjectPtr<USoundBase>& Step : Set)
+		{
+			TestNotNull(FString::Printf(TEXT("%s: %s loads"), What, *Step.ToString()), Step.LoadSynchronous());
+		}
+	};
+	AllLoad(TEXT("stone"), Audio->Footsteps);
+	AllLoad(TEXT("metal"), Audio->FootstepsMetal);
+	AllLoad(TEXT("wood"), Audio->FootstepsWood);
+	AllLoad(TEXT("dirt"), Audio->FootstepsDirt);
+	TestTrue(TEXT("metal set"), &CSAudio::FootstepsFor(CSSurface::Metal) == &Audio->FootstepsMetal);
+	TestTrue(TEXT("wood set"), &CSAudio::FootstepsFor(CSSurface::Wood) == &Audio->FootstepsWood);
+	TestTrue(TEXT("dirt set"), &CSAudio::FootstepsFor(CSSurface::Dirt) == &Audio->FootstepsDirt);
+	TestTrue(TEXT("default is stone"), &CSAudio::FootstepsFor(SurfaceType_Default) == &Audio->Footsteps);
+	TestTrue(TEXT("unmapped is stone"), &CSAudio::FootstepsFor(SurfaceType10) == &Audio->Footsteps);
+
+	// Every kind of 3D sound has attenuation with occlusion on the channel
+	// characters ignore, and a voice limit.
+	const TSoftObjectPtr<USoundAttenuation>* Attenuations[] = {
+		&Audio->WeaponAttenuation, &Audio->FootstepAttenuation, &Audio->ImpactAttenuation, &Audio->ExplosionAttenuation };
+	for (const TSoftObjectPtr<USoundAttenuation>* Soft : Attenuations)
+	{
+		const USoundAttenuation* Asset = Soft->LoadSynchronous();
+		if (TestNotNull(FString::Printf(TEXT("%s loads"), *Soft->ToString()), Asset))
+		{
+			TestTrue(TEXT("occlusion on"), Asset->Attenuation.bEnableOcclusion);
+			TestEqual(TEXT("occlusion channel"), Asset->Attenuation.OcclusionTraceChannel.GetValue(), CSCollision::AudioOcclusion);
+		}
+	}
+	const TSoftObjectPtr<USoundConcurrency>* Limits[] = {
+		&Audio->WeaponConcurrency, &Audio->FootstepConcurrency, &Audio->ImpactConcurrency, &Audio->ExplosionConcurrency };
+	for (const TSoftObjectPtr<USoundConcurrency>* Soft : Limits)
+	{
+		const USoundConcurrency* Asset = Soft->LoadSynchronous();
+		if (TestNotNull(FString::Printf(TEXT("%s loads"), *Soft->ToString()), Asset))
+		{
+			TestTrue(TEXT("voice limit set"), Asset->Concurrency.MaxCount > 0 && Asset->Concurrency.MaxCount <= 16);
+		}
+	}
+
+	// Players never occlude sounds; the world does.
+	const ACSCharacter* Character = GetDefault<ACSCharacter>();
+	TestEqual(TEXT("capsule ignores occlusion"),
+		Character->GetCapsuleComponent()->GetCollisionResponseToChannel(CSCollision::AudioOcclusion), ECR_Ignore);
+	TestEqual(TEXT("capsule still blocks shots"),
+		Character->GetCapsuleComponent()->GetCollisionResponseToChannel(ECC_Visibility), ECR_Block);
+
+	// Physical materials carry the surfaces the footsteps key on.
+	const TPair<const TCHAR*, EPhysicalSurface> Surfaces[] = {
+		{ TEXT("/Game/Environment/Physics/PM_Metal.PM_Metal"), CSSurface::Metal },
+		{ TEXT("/Game/Environment/Physics/PM_Wood.PM_Wood"), CSSurface::Wood },
+		{ TEXT("/Game/Environment/Physics/PM_Dirt.PM_Dirt"), CSSurface::Dirt } };
+	for (const TPair<const TCHAR*, EPhysicalSurface>& Surface : Surfaces)
+	{
+		const UPhysicalMaterial* Material = LoadObject<UPhysicalMaterial>(nullptr, Surface.Key);
+		if (TestNotNull(FString::Printf(TEXT("%s loads"), Surface.Key), Material))
+		{
+			TestEqual(TEXT("surface type"), UPhysicalMaterial::DetermineSurfaceType(Material), Surface.Value);
+		}
+	}
 	return true;
 }
 

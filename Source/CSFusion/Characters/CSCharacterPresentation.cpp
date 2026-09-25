@@ -247,7 +247,7 @@ void ACSCharacter::UpdateFootsteps(float DeltaSeconds)
 
 	if (bWasFalling && !bFalling)
 	{
-		CSAudio::PlayAt(this, Audio->JumpLand, Feet, IsLocalPlayerView() ? 0.7f : 1.f);
+		CSAudio::PlayAt(this, Audio->JumpLand, Feet + FVector(0.f, 0.f, 10.f), IsLocalPlayerView() ? 0.7f : 1.f, 1.f, ECSSound::Footstep);
 		StepAccumulator = 0.f;
 	}
 	bWasFalling = bFalling;
@@ -273,10 +273,14 @@ void ACSCharacter::UpdateFootsteps(float DeltaSeconds)
 	if (StepAccumulator >= Audio->StepDistance)
 	{
 		StepAccumulator = 0.f;
-		const int32 Pick = FMath::RandRange(0, Audio->Footsteps.Num() - 1);
+		// The set follows the physical material underfoot (metal, wood, dirt,
+		// otherwise stone).
+		const TArray<TSoftObjectPtr<USoundBase>>& Steps = CSAudio::FootstepsFor(CSAudio::SurfaceBelow(this, Feet, this));
+		const int32 Pick = FMath::RandRange(0, Steps.Num() - 1);
 		const float Volume = (IsLocalPlayerView() ? 0.45f : 0.9f) * FMath::GetMappedRangeValueClamped(
 			FVector2D(150.f, 620.f), FVector2D(0.6f, 1.f), Speed);
-		CSAudio::PlayAt(this, Audio->Footsteps[Pick], Feet, Volume, FMath::FRandRange(0.92f, 1.08f));
+		CSAudio::PlayAt(this, Steps[Pick], Feet + FVector(0.f, 0.f, 10.f), Volume, FMath::FRandRange(0.92f, 1.08f),
+			ECSSound::Footstep);
 	}
 }
 
@@ -306,8 +310,10 @@ void ACSCharacter::PlayShotPresentation(const FVector& TracerEnd, bool bLocalPre
 
 	if (Weapon)
 	{
+		// Own shots skip occlusion and the gunshot voice limit: a muzzle pushed
+		// into a wall must not muffle the shooter's own gun.
 		CSAudio::PlayAt(this, Weapon->FireSound, Muzzle.GetLocation(), bFirstPersonView ? 0.85f : 1.f,
-			FMath::FRandRange(0.96f, 1.04f));
+			FMath::FRandRange(0.96f, 1.04f), bFirstPersonView ? ECSSound::World : ECSSound::Weapon);
 	}
 
 	const FLinearColor TracerColor = Weapon ? Weapon->TracerColor : FLinearColor(1.f, 0.75f, 0.35f);
@@ -407,6 +413,7 @@ void ACSCharacter::SetRagdoll(bool bEnable)
 		Body->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
 		Body->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 		Body->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+		Body->SetCollisionResponseToChannel(CSCollision::AudioOcclusion, ECR_Ignore);
 		Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		Body->SetAllBodiesSimulatePhysics(true);
 		Body->SetSimulatePhysics(true);

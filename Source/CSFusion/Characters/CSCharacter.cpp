@@ -73,6 +73,8 @@ ACSCharacter::ACSCharacter(const FObjectInitializer& ObjectInitializer)
 	// on the capsule. The skinned meshes are visual only, so an animation can
 	// never move a hitbox and make two peers disagree about a hit.
 	Capsule->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	// Players never muffle sounds (their own steps, or a shot behind a teammate).
+	Capsule->SetCollisionResponseToChannel(CSCollision::AudioOcclusion, ECR_Ignore);
 
 	// --- First person camera ----------------------------------------------
 	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
@@ -1083,12 +1085,12 @@ void ACSCharacter::RpcMeleeSwing_Receive(bool bHeavy, FVector Impact, int32 HitK
 	}
 	if (HitKind == 2)
 	{
-		CSAudio::PlayAt(this, UCSAudioSettings::Get()->KnifeHitBody, Impact, 1.f, FMath::FRandRange(0.95f, 1.05f));
+		CSAudio::PlayAt(this, UCSAudioSettings::Get()->KnifeHitBody, Impact, 1.f, FMath::FRandRange(0.95f, 1.05f), ECSSound::Impact);
 		CSEffects::Impact(GetWorld(), Impact, (GetActorLocation() - Impact).GetSafeNormal(), /*bHitPlayer*/ true);
 	}
 	else if (HitKind == 1)
 	{
-		CSAudio::PlayAt(this, UCSAudioSettings::Get()->KnifeHitWall, Impact, 0.9f, FMath::FRandRange(0.95f, 1.08f));
+		CSAudio::PlayAt(this, UCSAudioSettings::Get()->KnifeHitWall, Impact + (GetActorLocation() - Impact).GetSafeNormal() * 5.f, 0.9f, FMath::FRandRange(0.95f, 1.08f), ECSSound::Impact);
 		CSEffects::Impact(GetWorld(), Impact, (GetActorLocation() - Impact).GetSafeNormal(), /*bHitPlayer*/ false);
 	}
 }

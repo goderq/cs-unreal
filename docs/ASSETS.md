@@ -97,6 +97,8 @@ UnrealEditor-Cmd.exe CSFusion.uproject -run=pythonscript -script=Scripts/render_
 |---|---|---|---|
 | Все звуки (28 шт.): выстрелы пяти типов, перезарядка трёх типов, смена оружия, щелчок пустого магазина, 4 шага, приземление, попадание в поверхность и в тело, смерть, подбор, респаун, хитмаркер, хедшот, убийство, получение урона, клик и наведение в UI, музыка главного меню | `SourceArt/Audio/*.wav` → `Content/Audio` | синтез в `Scripts/generate_audio.py`: шум, синусы, пила, фильтры, огибающие. Ни одной чужой записи | да |
 | Sound Class музыки и эффектов, Sound Mix громкостей, затухание по расстоянию | `Content/Audio/Mix` | `Scripts/bootstrap_stage6.py` | да |
+| v2.0: шаги по металлу, дереву и грунту (по 4) | `SourceArt/Audio/Player/S_Footstep_{Metal,Wood,Dirt}_*.wav` → `Content/Audio/Player` | синтез в `generate_audio.py` (`make_phase3`: шаг + резонатор металла, глухой корпус дерева, хруст грунта) | да |
+| v2.0: дерево Sound Class, затухания с окклюзией, concurrency; физические материалы `PM_Metal`/`PM_Wood`/`PM_Dirt` | `Content/Audio/Mix`, `Content/Environment/Physics` | `Scripts/bootstrap_phase3_audio.py` | да |
 | Материалы эффектов: вспышка (аддитивный с радиальной маской), трассер/искры (аддитивный), дым/кровь (полупрозрачный с мягкими краями), след от пули (декаль) | `Content/FX/Materials` | генерируются из узлов материалов движка в `bootstrap_stage6.py` | да |
 | Карта, игровые data asset'ы, Input Actions | `Content/Maps`, `Items`, `Weapons/DA_*`, `Input` | `Scripts/bootstrap_content.py` | да |
 | UI и HUD | — | код на Slate/Canvas, без текстур | да |

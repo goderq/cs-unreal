@@ -15,6 +15,7 @@ class USoundBase;
 class USoundClass;
 class USoundMix;
 class USoundAttenuation;
+class USoundConcurrency;
 
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "CS Audio"))
 class CSFUSION_API UCSAudioSettings : public UDeveloperSettings
@@ -34,15 +35,49 @@ public:
 	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
 	TSoftObjectPtr<USoundClass> EffectsClass;
 
-	/** Distance falloff for every 3D gameplay sound. */
+	/** Distance falloff for 3D sounds of no particular kind (ECSSound::World). */
 	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
 	TSoftObjectPtr<USoundAttenuation> WorldAttenuation;
 
+	// v2.0 phase 3: per kind of sound, with occlusion (see CSAudio::PlayAt).
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundAttenuation> WeaponAttenuation;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundAttenuation> FootstepAttenuation;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundAttenuation> ImpactAttenuation;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundAttenuation> ExplosionAttenuation;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundConcurrency> WeaponConcurrency;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundConcurrency> FootstepConcurrency;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundConcurrency> ImpactConcurrency;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Mixing")
+	TSoftObjectPtr<USoundConcurrency> ExplosionConcurrency;
+
 	// --- Gameplay -------------------------------------------------------------
 
-	/** One is picked at random per step. */
+	/** Stone / concrete, and any surface without its own set. One is picked at random per step. */
 	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
 	TArray<TSoftObjectPtr<USoundBase>> Footsteps;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TArray<TSoftObjectPtr<USoundBase>> FootstepsMetal;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TArray<TSoftObjectPtr<USoundBase>> FootstepsWood;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TArray<TSoftObjectPtr<USoundBase>> FootstepsDirt;
 
 	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
 	TSoftObjectPtr<USoundBase> JumpLand;

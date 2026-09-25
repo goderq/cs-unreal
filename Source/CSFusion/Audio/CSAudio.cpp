@@ -11,6 +11,8 @@
 #include "Sound/SoundAttenuation.h"
 #include "Sound/SoundBase.h"
 #include "Sound/SoundClass.h"
+#include "Sound/SoundConcurrency.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 
 namespace CSAudio
 {
@@ -29,16 +31,84 @@ namespace CSAudio
 		}
 	}
 
-	void PlayAt(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound, const FVector& Location, float Volume, float Pitch)
+	void PlayAt(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound, const FVector& Location, float Volume, float Pitch,
+		ECSSound Kind)
 	{
 		USoundBase* Asset = Resolve(Sound);
 		if (!Asset || !CanPlay(WorldContext))
 		{
 			return;
 		}
-		USoundAttenuation* Attenuation = UCSAudioSettings::Get()->WorldAttenuation.LoadSynchronous();
+		const UCSAudioSettings* Settings = UCSAudioSettings::Get();
+		const TSoftObjectPtr<USoundAttenuation>* Attenuation = &Settings->WorldAttenuation;
+		const TSoftObjectPtr<USoundConcurrency>* Concurrency = nullptr;
+		switch (Kind)
+		{
+		case ECSSound::Weapon:
+			Attenuation = &Settings->WeaponAttenuation;
+			Concurrency = &Settings->WeaponConcurrency;
+			break;
+		case ECSSound::Footstep:
+			Attenuation = &Settings->FootstepAttenuation;
+			Concurrency = &Settings->FootstepConcurrency;
+			break;
+		case ECSSound::Impact:
+			Attenuation = &Settings->ImpactAttenuation;
+			Concurrency = &Settings->ImpactConcurrency;
+			break;
+		case ECSSound::Explosion:
+			Attenuation = &Settings->ExplosionAttenuation;
+			Concurrency = &Settings->ExplosionConcurrency;
+			break;
+		case ECSSound::World:
+			break;
+		}
+		// A kind without its own asset falls back to the world attenuation.
+		USoundAttenuation* AttenuationAsset = Attenuation->LoadSynchronous();
+		if (!AttenuationAsset)
+		{
+			AttenuationAsset = Settings->WorldAttenuation.LoadSynchronous();
+		}
+		USoundConcurrency* ConcurrencyAsset = Concurrency ? Concurrency->LoadSynchronous() : nullptr;
 		UGameplayStatics::PlaySoundAtLocation(WorldContext, Asset, Location, FRotator::ZeroRotator,
-			Volume, Pitch, 0.f, Attenuation);
+			Volume, Pitch, 0.f, AttenuationAsset, ConcurrencyAsset);
+	}
+
+	EPhysicalSurface SurfaceBelow(const UObject* WorldContext, const FVector& Location, const AActor* Ignored)
+	{
+		UWorld* World = WorldContext ? WorldContext->GetWorld() : nullptr;
+		if (!World)
+		{
+			return SurfaceType_Default;
+		}
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(CSSurfaceBelow), false, Ignored);
+		Params.bReturnPhysicalMaterial = true;
+		FHitResult Hit;
+		if (!World->LineTraceSingleByChannel(Hit, Location + FVector(0.f, 0.f, 20.f), Location - FVector(0.f, 0.f, 60.f),
+			ECC_Visibility, Params))
+		{
+			return SurfaceType_Default;
+		}
+		return UPhysicalMaterial::DetermineSurfaceType(Hit.PhysMaterial.Get());
+	}
+
+	const TArray<TSoftObjectPtr<USoundBase>>& FootstepsFor(EPhysicalSurface Surface)
+	{
+		const UCSAudioSettings* Settings = UCSAudioSettings::Get();
+		const TArray<TSoftObjectPtr<USoundBase>>* Set = &Settings->Footsteps;
+		if (Surface == CSSurface::Metal)
+		{
+			Set = &Settings->FootstepsMetal;
+		}
+		else if (Surface == CSSurface::Wood)
+		{
+			Set = &Settings->FootstepsWood;
+		}
+		else if (Surface == CSSurface::Dirt)
+		{
+			Set = &Settings->FootstepsDirt;
+		}
+		return Set->Num() > 0 ? *Set : Settings->Footsteps;
 	}
 
 	void Play2D(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound, float Volume, float Pitch)
