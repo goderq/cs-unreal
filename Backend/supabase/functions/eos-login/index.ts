@@ -81,7 +81,7 @@ Deno.serve(async (request) => {
         // Existing profile?
         const { data: existing, error: readError } = await admin
             .from("profiles")
-            .select("id, nickname, banned_until")
+            .select("id, nickname, banned_until, is_admin")
             .eq("epic_account_id", epic.accountId)
             .maybeSingle();
         if (readError) {
@@ -97,7 +97,7 @@ Deno.serve(async (request) => {
                 const { data, error } = await admin
                     .from("profiles")
                     .insert({ epic_account_id: epic.accountId, nickname })
-                    .select("id, nickname, banned_until")
+                    .select("id, nickname, banned_until, is_admin")
                     .single();
                 if (!error) {
                     profile = data;
@@ -145,7 +145,7 @@ Deno.serve(async (request) => {
         return json(200, {
             token,
             expires_in: TOKEN_LIFETIME_HOURS * 3600,
-            profile: { id: profile.id, nickname: profile.nickname },
+            profile: { id: profile.id, nickname: profile.nickname, is_admin: Boolean(profile.is_admin) },
             stats: stats ?? { matches: 0, wins: 0, kills: 0, deaths: 0, headshots: 0, playtime_seconds: 0 },
         });
     } catch (error) {

@@ -101,10 +101,9 @@ alter table public.match_players enable row level security;
 drop policy if exists profiles_read on public.profiles;
 create policy profiles_read on public.profiles for select using (true);
 
--- A player may only rename themselves, and only their own row.
+-- v2.0: players cannot change their profile at all (no renaming); there is
+-- deliberately no update policy, and the grants below give no update either.
 drop policy if exists profiles_update_own on public.profiles;
-create policy profiles_update_own on public.profiles
-    for update using (id = auth.uid()) with check (id = auth.uid());
 
 drop policy if exists stats_read on public.player_stats;
 create policy stats_read on public.player_stats for select using (true);
@@ -119,8 +118,9 @@ create policy match_players_read on public.match_players for select using (true)
 -- purpose: only the service key (Edge Functions) writes them.
 
 -- ---------------------------------------------------------------------------
--- Guard: the nickname and the Epic id cannot be changed into someone else's,
--- and a player cannot promote themselves.
+-- Guard: the Epic id never changes, and nobody but the service key (the Edge
+-- Functions: eos-login, admin) touches admin rights or bans. Players have no
+-- update grant at all since v2.0; this is the second line of defence.
 -- ---------------------------------------------------------------------------
 create or replace function public.profiles_guard()
 returns trigger language plpgsql as $$
@@ -128,12 +128,32 @@ begin
     if new.epic_account_id is distinct from old.epic_account_id then
         raise exception 'epic_account_id is immutable';
     end if;
-    new.is_admin := old.is_admin;
-    new.banned_until := old.banned_until;
     new.created_at := old.created_at;
+    -- Only the roles players act as are restricted: the Edge Functions (service
+    -- role) and the dashboard (postgres) may change bans, admins and names.
+    if coalesce(auth.role(), '') in ('authenticated', 'anon') then
+        new.is_admin := old.is_admin;
+        new.banned_until := old.banned_until;
+        new.nickname := old.nickname;
+    end if;
     return new;
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- v2.0 admin panel: every admin action is written here (admin Edge Function).
+-- No policies: only the service key reads or writes it.
+-- ---------------------------------------------------------------------------
+create table if not exists public.admin_log (
+    id         bigserial primary key,
+    created_at timestamptz not null default now(),
+    admin_id   uuid references public.profiles(id) on delete set null,
+    action     text not null,
+    target_id  uuid references public.profiles(id) on delete set null,
+    details    jsonb not null default '{}'::jsonb
+);
+alter table public.admin_log enable row level security;
+create index if not exists admin_log_created_idx on public.admin_log (created_at desc);
 
 drop trigger if exists profiles_guard_trigger on public.profiles;
 create trigger profiles_guard_trigger before update on public.profiles
@@ -231,8 +251,7 @@ revoke all on function public.apply_match_result(jsonb) from public, anon, authe
 -- "permission denied for table profiles".
 --
 --   service_role   the Edge Functions: full access, and RLS does not apply
---   authenticated  a signed-in player: reads everything, renames only itself
---                  (the policies above still limit it to its own row)
+--   authenticated  a signed-in player: read only (v2.0: no renaming)
 --   anon           a player who has not signed in yet: read only
 -- ---------------------------------------------------------------------------
 grant usage on schema public to anon, authenticated, service_role;
@@ -241,7 +260,12 @@ grant select on public.profiles, public.player_stats, public.matches,
                 public.match_players, public.leaderboard
     to anon, authenticated;
 
-grant update on public.profiles to authenticated;
+-- v2.0: the nickname is fixed after the first sign-in; only an admin changes
+-- it (the admin Edge Function, service key). Players write nothing at all.
+revoke insert, update, delete on public.profiles, public.player_stats,
+                public.matches, public.match_players
+    from anon, authenticated;
+drop policy if exists profiles_update_own on public.profiles;
 
 grant select, insert, update, delete on public.profiles, public.player_stats,
                 public.matches, public.match_players
@@ -249,3 +273,6 @@ grant select, insert, update, delete on public.profiles, public.player_stats,
 grant select on public.leaderboard to service_role;
 
 grant execute on function public.apply_match_result(jsonb) to service_role;
+
+grant select, insert on public.admin_log to service_role;
+grant usage, select on sequence public.admin_log_id_seq to service_role;
