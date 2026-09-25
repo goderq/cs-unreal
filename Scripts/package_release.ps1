@@ -82,7 +82,16 @@ if ($NoKeys) {
     # falls through to the real one).
     $stagedConfig = Join-Path $staged "CSFusion\Config"
     New-Item -ItemType Directory -Force $stagedConfig | Out-Null
-    Copy-Item $backend (Join-Path $stagedConfig "Backend.ini") -Force
+    # The [Photon] section (TestAppId) is for the self-tests on this machine
+    # only: a packaged build must never send players without an account to
+    # the test app, where anonymous clients are allowed (AUDIT B5).
+    $kept = New-Object System.Collections.Generic.List[string]
+    $inPhoton = $false
+    foreach ($line in [System.IO.File]::ReadAllLines($backend)) {
+        if ($line -match '^\s*\[(.+)\]\s*$') { $inPhoton = ($Matches[1] -eq 'Photon') }
+        if (-not $inPhoton) { $kept.Add($line) }
+    }
+    [System.IO.File]::WriteAllLines((Join-Path $stagedConfig "Backend.ini"), $kept)
     Write-Host "Account keys copied into the build (Config\Backend.ini)." -ForegroundColor Yellow
 } else {
     Write-Host "No Config\Backend.ini: the build cannot sign in (see docs/ACCOUNTS.md)." -ForegroundColor Yellow
