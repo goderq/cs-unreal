@@ -10,6 +10,10 @@
 #include "FX/CSTransientFX.h"
 #include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInterface.h"
+#include "NiagaraComponent.h"
+#include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
+#include "PhysicalMaterials/PhysicalMaterial.h"
 
 namespace CSEffects
 {
@@ -20,6 +24,21 @@ namespace CSEffects
 			FSoftObjectPath(TEXT("/Game/FX/Materials/M_CS_BulletHole.M_CS_BulletHole")));
 
 		constexpr float GDecalLifetime = 20.f;
+
+		// v2.0 phase 3 (C10): built by the CSFXBuilder commandlet.
+		TSoftObjectPtr<UNiagaraSystem> NiagaraAt(const TCHAR* Name)
+		{
+			return TSoftObjectPtr<UNiagaraSystem>(FSoftObjectPath(FString::Printf(TEXT("/Game/FX/Niagara/%s.%s"), Name, Name)));
+		}
+		const TSoftObjectPtr<UNiagaraSystem> StoneImpactSystem = NiagaraAt(TEXT("NS_Impact_Stone"));
+		const TSoftObjectPtr<UNiagaraSystem> MetalImpactSystem = NiagaraAt(TEXT("NS_Impact_Metal"));
+		const TSoftObjectPtr<UNiagaraSystem> WoodImpactSystem = NiagaraAt(TEXT("NS_Impact_Wood"));
+		const TSoftObjectPtr<UNiagaraSystem> DirtImpactSystem = NiagaraAt(TEXT("NS_Impact_Dirt"));
+		const TSoftObjectPtr<UNiagaraSystem> BloodSystem = NiagaraAt(TEXT("NS_Impact_Blood"));
+		const TSoftObjectPtr<UNiagaraSystem> MuzzleSmokeSystem = NiagaraAt(TEXT("NS_MuzzleSmoke"));
+		const TSoftObjectPtr<UNiagaraSystem> ShellEjectSystem = NiagaraAt(TEXT("NS_ShellEject"));
+		const TSoftObjectPtr<UNiagaraSystem> ExplosionSystem = NiagaraAt(TEXT("NS_Explosion"));
+		const TSoftObjectPtr<UNiagaraSystem> FlashbangSystem = NiagaraAt(TEXT("NS_FlashbangBurst"));
 	}
 
 	void MuzzleFlash(UWorld* World, const FTransform& Muzzle, float Scale, const AActor* Owner, bool bFirstPerson)
@@ -44,6 +63,9 @@ namespace CSEffects
 		T.AddToTranslation(T.GetRotation().GetForwardVector() * Size * 50.f);
 		T.ConcatenateRotation(FQuat(FVector::ForwardVector, FMath::FRandRange(0.f, PI)));
 		ACSTransientFX::Spawn(World, T, Flash);
+
+		// A wisp of smoke drifting out of the barrel.
+		SpawnSystem(World, MuzzleSmokeSystem, Muzzle.GetLocation(), Muzzle.Rotator());
 	}
 
 	void Tracer(UWorld* World, const FVector& Start, const FVector& End, const FLinearColor& Color)
@@ -66,6 +88,52 @@ namespace CSEffects
 		ACSTransientFX::Spawn(World, FTransform(Delta.Rotation(), Start), Streak);
 	}
 
+	UNiagaraComponent* SpawnSystem(UWorld* World, const TSoftObjectPtr<UNiagaraSystem>& System, const FVector& Location, const FRotator& Rotation)
+	{
+		if (!World || World->bIsTearingDown || World->GetNetMode() == NM_DedicatedServer)
+		{
+			return nullptr;
+		}
+		UNiagaraSystem* Asset = System.LoadSynchronous();
+		if (!Asset)
+		{
+			return nullptr;
+		}
+		// AutoRelease: the component goes back to Niagara's per-world pool when
+		// the effect ends, so steady fire reuses components instead of creating them.
+		return UNiagaraFunctionLibrary::SpawnSystemAtLocation(World, Asset, Location, Rotation, FVector::OneVector,
+			/*bAutoDestroy*/ true, /*bAutoActivate*/ true, ENCPoolMethod::AutoRelease, /*bPreCullCheck*/ true);
+	}
+
+	EPhysicalSurface SurfaceAt(UWorld* World, const FVector& Location, const FVector& Normal)
+	{
+		if (!World)
+		{
+			return SurfaceType_Default;
+		}
+		const FVector N = Normal.IsNearlyZero() ? FVector::UpVector : Normal.GetSafeNormal();
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(CSImpactSurface), false);
+		Params.bReturnPhysicalMaterial = true;
+		FHitResult Hit;
+		if (!World->LineTraceSingleByChannel(Hit, Location + N * 5.f, Location - N * 10.f, ECC_Visibility, Params))
+		{
+			return SurfaceType_Default;
+		}
+		return UPhysicalMaterial::DetermineSurfaceType(Hit.PhysMaterial.Get());
+	}
+
+	void ShellEject(UWorld* World, const FTransform& Muzzle)
+	{
+		// Out of the ejection port (about a receiver length behind the muzzle),
+		// to the right and a little up and back.
+		const FVector Forward = Muzzle.GetRotation().GetForwardVector();
+		const FVector Right = Muzzle.GetRotation().GetRightVector();
+		const FVector Up = Muzzle.GetRotation().GetUpVector();
+		const FVector Port = Muzzle.GetLocation() - Forward * 35.f + Right * 2.f + Up * 2.f;
+		const FVector Out = (Right + Up * 0.5f - Forward * 0.2f).GetSafeNormal();
+		SpawnSystem(World, ShellEjectSystem, Port, Out.Rotation());
+	}
+
 	void Impact(UWorld* World, const FVector& Location, const FVector& Normal, bool bHitPlayer)
 	{
 		if (!World)
@@ -75,40 +143,37 @@ namespace CSEffects
 		const FVector N = Normal.IsNearlyZero() ? FVector::UpVector : Normal.GetSafeNormal();
 		const UCSAudioSettings* Audio = UCSAudioSettings::Get();
 
+		// The systems throw their particles along +X: out of the surface.
 		if (bHitPlayer)
 		{
-			ACSTransientFX::FParams Blood;
-			Blood.bAdditive = false;
-			Blood.Color = FLinearColor(0.45f, 0.02f, 0.02f);
-			Blood.Opacity = 0.9f;
-			Blood.Lifetime = 0.3f;
-			Blood.StartScale = FVector(0.08f);
-			Blood.EndScale = FVector(0.32f);
-			ACSTransientFX::Spawn(World, FTransform(Location + N * 5.f), Blood);
+			SpawnSystem(World, BloodSystem, Location + N * 3.f, N.Rotation());
 			CSAudio::PlayAt(World, Audio->BodyHit, Location + N * 5.f, 0.9f, FMath::FRandRange(0.92f, 1.08f), ECSSound::Impact);
 			return;
 		}
 
-		// Dust puff that grows and fades.
-		ACSTransientFX::FParams Dust;
-		Dust.bAdditive = false;
-		Dust.Color = FLinearColor(0.2f, 0.19f, 0.17f);
-		Dust.Opacity = 0.85f;
-		Dust.Lifetime = 0.6f;
-		Dust.StartScale = FVector(0.08f);
-		Dust.EndScale = FVector(0.5f);
-		ACSTransientFX::Spawn(World, FTransform(Location + N * 8.f), Dust);
-
-		// Spark flash.
-		ACSTransientFX::FParams Spark;
-		Spark.Color = FLinearColor(1.f, 0.7f, 0.3f);
-		Spark.Intensity = 15.f;
-		Spark.Lifetime = 0.07f;
-		Spark.StartScale = FVector(0.06f);
-		Spark.EndScale = FVector(0.02f);
-		Spark.LightIntensity = 1500.f;
-		Spark.LightRadius = 120.f;
-		ACSTransientFX::Spawn(World, FTransform(Location + N * 2.f), Spark);
+		// Sparks off metal, splinters off wood, clods off dirt, dust and chips
+		// off everything else; the ricochet sound is pitched to match.
+		const EPhysicalSurface Surface = SurfaceAt(World, Location, N);
+		const TSoftObjectPtr<UNiagaraSystem>* System = &StoneImpactSystem;
+		FVector2f Pitch(0.85f, 1.15f);
+		float Volume = 0.7f;
+		if (Surface == CSSurface::Metal)
+		{
+			System = &MetalImpactSystem;
+			Pitch = FVector2f(1.15f, 1.4f);
+		}
+		else if (Surface == CSSurface::Wood)
+		{
+			System = &WoodImpactSystem;
+			Pitch = FVector2f(0.72f, 0.88f);
+		}
+		else if (Surface == CSSurface::Dirt)
+		{
+			System = &DirtImpactSystem;
+			Pitch = FVector2f(0.6f, 0.75f);
+			Volume = 0.5f;
+		}
+		SpawnSystem(World, *System, Location + N * 2.f, N.Rotation());
 
 		// Bullet hole, oriented into the surface.
 		if (UMaterialInterface* Decal = BulletHoleMaterial.LoadSynchronous())
@@ -123,6 +188,16 @@ namespace CSEffects
 			}
 		}
 
-		CSAudio::PlayAt(World, Audio->BulletImpact, Location + N * 5.f, 0.7f, FMath::FRandRange(0.85f, 1.15f), ECSSound::Impact);
+		CSAudio::PlayAt(World, Audio->BulletImpact, Location + N * 5.f, Volume, FMath::FRandRange(Pitch.X, Pitch.Y), ECSSound::Impact);
+	}
+
+	void Explosion(UWorld* World, const FVector& Location)
+	{
+		SpawnSystem(World, ExplosionSystem, Location + FVector(0.f, 0.f, 20.f), FRotator(90.f, 0.f, 0.f));
+	}
+
+	void FlashbangBurst(UWorld* World, const FVector& Location)
+	{
+		SpawnSystem(World, FlashbangSystem, Location + FVector(0.f, 0.f, 15.f), FRotator(90.f, 0.f, 0.f));
 	}
 }

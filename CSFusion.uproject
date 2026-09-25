@@ -42,6 +42,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "Niagara",
+			"Enabled": true
+		},
+		{
 			"Name": "PhotonFusion",
 			"Enabled": true
 		},

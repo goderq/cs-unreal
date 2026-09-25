@@ -91,6 +91,9 @@ public class CSFusion : ModuleRules
 			"JsonUtilities",
 			"OnlineSubsystem",
 			"OnlineSubsystemUtils",
+			// v2.0 phase 3: Niagara effects (C10).
+			"Niagara",
+			"AssetRegistry", // FX builder commandlet (editor)
 		});
 
 		PublicIncludePaths.Add(ModuleDirectory);

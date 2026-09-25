@@ -70,10 +70,8 @@ ACSTransientFX* ACSTransientFX::Spawn(UWorld* World, const FTransform& Transform
 	{
 		return nullptr;
 	}
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	SpawnParams.ObjectFlags |= RF_Transient;
-	ACSTransientFX* FX = World->SpawnActor<ACSTransientFX>(ACSTransientFX::StaticClass(), Transform, SpawnParams);
+	UCSTransientFXPool* Pool = World->GetSubsystem<UCSTransientFXPool>();
+	ACSTransientFX* FX = Pool ? Pool->Acquire(Transform) : nullptr;
 	if (FX)
 	{
 		FX->Start(Params);
@@ -81,10 +79,64 @@ ACSTransientFX* ACSTransientFX::Spawn(UWorld* World, const FTransform& Transform
 	return FX;
 }
 
+ACSTransientFX* UCSTransientFXPool::Acquire(const FTransform& Transform)
+{
+	while (Parked.Num() > 0)
+	{
+		ACSTransientFX* FX = Parked.Pop(EAllowShrinking::No);
+		if (IsValid(FX))
+		{
+			++NumReused;
+			FX->SetActorTransform(Transform, false, nullptr, ETeleportType::ResetPhysics);
+			return FX;
+		}
+	}
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	SpawnParams.ObjectFlags |= RF_Transient;
+	ACSTransientFX* FX = GetWorld()->SpawnActor<ACSTransientFX>(ACSTransientFX::StaticClass(), Transform, SpawnParams);
+	NumCreated += FX ? 1 : 0;
+	return FX;
+}
+
+void UCSTransientFXPool::Release(ACSTransientFX* Effect)
+{
+	if (!IsValid(Effect))
+	{
+		return;
+	}
+	if (Parked.Num() >= MaxParked || GetWorld()->bIsTearingDown)
+	{
+		Effect->Destroy();
+		return;
+	}
+	Effect->Park();
+	Parked.Add(Effect);
+}
+
+void ACSTransientFX::Park()
+{
+	SetActorHiddenInGame(true);
+	SetActorTickEnabled(false);
+	SetOwner(nullptr);
+	Light->SetIntensity(0.f);
+	Light->SetVisibility(false);
+}
+
 void ACSTransientFX::Start(const FParams& InParams)
 {
 	Params = InParams;
 	Age = 0.f;
+
+	// A reused actor keeps what the previous effect set; start from scratch.
+	SetActorHiddenInGame(false);
+	SetActorTickEnabled(true);
+	SetOwner(nullptr);
+	MeshA->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
+	MeshB->SetRelativeRotation(FRotator::ZeroRotator);
+	MeshB->SetVisibility(false);
+	Light->SetVisibility(false);
+	Light->SetIntensity(0.f);
 
 	UStaticMesh* Mesh = SphereMesh;
 	if (Params.Shape == ECSFXShape::Cylinder)
@@ -99,7 +151,16 @@ void ACSTransientFX::Start(const FParams& InParams)
 	UMaterialInterface* Base = Params.bAdditive
 		? ((Params.Shape == ECSFXShape::Star && FlashMaterial) ? FlashMaterial.Get() : AdditiveMaterial.Get())
 		: TranslucentMaterial.Get();
-	Material = Base ? UMaterialInstanceDynamic::Create(Base, this) : nullptr;
+	Material = nullptr;
+	if (Base)
+	{
+		TObjectPtr<UMaterialInstanceDynamic>& Cached = MaterialInstances.FindOrAdd(Base);
+		if (!Cached)
+		{
+			Cached = UMaterialInstanceDynamic::Create(Base, this);
+		}
+		Material = Cached;
+	}
 	if (Material)
 	{
 		Material->SetVectorParameterValue(GColorParam, Params.Color);
@@ -184,7 +245,14 @@ void ACSTransientFX::Tick(float DeltaSeconds)
 	const float Alpha = Params.Lifetime > 0.f ? Age / Params.Lifetime : 1.f;
 	if (Alpha >= 1.f)
 	{
-		Destroy();
+		if (UCSTransientFXPool* Pool = GetWorld()->GetSubsystem<UCSTransientFXPool>())
+		{
+			Pool->Release(this);
+		}
+		else
+		{
+			Destroy();
+		}
 		return;
 	}
 	ApplyAlpha(Alpha);

@@ -48,6 +48,7 @@ $Suites = @(
     @{ Name = "modes";     Flags = "-mode=dm -cstestmodes";   Done = "MODES TEST: done";              Timeout = 120; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "comp";      Flags = "-mode=5v5 -roundtime=40 -cstestcomp"; Done = "ROUNDS OK|ROUNDS BROKEN"; Timeout = 240; Map = "/Game/Maps/Lvl_OldTown" },
     @{ Name = "poses";     Flags = "-mode=dm -bots=1 -cstestposes"; Done = "RESPAWN POSE"; Timeout = 90; Map = "/Game/Maps/Lvl_Depot" },
+    @{ Name = "fx";        Flags = "-cstestfx";               Done = "FX TEST RESULT";                Timeout = 90; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "surfaces";  Flags = "-cstestsurfaces";         Done = "SURFACE TEST RESULT";           Timeout = 60; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "tourdepot"; Flags = "-cstesttour";             Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "touroldtown"; Flags = "-cstesttour";           Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_OldTown" },
@@ -100,7 +101,8 @@ function Get-ResultLines([string]$LogPath) {
 # An ensure or a crash is a failure even when every RESULT line says OK.
 function Test-CleanLog([string]$Suite, [string]$LogPath) {
     if (-not (Test-Path $LogPath)) { return }
-    $bad = @(Select-String -Path $LogPath -Pattern "Ensure condition failed|Assertion failed|Fatal error|Unhandled Exception")
+    # A material that fails to compile renders as the engine checkerboard.
+    $bad = @(Select-String -Path $LogPath -Pattern "Ensure condition failed|Assertion failed|Fatal error|Unhandled Exception|Failed to compile Material")
     if ($bad.Count -gt 0) {
         Add-Result $Suite $false ("{0}: {1}" -f (Split-Path $LogPath -Leaf), ($bad[0].Line -replace '^.*?Error: ', ''))
     }

@@ -2,17 +2,18 @@
 //
 // A short-lived visual effect made of one mesh and an optional light:
 // muzzle flash, tracer, impact puff. It scales and fades itself out over its
-// lifetime and then destroys itself.
+// lifetime and then goes back to a per-world pool (UCSTransientFXPool).
 //
-// Built from engine primitives and two generated materials rather than
-// Niagara systems: a Niagara asset cannot be authored by the bootstrap
-// script, and these effects need nothing a scaled, fading mesh cannot do.
+// Used for what needs a light or an exact shape: muzzle and grenade flashes,
+// tracers. Particle effects (sparks, dust, smoke, shells, debris) are Niagara
+// systems built by the CSFXBuilder commandlet and started by CSEffects.
 // Purely cosmetic and local to each peer - never replicated.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Subsystems/WorldSubsystem.h"
 #include "CSTransientFX.generated.h"
 
 class UPointLightComponent;
@@ -55,14 +56,22 @@ public:
 		bool bOwnerNoSee = false;
 	};
 
-	/** Spawns and starts an effect. Returns null on a server or without a world. */
+	/** Starts an effect, reusing a parked one if the world has any. Null on a server or without a world. */
 	static ACSTransientFX* Spawn(UWorld* World, const FTransform& Transform, const FParams& Params);
 
 	virtual void Tick(float DeltaSeconds) override;
 
 private:
+	friend class UCSTransientFXPool;
+
 	void Start(const FParams& InParams);
 	void ApplyAlpha(float Alpha);
+	/** Hidden and idle until the pool hands it out again. */
+	void Park();
+
+	/** One dynamic instance per base material, kept across reuses. */
+	UPROPERTY(Transient)
+	TMap<TObjectPtr<UMaterialInterface>, TObjectPtr<UMaterialInstanceDynamic>> MaterialInstances;
 
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> Root;
@@ -101,4 +110,36 @@ private:
 
 	FParams Params;
 	float Age = 0.f;
+};
+/**
+ * Reuses finished ACSTransientFX actors (v2.0 phase 3, C10): a burst of fire
+ * spawns a flash and a tracer per shot, and spawning / destroying actors at
+ * that rate costs more than the effect itself. Finished effects are hidden and
+ * parked here; ACSTransientFX::Spawn takes one back before creating a new one.
+ */
+UCLASS()
+class CSFUSION_API UCSTransientFXPool : public UWorldSubsystem
+{
+	GENERATED_BODY()
+
+public:
+	/** A parked effect moved to Transform, or a new one. */
+	ACSTransientFX* Acquire(const FTransform& Transform);
+
+	/** Parks a finished effect (or destroys it when the pool is full). */
+	void Release(ACSTransientFX* Effect);
+
+	int32 GetNumCreated() const { return NumCreated; }
+	int32 GetNumReused() const { return NumReused; }
+	int32 GetNumParked() const { return Parked.Num(); }
+
+	/** Parked actors kept at most; a longer burst creates more, then destroys the extra. */
+	static constexpr int32 MaxParked = 48;
+
+private:
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ACSTransientFX>> Parked;
+
+	int32 NumCreated = 0;
+	int32 NumReused = 0;
 };

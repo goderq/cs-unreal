@@ -99,6 +99,8 @@ UnrealEditor-Cmd.exe CSFusion.uproject -run=pythonscript -script=Scripts/render_
 | Sound Class музыки и эффектов, Sound Mix громкостей, затухание по расстоянию | `Content/Audio/Mix` | `Scripts/bootstrap_stage6.py` | да |
 | v2.0: шаги по металлу, дереву и грунту (по 4) | `SourceArt/Audio/Player/S_Footstep_{Metal,Wood,Dirt}_*.wav` → `Content/Audio/Player` | синтез в `generate_audio.py` (`make_phase3`: шаг + резонатор металла, глухой корпус дерева, хруст грунта) | да |
 | v2.0: дерево Sound Class, затухания с окклюзией, concurrency; физические материалы `PM_Metal`/`PM_Wood`/`PM_Dirt` | `Content/Audio/Mix`, `Content/Environment/Physics` | `Scripts/bootstrap_phase3_audio.py` | да |
+| v2.0: материалы частиц `M_CS_ParticleAdditive`, `M_CS_ParticleTranslucent` | `Content/FX/Materials` | узлы материалов движка, `Scripts/bootstrap_phase3_fx.py` | да |
+| v2.0: 9 систем Niagara (попадания по 4 поверхностям, кровь, дым из ствола, гильза, взрыв, светошумовая) | `Content/FX/Niagara` | коммандлет `-run=CSFXBuilder` (`Source/CSFusion/FX/CSFXBuilderCommandlet.cpp`): копия шаблона движка `DirectionalBurstLightweight` (плагин Niagara, контент UE по EULA) с нашими настройками | да |
 | Материалы эффектов: вспышка (аддитивный с радиальной маской), трассер/искры (аддитивный), дым/кровь (полупрозрачный с мягкими краями), след от пули (декаль) | `Content/FX/Materials` | генерируются из узлов материалов движка в `bootstrap_stage6.py` | да |
 | Карта, игровые data asset'ы, Input Actions | `Content/Maps`, `Items`, `Weapons/DA_*`, `Input` | `Scripts/bootstrap_content.py` | да |
 | UI и HUD | — | код на Slate/Canvas, без текстур | да |

@@ -11,6 +11,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Core/CSAuthority.h"
 #include "EngineUtils.h"
+#include "FX/CSEffects.h"
 #include "FX/CSTransientFX.h"
 #include "GameFramework/ProjectileMovementComponent.h"
 #include "Items/CSItemDefinition.h"
@@ -153,7 +154,7 @@ void ACSGrenade::Explode(const FVector& Location)
 		return;
 	}
 
-	// Fireball: a bright flash with a big light, then a rolling smoke ball.
+	// A bright flash with a big light.
 	ACSTransientFX::FParams Flash;
 	Flash.Color = FLinearColor(1.f, 0.55f, 0.18f);
 	Flash.Intensity = 30.f;
@@ -164,27 +165,8 @@ void ACSGrenade::Explode(const FVector& Location)
 	Flash.LightRadius = 1400.f;
 	ACSTransientFX::Spawn(World, FTransform(Location + FVector(0.f, 0.f, 25.f)), Flash);
 
-	ACSTransientFX::FParams Core;
-	Core.Shape = ECSFXShape::Star;
-	Core.Color = FLinearColor(1.f, 0.8f, 0.4f);
-	Core.Intensity = 40.f;
-	Core.Lifetime = 0.09f;
-	Core.StartScale = FVector(1.4f);
-	Core.EndScale = FVector(2.4f);
-	ACSTransientFX::Spawn(World, FTransform(FRotator(0.f, FMath::FRandRange(0.f, 360.f), 0.f), Location + FVector(0.f, 0.f, 30.f)), Core);
-
-	for (int32 i = 0; i < 4; ++i)
-	{
-		ACSTransientFX::FParams Smoke;
-		Smoke.bAdditive = false;
-		Smoke.Color = FLinearColor(0.07f, 0.065f, 0.06f);
-		Smoke.Opacity = 0.8f;
-		Smoke.Lifetime = 1.8f + 0.4f * i;
-		Smoke.StartScale = FVector(0.8f);
-		Smoke.EndScale = FVector(3.4f + 0.6f * i);
-		const FVector Offset(FMath::FRandRange(-60.f, 60.f), FMath::FRandRange(-60.f, 60.f), 30.f + 45.f * i);
-		ACSTransientFX::Spawn(World, FTransform(Location + Offset), Smoke);
-	}
+	// Fireball, rolling smoke, debris and sparks (Niagara, pooled).
+	CSEffects::Explosion(World, Location);
 
 	// Scorch mark on the floor.
 	FHitResult Floor;
@@ -235,14 +217,7 @@ void ACSGrenade::ExplodeFlash(const FVector& Location)
 	Pop.LightRadius = 2600.f;
 	ACSTransientFX::Spawn(World, FTransform(Location + FVector(0.f, 0.f, 15.f)), Pop);
 
-	ACSTransientFX::FParams Wisp;
-	Wisp.bAdditive = false;
-	Wisp.Color = FLinearColor(0.55f, 0.55f, 0.56f);
-	Wisp.Opacity = 0.35f;
-	Wisp.Lifetime = 1.4f;
-	Wisp.StartScale = FVector(0.3f);
-	Wisp.EndScale = FVector(1.4f);
-	ACSTransientFX::Spawn(World, FTransform(Location + FVector(0.f, 0.f, 20.f)), Wisp);
+	CSEffects::FlashbangBurst(World, Location);
 
 	CSAudio::PlayAt(World, UCSAudioSettings::Get()->FlashbangExplode, Location + FVector(0.f, 0.f, 30.f), 1.f, FMath::FRandRange(0.97f, 1.03f),
 		ECSSound::Explosion);

@@ -307,6 +307,10 @@ void ACSCharacter::PlayShotPresentation(const FVector& TracerEnd, bool bLocalPre
 
 	// The owner sees the first-person flash; everyone else the third-person one.
 	CSEffects::MuzzleFlash(GetWorld(), Muzzle, FlashScale, this, bFirstPersonView);
+	if (Weapon && Weapon->Kind == ECSWeaponKind::Firearm)
+	{
+		CSEffects::ShellEject(GetWorld(), Muzzle);
+	}
 
 	if (Weapon)
 	{

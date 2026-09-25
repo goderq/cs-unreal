@@ -191,6 +191,10 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestNoRecoil, 12.f, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestfx")))
+	{
+		GetWorldTimerManager().SetTimer(TestFXTimer, this, &ACSPlayerController::CSTestFX, 6.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestsurfaces")))
 	{
 		GetWorldTimerManager().SetTimer(TestSurfacesTimer, this, &ACSPlayerController::CSTestSurfaces, 6.f, false);

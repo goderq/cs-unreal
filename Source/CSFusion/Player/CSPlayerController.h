@@ -141,6 +141,16 @@ protected:
 	/** -cstestsurfaces (C9): footstep surfaces and sound occlusion on the real level. */
 	void CSTestSurfaces();
 	FTimerHandle TestSurfacesTimer;
+	/** -cstestfx (C10): effect gallery screenshots and both effect pools. */
+	void CSTestFX();
+	void CSTestFXStep();
+	FTimerHandle TestFXTimer;
+	int32 FXGalleryIndex = 0;
+	int32 FXSystemsLoaded = 0;
+	int32 FXPoolCreatedBefore = 0;
+	int32 FXPoolReusedBefore = 0;
+	int32 FXBurstShots = 0;
+	TArray<TWeakObjectPtr<class UNiagaraComponent>> FXFirstVolley;
 	TWeakObjectPtr<class ACSWorldPickup> CheatFarPickup;
 
 	/** Stage 8 performance sample, enabled with -cstestperf: 20 s of frame times. */
