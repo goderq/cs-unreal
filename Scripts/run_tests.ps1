@@ -172,9 +172,9 @@ $NetScenarios = @(
     @{ Name = "netcontest"; A = "-room={ROOM} -cstestcontest"; B = "-room={ROOM} -cstestcontest";
        DelayB = 3; Done = "A:CONTEST TEST RESULT"; Timeout = 90;
        Expect = @("A:CONTEST TEST RESULT: player \d+ WON|B:CONTEST TEST RESULT: player \d+ WON|exactly one player won the contested pickup") },
-    @{ Name = "netdeath"; A = "-room={ROOM} -cstestkill -LogCmds=`"LogCSCombat Verbose`""; B = "-room={ROOM} -cstestgrab";
+    @{ Name = "netdeath"; A = "-room={ROOM} -testprimary=m4 -cstestkill -LogCmds=`"LogCSCombat Verbose`""; B = "-room={ROOM} -cstestgrab";
        DelayB = 3; Done = "A:RESPAWN RESULT"; Timeout = 120; Expect = @() },
-    @{ Name = "netleave"; A = "-room={ROOM} -cstestwatchleave"; B = "-room={ROOM} -cstestgrab";
+    @{ Name = "netleave"; A = "-room={ROOM} -testprimary=m4 -cstestwatchleave"; B = "-room={ROOM} -cstestgrab";
        DelayB = 3; KillB = "B:GRAB TEST RESULT"; Done = "A:LEAVE CLAIM RESULT|LEAVE TEST RESULT: player \d+ never left"; Timeout = 150; Expect = @() },
     @{ Name = "nethost"; A = "-room={ROOM} -bots=2 -cstestleave=45"; B = "-room={ROOM} -cstestkill -cstestkillbot -cstestbots";
        DelayB = 3; Done = "B:BOT TEST RESULT"; Timeout = 150;
@@ -202,6 +202,11 @@ $NetScenarios = @(
        Expect = @("A:no heartbeat for .* marked inactive \(kept in the match\)|master marked the frozen B inactive",
                   "A:heartbeat is back - active again|master saw B come back",
                   "A:Player \d+ left \(|__absent__") },
+    # Phase 2 (B10): stepping through walls at a legal average speed is still caught.
+    @{ Name = "netwallhop"; A = "-room={ROOM} -LogCmds=`"LogCSSecurity Verbose`""; B = "-room={ROOM} -cstestwallhop";
+       DelayB = 3; Done = "B:WALLHOP TEST: done"; Timeout = 150;
+       Expect = @("B:WALLHOP TEST: done \([1-9]|B found a wall and stepped through it",
+                  "A:strike \(through a wall\)|master caught the step through the wall") },
     @{ Name = "netremoval"; A = "-room={ROOM}"; B = "-room={ROOM} -cstestremoval";
        DelayB = 3; Done = "B:Leaving for the menu: You were removed"; Timeout = 150;
        Expect = @("A:REMOVED from the match after 3 suspensions|master removed B after three suspensions",

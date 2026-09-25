@@ -8,6 +8,9 @@
 #include "Characters/CSCharacter.h"
 #include "Components/CapsuleComponent.h"
 #include "Multiplayer/CSSessionSubsystem.h"
+#include "Engine/OverlapResult.h"
+#include "NavigationPath.h"
+#include "NavigationSystem.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSRpcGuard.h"
@@ -308,7 +311,7 @@ void ACSMatchDirector::RemovePlayer(int32 PlayerId, ECSDeathReason Reason)
 	HeartbeatSeen.Remove(PlayerId);
 	PawnMissingSince.Remove(PlayerId);
 	Stalled.Remove(PlayerId);
-	LastMovedTime.Remove(PlayerId);
+	LastClearPosition.Remove(PlayerId);
 
 	if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
 	{
@@ -1723,28 +1726,70 @@ FCSMoveSample ACSMatchDirector::MakeMoveSample(const FCSPlayerCombatRecord& Reco
 		? FMath::Max(0.f, static_cast<float>(Feet.Z - Floor.ImpactPoint.Z)) : Probe;
 
 	// Through a wall: the straight line from the previous position crosses
-	// static geometry that blocks pawns. Only for a step right after another
-	// one - after a lag spike the real path may have gone round a corner, and
-	// the teleport check covers long jumps.
-	if (Previous && !Previous->Equals(Sample.Location, 1.f))
+	// static geometry that blocks pawns. That alone is not proof - after a lag
+	// spike the real path may have gone round a corner - so the navigation
+	// mesh decides: a strike only when no walkable way round was short enough
+	// for the time the move took. Hopping through walls in pauses gains
+	// nothing (the time is counted), a corner after a lag spike costs nothing.
+	// Remote pawns are interpolated, so a jump through a wall arrives as small
+	// steps and one of them ends INSIDE the wall. Positions inside static
+	// geometry are skipped; the verdict comes once the pawn is out again, from
+	// the last clear position and the time since then.
+	auto BlocksPawns = [](const UPrimitiveComponent* Component)
 	{
-		const double* LastMoved = LastMovedTime.Find(Record.PlayerId);
-		if (LastMoved && Now - *LastMoved <= 0.25)
+		return Component && Component->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block;
+	};
+	TArray<FOverlapResult> Inside;
+	GetWorld()->OverlapMultiByObjectType(Inside, Sample.Location, FQuat::Identity, FCollisionObjectQueryParams(ECC_WorldStatic),
+		FCollisionShape::MakeSphere(15.f), Params);
+	const bool bEmbedded = Inside.ContainsByPredicate([&BlocksPawns](const FOverlapResult& O) { return BlocksPawns(O.GetComponent()); });
+	const TPair<FVector, double>* Clear = LastClearPosition.Find(Record.PlayerId);
+	if (bEmbedded)
+	{
+		return Sample;
+	}
+	if (Clear && !Clear->Key.Equals(Sample.Location, 1.f))
+	{
+		const FVector* PreviousClear = &Clear->Key;
+		// Capped at half a second: standing still does not save up time for a hop.
+		const double Took = FMath::Clamp(Now - Clear->Value, 0.05, 0.5);
+		const UPrimitiveComponent* Wall = nullptr;
+		TArray<FHitResult> Hits;
+		GetWorld()->LineTraceMultiByObjectType(Hits, *PreviousClear, Sample.Location, FCollisionObjectQueryParams(ECC_WorldStatic), Params);
+		for (const FHitResult& Hit : Hits)
 		{
-			TArray<FHitResult> Hits;
-			GetWorld()->LineTraceMultiByObjectType(Hits, *Previous, Sample.Location, FCollisionObjectQueryParams(ECC_WorldStatic), Params);
-			for (const FHitResult& Hit : Hits)
+			const UPrimitiveComponent* Component = Hit.GetComponent();
+			if (!Hit.bStartPenetrating && BlocksPawns(Component))
 			{
-				const UPrimitiveComponent* Component = Hit.GetComponent();
-				if (!Hit.bStartPenetrating && Component && Component->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block)
-				{
-					Sample.bPathBlocked = true;
-					UE_LOG(LogCSSecurity, Verbose, TEXT("Player %d moved through %s."), Record.PlayerId, *GetNameSafe(Hit.GetActor()));
-					break;
-				}
+				Wall = Component;
+				break;
 			}
 		}
-		LastMovedTime.Add(Record.PlayerId, Now);
+		if (Wall)
+		{
+			const FVector Down(0.f, 0.f, HalfHeight);
+			const float Allowed = UCSCombatSettings::Get()->MaxLegalSpeed * static_cast<float>(Took) + 150.f;
+			UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+			FNavLocation From;
+			FNavLocation To;
+			const FVector Extent(60.f, 60.f, 200.f);
+			if (Nav && Nav->ProjectPointToNavigation(*PreviousClear - Down, From, Extent) && Nav->ProjectPointToNavigation(Feet, To, Extent))
+			{
+				const UNavigationPath* Path = UNavigationSystemV1::FindPathToLocationSynchronously(GetWorld(), From.Location, To.Location);
+				const bool bWayRound = Path && Path->IsValid() && !Path->IsPartial() && Path->GetPathLength() <= Allowed;
+				Sample.bPathBlocked = !bWayRound;
+				UE_LOG(LogCSSecurity, Verbose, TEXT("Player %d crossed %s in %.2f s: way round %s (%.0f cm, allowed %.0f)."),
+					Record.PlayerId, *GetNameSafe(Wall->GetOwner()), Took, bWayRound ? TEXT("yes") : TEXT("no"),
+					Path && Path->IsValid() ? Path->GetPathLength() : -1.f, Allowed);
+			}
+			// Off the navigation mesh (a crate top, a ledge): no verdict.
+		}
+	}
+	// The time counts from the last CHANGE of position, so a player standing
+	// still and then lagging round a corner is not mistaken for a wall hop.
+	if (!Clear || !Clear->Key.Equals(Sample.Location, 1.f))
+	{
+		LastClearPosition.Add(Record.PlayerId, TPair<FVector, double>(Sample.Location, Now));
 	}
 	return Sample;
 }

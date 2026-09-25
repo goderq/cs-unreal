@@ -501,8 +501,8 @@ private:
 	/** Players the anti-cheat removed from this match; they are not registered again (B11). */
 	TSet<int32> RemovedByAntiCheat;
 
-	/** Last time each player's observed position changed, so a lag spike is not taken for a wall pass. */
-	TMap<int32, double> LastMovedTime;
+	/** Last observed position of each player that was not inside static geometry, and when it was reached (B10). */
+	TMap<int32, TPair<FVector, double>> LastClearPosition;
 
 	/** Authority: what the cheat guard is fed for one pawn this tick (floor, walls, spawn point). */
 	FCSMoveSample MakeMoveSample(const FCSPlayerCombatRecord& Record, const class ACSCharacter* Pawn, const FVector* Previous, double Now);

@@ -29,6 +29,8 @@
 #include "Misc/CoreDelegates.h"
 #include "TimerManager.h"
 #include "Multiplayer/CSSessionSubsystem.h"
+#include "NavigationPath.h"
+#include "NavigationSystem.h"
 #include "Settings/CSSettingsSubsystem.h"
 
 ACSPlayerController::ACSPlayerController()
@@ -185,6 +187,10 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestFreeze, 12.f, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestwallhop")))
+	{
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestWallHop, 12.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstestremoval")))
 	{
 		GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestRemoval, 12.f, false);
@@ -298,34 +304,62 @@ void ACSPlayerController::TestMoveTo(const FVector& Dest, TFunction<void()> OnAr
 	// (~987 cm/s over a second) and each hop under its 600 cm teleport
 	// threshold. Hops rather than a smooth walk so the pawn spends almost no
 	// time inside crates on the straight line, and arrives quickly.
+	// v2.0 (B10): along the navigation path, round crates and walls - the
+	// Master Client now punishes steps through static geometry, and a test
+	// should move like a player. A straight line only when there is no path.
 	constexpr float Speed = 800.f;
 	constexpr float Rate = 0.5f;
 	TestMoveDest = Dest;
 	TestMoveDone = MoveTemp(OnArrived);
+	TestMoveWaypoints.Reset();
+	if (APawn* Self = GetPawn())
+	{
+		if (const UNavigationPath* Path = UNavigationSystemV1::FindPathToLocationSynchronously(GetWorld(), Self->GetActorLocation(), Dest))
+		{
+			if (Path->IsValid() && Path->PathPoints.Num() > 1)
+			{
+				TestMoveWaypoints.Append(Path->PathPoints.GetData() + 1, Path->PathPoints.Num() - 1);
+			}
+		}
+	}
+	if (TestMoveWaypoints.Num() == 0)
+	{
+		TestMoveWaypoints.Add(Dest);
+	}
 	GetWorldTimerManager().SetTimer(TestMoveTimer, [this, Speed, Rate]()
 	{
 		APawn* Self = GetPawn();
-		if (!Self)
+		if (!Self || TestMoveWaypoints.Num() == 0)
 		{
 			GetWorldTimerManager().ClearTimer(TestMoveTimer);
 			return;
 		}
-		const FVector Here = Self->GetActorLocation();
-		const FVector Goal(TestMoveDest.X, TestMoveDest.Y, Here.Z);
-		const FVector ToGoal = Goal - Here;
-		const float Step = Speed * Rate;
-		if (ToGoal.Size2D() <= Step)
+		// Up to one hop's length along the remaining polyline.
+		float Budget = Speed * Rate;
+		FVector Here = Self->GetActorLocation();
+		while (TestMoveWaypoints.Num() > 0)
 		{
-			Self->SetActorLocation(Goal);
+			const FVector Goal(TestMoveWaypoints[0].X, TestMoveWaypoints[0].Y, Here.Z);
+			const float Left = FVector::Dist2D(Here, Goal);
+			if (Left > Budget)
+			{
+				Here += (Goal - Here).GetSafeNormal2D() * Budget;
+				break;
+			}
+			Budget -= Left;
+			Here = Goal;
+			TestMoveWaypoints.RemoveAt(0);
+		}
+		Self->SetActorLocation(Here);
+		if (TestMoveWaypoints.Num() == 0)
+		{
 			GetWorldTimerManager().ClearTimer(TestMoveTimer);
 			TFunction<void()> Done = MoveTemp(TestMoveDone);
 			if (Done)
 			{
 				Done();
 			}
-			return;
 		}
-		Self->SetActorLocation(Here + ToGoal.GetSafeNormal2D() * Step);
 	}, Rate, true);
 }
 

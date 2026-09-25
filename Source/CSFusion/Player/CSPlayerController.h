@@ -130,6 +130,9 @@ protected:
 	void CSTestFreeze();
 	void CSTestRemoval();
 	int32 RemovalTeleports = 0;
+	/** -cstestwallhop (B10): step through walls at a legal average speed. */
+	void CSTestWallHop();
+	int32 WallHops = 0;
 	int32 CheatRoundsBefore = 0;
 	TWeakObjectPtr<class ACSWorldPickup> CheatFarPickup;
 
@@ -220,6 +223,8 @@ protected:
 	FTimerHandle TestMoveTimer;
 	FVector TestMoveDest = FVector::ZeroVector;
 	TFunction<void()> TestMoveDone;
+	/** Remaining navigation path points of the current TestMoveTo. */
+	TArray<FVector> TestMoveWaypoints;
 
 	/** Writes a screenshot to Saved/CSTest/<Name>.png (used by the UI tests). */
 	void TestScreenshot(const FString& Name);
@@ -255,6 +260,8 @@ protected:
 	int32 TestVictimItemsBefore = 0;
 	int32 TestVictimRespawnsAtDeath = 0;
 	int32 TestShotsFired = 0;
+	/** Times the kill test walked up again because a wall was in the way. */
+	int32 TestKillApproaches = 0;
 	int32 TestClaimAmmo = 0;
 
 	/** Contested-pickup self-test, enabled with -cstestcontest on two clients. */

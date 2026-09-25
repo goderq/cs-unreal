@@ -24,6 +24,8 @@
 #include "Core/CSRpcGuard.h"
 #include "EngineUtils.h"
 #include "Inventory/CSPlayerInventory.h"
+#include "NavigationPath.h"
+#include "NavigationSystem.h"
 #include "TimerManager.h"
 #include "Weapons/CSGrenade.h"
 
@@ -55,6 +57,74 @@ void ACSPlayerController::CSTestFreeze()
 		UE_LOG(LogCS, Log, TEXT("FREEZE TEST RESULT: after a 15 s freeze -> %s"),
 			bKept ? TEXT("KEPT OK (still in the match)") : TEXT("DROPPED BROKEN (removed from the match)"));
 	}, 22.f, false);
+#endif
+}
+
+// -cstestwallhop (B10): B steps once through a wall next to it - shorter
+// than a teleport, after standing still, so the average speed is legal.
+// The Master Client must see that no walkable way round was that short.
+void ACSPlayerController::CSTestWallHop()
+{
+	CS_SELF_TEST_ONLY();
+#if !UE_BUILD_SHIPPING
+	ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn());
+	if (!Mine || WallHops >= 1)
+	{
+		UE_LOG(LogCS, Log, TEXT("WALLHOP TEST: done (%d hop(s) through a wall)."), WallHops);
+		return;
+	}
+	const FVector Here = Mine->GetActorLocation();
+	const FVector HereFeet = Here - FVector(0.f, 0.f, 90.f);
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CSTestWallHop), false, Mine);
+	UNavigationSystemV1* Nav = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+	for (int32 i = 0; Nav && i < 150; ++i)
+	{
+		// A walkable point within 5.5 m (a hop, not a teleport) behind static
+		// geometry, that takes 12 m or more to walk to: the other side of a
+		// real wall. (Round a crate a short hop is indistinguishable from a
+		// short lag, docs/AUDIT.md B10.)
+		FNavLocation Point;
+		if (!Nav->GetRandomPointInNavigableRadius(HereFeet, 550.f, Point) || FVector::Dist2D(HereFeet, Point.Location) < 150.f)
+		{
+			continue;
+		}
+		const FVector Dest = Point.Location + FVector(0.f, 0.f, 95.f);
+		FHitResult Near;
+		if (!GetWorld()->LineTraceSingleByObjectType(Near, Here, Dest, FCollisionObjectQueryParams(ECC_WorldStatic), Params)
+			|| GetWorld()->OverlapAnyTestByChannel(Dest, FQuat::Identity, ECC_Pawn, FCollisionShape::MakeCapsule(34.f, 88.f), Params))
+		{
+			continue;
+		}
+		const UNavigationPath* Round = UNavigationSystemV1::FindPathToLocationSynchronously(GetWorld(), HereFeet, Point.Location);
+		if (Round && Round->IsValid() && !Round->IsPartial() && Round->GetPathLength() < 1200.f)
+		{
+			continue;
+		}
+		// Stand still first, so the hop reaches the Master Client as a step of
+		// its own - not merged with the walk here into one teleport-sized jump.
+		const FString WallName = GetNameSafe(Near.GetActor());
+		GetWorldTimerManager().SetTimer(TestSpoofTimer, [this, Here, Dest, WallName]()
+		{
+			ACSCharacter* Hopper = Cast<ACSCharacter>(GetPawn());
+			if (!Hopper || !Hopper->GetActorLocation().Equals(Here, 5.f))
+			{
+				CSTestWallHop();
+				return;
+			}
+			++WallHops;
+			UE_LOG(LogCS, Log, TEXT("WALLHOP TEST: hop %d through %s (%.0f cm)."), WallHops, *WallName, FVector::Dist2D(Here, Dest));
+			Hopper->SetActorLocation(Dest, false, nullptr, ETeleportType::TeleportPhysics);
+			GetWorldTimerManager().SetTimer(TestSpoofTimer, this, &ACSPlayerController::CSTestWallHop, 3.f, false);
+		}, 1.5f, false);
+		return;
+	}
+	// No such wall here: walk (along the navigation mesh) somewhere else and look again.
+	UE_LOG(LogCS, Log, TEXT("WALLHOP TEST: no wall with a long way round next to me, moving on."));
+	FNavLocation Elsewhere;
+	if (Nav && Nav->GetRandomReachablePointInRadius(HereFeet, 1500.f, Elsewhere))
+	{
+		TestMoveTo(Elsewhere.Location + FVector(0.f, 0.f, 95.f), [this]() { CSTestWallHop(); });
+	}
 #endif
 }
 

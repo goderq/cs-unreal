@@ -281,6 +281,26 @@ void ACSPlayerController::TestKillStep()
 
 	FVector Eye, Unused;
 	Self->GetAimRay(Eye, Unused);
+
+	// The victim may have moved after the walk started (a fresh spawn is
+	// placed by its own client a moment later): with a wall in between, walk
+	// up again instead of emptying the magazine into it.
+	FHitResult Block;
+	FCollisionQueryParams Sight(SCENE_QUERY_STAT(CSTestKillSight), false, Self);
+	Sight.AddIgnoredActor(TestVictim.Get());
+	if (TestKillApproaches < 3 && GetWorld()->LineTraceSingleByChannel(Block, Eye, TestVictim->GetActorLocation(), ECC_Visibility, Sight))
+	{
+		++TestKillApproaches;
+		GetWorldTimerManager().ClearTimer(TestKillTimer);
+		UE_LOG(LogCS, Log, TEXT("KILL TEST: no line of sight (blocked by %s), walking up again."), *GetNameSafe(Block.GetActor()));
+		const FVector To = TestVictim->GetActorLocation();
+		const FVector Back = (Self->GetActorLocation() - To).GetSafeNormal2D();
+		TestMoveTo(To + Back * 250.f, [this]()
+		{
+			GetWorldTimerManager().SetTimer(TestKillTimer, this, &ACSPlayerController::TestKillStep, 0.35f, true);
+		});
+		return;
+	}
 	SetControlRotation((TestVictim->GetActorLocation() - Eye).Rotation());
 	PressKey(EKeys::LeftMouseButton);
 }
@@ -350,11 +370,15 @@ void ACSPlayerController::TestKillVerifyLoot()
 		// bot the check is that it did respawn, with something in hand.
 		const bool bBot = CSBots::IsBotId(TestVictimId);
 		const ACSPlayerInventory* VictimLoadout = ACSPlayerInventory::Find(this, TestVictimId);
-		const bool bFresh = L.Slot == CSLoadout::Pistol && L.Weapon && L.RoundsInMag == L.Weapon->MagazineSize
-			&& VictimLoadout && VictimLoadout->HasItemInSlot(CSLoadout::Knife);
+		// The spawn loadout this authority hands out: pistol and knife, plus a
+		// primary in hand when it runs with -testprimary= (the grab scenarios).
+		FString TestPrimary;
+		const bool bTestPrimary = FParse::Value(FCommandLine::Get(), TEXT("testprimary="), TestPrimary);
+		const bool bFresh = L.Slot == (bTestPrimary ? CSLoadout::Primary : CSLoadout::Pistol) && L.Weapon
+			&& L.RoundsInMag == L.Weapon->MagazineSize && VictimLoadout && VictimLoadout->HasItemInSlot(CSLoadout::Knife);
 		const bool bOk = bBot
 			? (bHave && R.RespawnCounter > TestVictimRespawnsAtDeath && L.Weapon != nullptr)
-			: (bHave && R.bAlive && R.Health >= 100.f && bFresh && Items == 1);
+			: (bHave && R.bAlive && R.Health >= 100.f && bFresh && Items == (bTestPrimary ? 2 : 1));
 		UE_LOG(LogCS, Log, TEXT("RESPAWN RESULT: alive %s, hp %.0f, fresh pistol + knife %s (%d rds), guns %d -> %s"),
 			(bHave && R.bAlive) ? TEXT("yes") : TEXT("no"), R.Health, bFresh ? TEXT("yes") : TEXT("no"),
 			L.RoundsInMag, Items, bOk ? TEXT("RESPAWN OK") : TEXT("RESPAWN BROKEN"));
