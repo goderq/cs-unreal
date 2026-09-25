@@ -8,6 +8,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSRpcGuard.h"
+#include "Core/CSValidate.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "Core/CSModeSettings.h"
@@ -1602,7 +1603,8 @@ void ACSMatchDirector::FlushCombatEvents()
 
 void ACSMatchDirector::RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation)
 {
-	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcCombatEvent")))
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcCombatEvent"))
+		|| !CSValidate::IsSaneNumber(Damage, 10000.0) || !CSValidate::IsSaneLocation(FromLocation))
 	{
 		return;
 	}
@@ -1735,7 +1737,8 @@ bool ACSMatchDirector::TryThrowGrenade(int32 PlayerId, const FVector& Origin, co
 
 void ACSMatchDirector::RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, int32 Type, FVector Origin, FVector Velocity)
 {
-	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcGrenadeThrown")))
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcGrenadeThrown"))
+		|| !CSValidate::IsSaneLocation(Origin) || !CSValidate::IsSaneVelocity(Velocity, 10000.0))
 	{
 		return;
 	}
@@ -1916,7 +1919,7 @@ bool ACSMatchDirector::IsBlinded(int32 PlayerId) const
 
 void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, int32 Type, FVector Location)
 {
-	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcGrenadeExploded")))
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcGrenadeExploded")) || !CSValidate::IsSaneLocation(Location))
 	{
 		return;
 	}

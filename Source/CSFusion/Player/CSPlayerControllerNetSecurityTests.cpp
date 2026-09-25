@@ -27,6 +27,8 @@
 #include "TimerManager.h"
 #include "Weapons/CSGrenade.h"
 
+#include <limits>
+
 void ACSPlayerController::CSTestSpoof()
 {
 #if !UE_BUILD_SHIPPING
@@ -112,7 +114,21 @@ void ACSPlayerController::CSTestSpoof()
 				}
 				Director->RpcGrenadeExploded(424242, static_cast<int32>(ECSGrenadeType::Flash), Where);
 			}
-			UE_LOG(LogCS, Log, TEXT("SPOOF TEST: forged flashbang sent. SPOOF TEST: done"));
+
+			// 4. Numbers no real client sends (B9), on my own pawn: the authority
+			// must refuse them before any range check (checked in A's log).
+			if (ACSCharacter* Mine = Cast<ACSCharacter>(GetPawn()))
+			{
+				const double NaN = std::numeric_limits<double>::quiet_NaN();
+				const double Inf = std::numeric_limits<double>::infinity();
+				FVector Eye;
+				FVector Dir;
+				Mine->GetAimRay(Eye, Dir);
+				Mine->RpcRequestFire(FVector(NaN, Eye.Y, Eye.Z), Dir, false);
+				Mine->RpcRequestThrow(Eye, FVector(Inf, 0.0, 0.0));
+				Mine->RpcRequestMelee(FVector(1.0e9, 0.0, 0.0), Dir, false);
+			}
+			UE_LOG(LogCS, Log, TEXT("SPOOF TEST: forged flashbang and NaN requests sent. SPOOF TEST: done"));
 		}, 2.f, false);
 	}, 2.f, false);
 #endif

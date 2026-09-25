@@ -16,6 +16,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSRpcGuard.h"
+#include "Core/CSValidate.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "EnhancedInputComponent.h"
@@ -287,6 +288,23 @@ int32 ACSCharacter::GetOwningPlayerId() const
 	return IsBot() ? BotId : UCSAuthority::GetOwningPlayerId(this);
 }
 
+bool ACSCharacter::RefuseBadAim(const TCHAR* RpcName, const FVector& Origin, const FVector& Direction) const
+{
+	if (CSValidate::IsSaneLocation(Origin) && CSValidate::IsSaneDirection(Direction))
+	{
+		return false;
+	}
+	const int32 PlayerId = GetOwningPlayerId();
+	UE_LOG(LogCSSecurity, Warning, TEXT("%s from player %d refused: origin %s / direction %s are not usable numbers."),
+		RpcName, PlayerId, *Origin.ToString(), *Direction.ToString());
+	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+	{
+		Director->ReportViolation(PlayerId, ECSCheatReason::BadInput, /*Weight*/ 3.f,
+			FString::Printf(TEXT("%s with NaN or out-of-range numbers"), RpcName));
+	}
+	return true;
+}
+
 bool ACSCharacter::IsBot() const
 {
 	if (bIsBot && UCSAuthority::IsGameAuthority(this))
@@ -484,7 +502,7 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 	// comes from Fusion ownership, not the payload, and CSRpcGuard makes sure
 	// the RPC was sent by that owner (any peer can send an RPC to any object).
 	CS_AUTHORITY_ONLY(this);
-	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestFire")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestFire")) || RefuseBotRpc() || RefuseBadAim(TEXT("RpcRequestFire"), Origin, Direction) || !PassesCheatGuard(ECSRequestKind::Fire))
 	{
 		return;
 	}
@@ -571,7 +589,8 @@ void ACSCharacter::RpcConfirmShot_Receive(FVector Origin, FVector Impact, bool b
 	// Runs on every peer. The shooter already showed flash, sound and tracer
 	// when they clicked (PlayLocalFireEffects); everyone else shows them now.
 	// The impact is shown by all, at the point the authority decided.
-	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcConfirmShot")))
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcConfirmShot"))
+		|| !CSValidate::IsSaneLocation(Origin) || !CSValidate::IsSaneLocation(Impact))
 	{
 		return;
 	}
@@ -925,7 +944,7 @@ void ACSCharacter::RequestMelee(bool bHeavy)
 void ACSCharacter::RpcRequestMelee_Receive(FVector Origin, FVector Direction, bool bHeavy)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestMelee")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestMelee")) || RefuseBotRpc() || RefuseBadAim(TEXT("RpcRequestMelee"), Origin, Direction) || !PassesCheatGuard(ECSRequestKind::Fire))
 	{
 		return;
 	}
@@ -1006,7 +1025,7 @@ void ACSCharacter::ResolveMeleeOnAuthority(const FVector& Origin, const FVector&
 
 void ACSCharacter::RpcMeleeSwing_Receive(bool bHeavy, FVector Impact, int32 HitKind)
 {
-	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcMeleeSwing")))
+	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcMeleeSwing")) || !CSValidate::IsSaneLocation(Impact))
 	{
 		return;
 	}
@@ -1100,7 +1119,7 @@ void ACSCharacter::RequestThrowGrenade()
 void ACSCharacter::RpcRequestThrow_Receive(FVector Origin, FVector Direction)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestThrow")) || RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Throw))
+	if (!CSRpcGuard::FromOwner(this, TEXT("RpcRequestThrow")) || RefuseBotRpc() || RefuseBadAim(TEXT("RpcRequestThrow"), Origin, Direction) || !PassesCheatGuard(ECSRequestKind::Throw))
 	{
 		return;
 	}

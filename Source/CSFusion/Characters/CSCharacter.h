@@ -450,6 +450,9 @@ protected:
 	/** Handlers refuse bots unless the call came through a Bot* function. */
 	bool RefuseBotRpc() const { return IsBot() && !bBotAuthorityCall; }
 
+	/** Authority (B9): true = the request's origin or direction is NaN, infinite or absurd; a strike. */
+	bool RefuseBadAim(const TCHAR* RpcName, const FVector& Origin, const FVector& Direction) const;
+
 	/** Authority: rate limit and suspension check for a player's request (Stage 8). */
 	bool PassesCheatGuard(ECSRequestKind Kind) const;
 

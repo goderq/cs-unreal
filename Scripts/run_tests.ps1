@@ -187,7 +187,10 @@ $NetScenarios = @(
        DelayB = 3; Done = "B:SPOOF TEST: done|SPOOF TEST RESULT: .*MISSING"; Timeout = 120;
        Expect = @("A:RPC RpcRequestSlot on .* refused: sent by player|master refused the slot request on its pawn",
                   "A:RPC RpcGrenadeExploded on .* refused: sent by player|master refused the forged flashbang",
-                  "B:RPC RpcGrenadeExploded on .* refused|B refused its own forged flashbang") },
+                  "B:RPC RpcGrenadeExploded on .* refused|B refused its own forged flashbang",
+                  "A:RpcRequestFire from player \d+ refused: origin|master refused a shot from NaN (B9)",
+                  "A:RpcRequestThrow from player \d+ refused: origin|master refused an infinite throw (B9)",
+                  "A:RpcRequestMelee from player \d+ refused: origin|master refused a knife from 10 000 km (B9)") },
     # Phase 2 (A2): B flags its own pawn as a bot; A shoots it - the damage must still reach player B.
     @{ Name = "netbotflag"; A = "-room={ROOM} -cstestinput -cstestshoot -cstestexpectbotflag"; B = "-room={ROOM} -cstestbotflag";
        DelayB = 3; Done = "A:SHOOT TEST RESULT"; Timeout = 120;
