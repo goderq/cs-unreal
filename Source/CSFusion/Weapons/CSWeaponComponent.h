@@ -75,8 +75,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "CS|Weapon")
 	const UCSWeaponDefinition* GetActiveWeapon() const;
 
-	UFUNCTION(BlueprintPure, Category = "CS|Weapon")
-	const UCSWeaponDefinition* GetStarterWeapon() const;
+	/** The knife everybody carries (hands fallback while the loadout replicates). */
+	const UCSWeaponDefinition* GetKnifeWeapon() const;
 
 	// --- Local input (owning client) ---------------------------------------
 
@@ -97,7 +97,8 @@ public:
 	/** False while a grenade is in hand (nothing to aim down). */
 	bool IsAiming() const;
 
-	void SetAiming(bool bNewAiming) { bAiming = bNewAiming; }
+	/** With the knife in hand this is the heavy stab instead. */
+	void SetAiming(bool bNewAiming);
 
 	// --- Authority-side resolution -----------------------------------------
 
@@ -129,6 +130,10 @@ protected:
 
 	bool bTriggerHeld = false;
 	bool bAiming = false;
+
+	/** v2.0 knife: local swing gate and the request. */
+	void TrySwing(bool bHeavy);
+	double LocalNextSwingTime = 0.0;
 
 	/** Attempts one shot: local gate, local effects, then the server request. */
 	void TryFireOnce();

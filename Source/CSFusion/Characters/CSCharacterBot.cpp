@@ -9,6 +9,7 @@
 #include "Combat/CSMatchDirector.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
+#include "Pickups/CSAmmoMachine.h"
 #include "Pickups/CSWorldPickup.h"
 
 void ACSCharacter::InitAsBot(int32 InBotId)
@@ -75,4 +76,24 @@ bool ACSCharacter::PassesCheatGuard(ECSRequestKind Kind) const
 	}
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	return !Director || Director->GuardRequest(GetOwningPlayerId(), Kind);
+}
+
+void ACSCharacter::BotMelee(const FVector& Origin, const FVector& Direction, bool bHeavy)
+{
+	if (!bIsBot || !UCSAuthority::IsGameAuthority(this))
+	{
+		return;
+	}
+	TGuardValue<bool> Scope(bBotAuthorityCall, true);
+	ResolveMeleeOnAuthority(Origin, Direction, bHeavy);
+}
+
+void ACSCharacter::BotBuyAmmo(ACSAmmoMachine* Machine)
+{
+	if (!bIsBot || !Machine || !UCSAuthority::IsGameAuthority(this))
+	{
+		return;
+	}
+	TGuardValue<bool> Scope(bBotAuthorityCall, true);
+	RpcRequestAmmo_Receive(Machine->GetSortedIndex());
 }

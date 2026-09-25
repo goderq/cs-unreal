@@ -27,7 +27,10 @@
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
+#include "Pickups/CSAmmoMachine.h"
 #include "Pickups/CSWorldPickup.h"
+#include "Items/CSShopSettings.h"
+#include "Components/AudioComponent.h"
 #include "EngineUtils.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
@@ -601,6 +604,7 @@ void ACSCharacter::RpcRequestReload_Receive()
 void ACSCharacter::UpdateFocusedPickup()
 {
 	FocusedPickup = nullptr;
+	FocusedMachine = nullptr;
 
 	if (!IsAliveAuthoritative())
 	{
@@ -610,6 +614,21 @@ void ACSCharacter::UpdateFocusedPickup()
 	FVector Eye;
 	FVector Forward;
 	GetAimRay(Eye, Forward);
+
+	// An ammo machine in front of the player wins over a gun on the floor.
+	{
+		const float MachineReach = UCSShopSettings::Get()->AmmoMachineReach * 0.9f;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(CSMachineSight), false, this);
+		FHitResult Hit;
+		if (GetWorld()->LineTraceSingleByChannel(Hit, Eye, Eye + Forward * MachineReach, ECC_Visibility, Params))
+		{
+			if (ACSAmmoMachine* Machine = Cast<ACSAmmoMachine>(Hit.GetActor()))
+			{
+				FocusedMachine = Machine;
+				return;
+			}
+		}
+	}
 
 	const float Reach = UCSItemSettings::Get()->InteractReach;
 	const float ReachSq = FMath::Square(Reach);
@@ -661,6 +680,21 @@ void ACSCharacter::UpdateFocusedPickup()
 
 void ACSCharacter::RequestPickupFocused()
 {
+	// E at an ammo machine buys ammo; otherwise it picks up the gun in view.
+	if (const ACSAmmoMachine* Machine = FocusedMachine.Get())
+	{
+		const int32 MachineIndex = Machine->GetSortedIndex();
+		if (UCSAuthority::IsSessionActive(this))
+		{
+			RpcRequestAmmo(MachineIndex);
+		}
+		else
+		{
+			RpcRequestAmmo_Receive(MachineIndex);
+		}
+		return;
+	}
+
 	ACSWorldPickup* Pickup = FocusedPickup.Get();
 	if (!Pickup)
 	{
@@ -686,7 +720,7 @@ void ACSCharacter::RpcRequestPickup_Receive(AActor* PickupActor)
 	const int32 PlayerId = GetOwningPlayerId();
 	ACSWorldPickup* Pickup = Cast<ACSWorldPickup>(PickupActor);
 	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
-	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 
 	auto Reject = [PlayerId](const TCHAR* Reason)
 	{
@@ -715,25 +749,20 @@ void ACSCharacter::RpcRequestPickup_Receive(AActor* PickupActor)
 		return Reject(TEXT("too far"));
 	}
 
+	// Claim first, so the gun cannot be taken twice; a gun already in that slot
+	// is dropped in its place (a swap), and the new one comes up in the hands.
 	const int32 ItemIndex = Pickup->GetItemIndex();
-	const int32 Offered = Pickup->GetCount();
-	if (!Inventory->CanAccept(ItemIndex, Offered))
+	const int32 Mag = Pickup->GetAmmoInMag();
+	const int32 Spare = Pickup->GetReserve();
+	if (ACSPlayerInventory::SlotForItem(UCSItemSettings::Get()->GetItem(ItemIndex)) == INDEX_NONE || !Pickup->Claim())
 	{
-		return Reject(TEXT("inventory full"));
+		return Reject(TEXT("not a carried item"));
 	}
-
-	const int32 Leftover = Inventory->AddItem(ItemIndex, Offered, Pickup->GetAmmoInMag());
-	if (Leftover > 0)
+	if (!Director->GiveItem(PlayerId, ItemIndex, /*bEquip*/ true, Mag, Spare))
 	{
-		// Partial stack: the rest stays on the ground.
-		Pickup->SetRemainingCount(Leftover);
+		return Reject(TEXT("slot refused"));
 	}
-	else
-	{
-		Pickup->Claim();
-	}
-
-	UE_LOG(LogCSInventory, Log, TEXT("Player %d picked up item %d x%d"), PlayerId, ItemIndex, Offered - Leftover);
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d picked up item %d (%d / %d)"), PlayerId, ItemIndex, Mag, Spare);
 }
 
 void ACSCharacter::RequestSlot(int32 Slot)
@@ -762,52 +791,11 @@ void ACSCharacter::RpcRequestSlot_Receive(int32 Slot)
 		return;
 	}
 
-	// Starter pistol: always selectable, never in the inventory.
-	if (Slot == INDEX_NONE)
+	// An empty slot key does nothing; the same slot again does nothing.
+	if (Inventory->HasItemInSlot(Slot) && Inventory->GetEquippedSlot() != Slot)
 	{
-		if (Inventory->GetEquippedSlot() != INDEX_NONE)
-		{
-			Director->CancelReload(PlayerId);
-			Inventory->SetEquippedSlot(INDEX_NONE);
-		}
-		return;
-	}
-
-	const UCSItemDefinition* Item = Inventory->GetItemInSlot(Slot);
-	if (!Item)
-	{
-		return;
-	}
-
-	switch (Item->ItemType)
-	{
-	case ECSItemType::Grenade:
-	case ECSItemType::Weapon:
-		if (Inventory->GetEquippedSlot() != Slot)
-		{
-			Director->CancelReload(PlayerId);
-			Inventory->SetEquippedSlot(Slot);
-		}
-		break;
-
-	case ECSItemType::Medkit:
-		// Only consumed if it actually does something.
-		if (Director->Heal(PlayerId, Item->HealAmount) > 0.f)
-		{
-			Inventory->RemoveFromSlot(Slot, 1);
-		}
-		break;
-
-	case ECSItemType::Armor:
-		if (Director->AddArmor(PlayerId, Item->ArmorAmount) > 0.f)
-		{
-			Inventory->RemoveFromSlot(Slot, 1);
-		}
-		break;
-
-	default:
-		// Ammo is used by reloading.
-		break;
+		Director->CancelReload(PlayerId);
+		Inventory->SetEquippedSlot(Slot);
 	}
 }
 
@@ -815,25 +803,9 @@ void ACSCharacter::RequestDropEquipped()
 {
 	const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, GetOwningPlayerId());
 	const int32 Slot = Inventory ? Inventory->GetEquippedSlot() : INDEX_NONE;
-	if (Slot == INDEX_NONE)
+	if (!CSLoadout::IsDroppable(Slot))
 	{
-		// The starter pistol can never be dropped.
-		return;
-	}
-
-	if (UCSAuthority::IsSessionActive(this))
-	{
-		RpcRequestDrop(Slot);
-		return;
-	}
-	RpcRequestDrop_Receive(Slot);
-}
-
-void ACSCharacter::RequestDropSlot(int32 Slot)
-{
-	if (Slot == INDEX_NONE)
-	{
-		// The starter pistol can never be dropped.
+		// The knife and grenades never leave the hands this way.
 		return;
 	}
 
@@ -855,15 +827,9 @@ void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 
 	const int32 PlayerId = GetOwningPlayerId();
 	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
-	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
-	if (!Inventory || !Director || !Director->IsPlayerAlive(PlayerId))
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!Inventory || !Director || !Director->IsPlayerAlive(PlayerId) || !CSLoadout::IsDroppable(Slot))
 	{
-		return;
-	}
-
-	if (ACSWorldPickup::CountAlive(this) >= UCSItemSettings::Get()->MaxWorldPickups)
-	{
-		UE_LOG(LogCSInventory, Warning, TEXT("Drop refused: world pickup cap reached."));
 		return;
 	}
 
@@ -873,24 +839,216 @@ void ACSCharacter::RpcRequestDrop_Receive(int32 Slot)
 		return;
 	}
 
-	// Whole stack goes; a weapon keeps the rounds it was dropped with.
-	const FCSInventorySlot Removed = Inventory->RemoveFromSlot(Slot, SlotData.Count);
+	// The gun keeps the rounds it was dropped with, loaded and spare.
+	Director->CancelReload(PlayerId);
+	const FCSInventorySlot Removed = Inventory->RemoveFromSlot(Slot, 1);
 	if (Removed.IsEmpty())
 	{
 		return;
 	}
+	ACSWorldPickup::MakeRoomForDrops(this, 1);
+	Director->SpawnDroppedItem(Removed,
+		GetActorLocation() + GetActorForwardVector() * 110.f - FVector(0.f, 0.f, 60.f),
+		GetActorLocation() + FVector(0.f, 0.f, 30.f));
 
-	const FVector Where = GetActorLocation() + GetActorForwardVector() * 90.f - FVector(0.f, 0.f, 60.f);
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d dropped item %d (%d / %d)"), PlayerId, Removed.ItemIndex, Removed.AmmoInMag, Removed.Reserve);
+}
 
-	FActorSpawnParameters Params;
-	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	if (ACSWorldPickup* Pickup = GetWorld()->SpawnActor<ACSWorldPickup>(
-			ACSWorldPickup::StaticClass(), Where, FRotator::ZeroRotator, Params))
+void ACSCharacter::RpcRequestAmmo_Receive(int32 MachineIndex)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Buy))
 	{
-		Pickup->InitializeItem(Removed.ItemIndex, Removed.Count, Removed.AmmoInMag, /*bDropped*/ true);
+		return;
+	}
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const ACSAmmoMachine* Machine = ACSAmmoMachine::FindByIndex(this, MachineIndex);
+	if (!Director || !Machine)
+	{
+		return;
+	}
+	const ECSBuyResult Result = Director->TryBuyAmmo(GetOwningPlayerId(), Machine, GetActorLocation());
+	UE_LOG(LogCSInventory, Log, TEXT("Ammo machine %d for player %d: %s"), MachineIndex, GetOwningPlayerId(), *UEnum::GetValueAsString(Result));
+}
+
+// ---------------------------------------------------------------------------
+// v2.0 knife
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::RequestMelee(bool bHeavy)
+{
+	FVector Origin;
+	FVector Direction;
+	GetAimRay(Origin, Direction);
+
+	// Local swing right away (arms, whoosh); the authority decides the hit.
+	for (UCSAnimInstance* Anim : { GetBodyAnim(), GetArmsAnim() })
+	{
+		if (Anim)
+		{
+			Anim->PlayMelee(bHeavy);
+		}
+	}
+	if (IsLocalPlayerView())
+	{
+		ViewMeleeTime = 0.f;
+		bViewMeleeHeavy = bHeavy;
+	}
+	CSAudio::Play2D(this, UCSAudioSettings::Get()->KnifeSwing, bHeavy ? 0.9f : 0.75f, bHeavy ? 0.85f : FMath::FRandRange(1.f, 1.12f));
+
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcRequestMelee(Origin, Direction, bHeavy);
+		return;
+	}
+	RpcRequestMelee_Receive(Origin, Direction, bHeavy);
+}
+
+void ACSCharacter::RpcRequestMelee_Receive(FVector Origin, FVector Direction, bool bHeavy)
+{
+	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc() || !PassesCheatGuard(ECSRequestKind::Fire))
+	{
+		return;
+	}
+	ResolveMeleeOnAuthority(Origin, Direction, bHeavy);
+}
+
+void ACSCharacter::ResolveMeleeOnAuthority(const FVector& Origin, const FVector& Direction, bool bHeavy)
+{
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!Director || !WeaponComponent)
+	{
+		return;
+	}
+	const int32 AttackerId = GetOwningPlayerId();
+	FVector AuthoritativeOrigin;
+	FVector IgnoredDirection;
+	GetAimRay(AuthoritativeOrigin, IgnoredDirection);
+	if (!Director->AcceptMelee(AttackerId, bHeavy, Origin, AuthoritativeOrigin))
+	{
+		return;
+	}
+	const UCSWeaponDefinition* Knife = Director->GetLoadout(AttackerId).Weapon;
+	if (!Knife)
+	{
+		return;
 	}
 
-	UE_LOG(LogCSInventory, Log, TEXT("Player %d dropped item %d x%d"), PlayerId, Removed.ItemIndex, Removed.Count);
+	// A small fan of rays: a blade sweeps, it does not need pixel precision.
+	const FVector Aim = Direction.GetSafeNormal();
+	const FRotator AimRot = Aim.Rotation();
+	FCSShotResolution Best;
+	for (const FVector2D& Offset : { FVector2D(0.f, 0.f), FVector2D(-9.f, 0.f), FVector2D(9.f, 0.f), FVector2D(0.f, -5.f), FVector2D(0.f, 5.f) })
+	{
+		const FVector Ray = (AimRot + FRotator(Offset.Y, Offset.X, 0.f)).Vector();
+		const FCSShotResolution Shot = WeaponComponent->ResolveShotOnAuthority(AuthoritativeOrigin, Ray, Knife);
+		if (Shot.VictimPlayerId != 0 && Shot.VictimPlayerId != AttackerId)
+		{
+			Best = Shot;
+			break;
+		}
+		if (!Best.bHit && Shot.bHit)
+		{
+			Best = Shot;
+		}
+	}
+
+	int32 HitKind = 0; // 0 air, 1 wall, 2 body
+	if (Best.VictimPlayerId != 0 && Best.VictimPlayerId != AttackerId)
+	{
+		float Damage = bHeavy ? Knife->MeleeHeavyDamage : Knife->MeleeDamage;
+		// From behind: the victim faces away from the attacker.
+		if (const ACSCharacter* Victim = ACSMatchDirector::FindPawnForPlayer(this, Best.VictimPlayerId))
+		{
+			const FVector ToVictim = (Victim->GetActorLocation() - GetActorLocation()).GetSafeNormal2D();
+			if (FVector::DotProduct(Victim->GetActorForwardVector().GetSafeNormal2D(), ToVictim) > 0.5f)
+			{
+				Damage *= Knife->BackstabMultiplier;
+			}
+		}
+		Director->ApplyDamage(Best.VictimPlayerId, AttackerId, Damage, Best.Zone == ECSHitZone::Head ? ECSHitZone::Head : ECSHitZone::Torso);
+		HitKind = 2;
+	}
+	else if (Best.bHit)
+	{
+		HitKind = 1;
+	}
+
+	const FVector Impact = Best.bHit ? Best.ImpactPoint : AuthoritativeOrigin + Aim * Knife->MeleeRange;
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcMeleeSwing(bHeavy, Impact, HitKind);
+	}
+	else
+	{
+		RpcMeleeSwing_Receive(bHeavy, Impact, HitKind);
+	}
+}
+
+void ACSCharacter::RpcMeleeSwing_Receive(bool bHeavy, FVector Impact, int32 HitKind)
+{
+	// The attacker already played the swing locally.
+	if (!IsLocalPlayerView())
+	{
+		for (UCSAnimInstance* Anim : { GetBodyAnim(), GetArmsAnim() })
+		{
+			if (Anim)
+			{
+				Anim->PlayMelee(bHeavy);
+			}
+		}
+		CSAudio::PlayAt(this, UCSAudioSettings::Get()->KnifeSwing, GetActorLocation(), 0.7f);
+	}
+	if (HitKind == 2)
+	{
+		CSAudio::PlayAt(this, UCSAudioSettings::Get()->KnifeHitBody, Impact, 1.f, FMath::FRandRange(0.95f, 1.05f));
+		CSEffects::Impact(GetWorld(), Impact, (GetActorLocation() - Impact).GetSafeNormal(), /*bHitPlayer*/ true);
+	}
+	else if (HitKind == 1)
+	{
+		CSAudio::PlayAt(this, UCSAudioSettings::Get()->KnifeHitWall, Impact, 0.9f, FMath::FRandRange(0.95f, 1.08f));
+		CSEffects::Impact(GetWorld(), Impact, (GetActorLocation() - Impact).GetSafeNormal(), /*bHitPlayer*/ false);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v2.0 flashbang (local view)
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::ApplyFlash(float Strength, float Seconds)
+{
+	// A second flash only makes things worse, never better.
+	if (Strength < GetFlashAmount())
+	{
+		return;
+	}
+	FlashStrength = FMath::Clamp(Strength, 0.f, 1.f);
+	FlashSeconds = FMath::Max(0.3f, Seconds);
+	FlashStart = GetWorld()->GetTimeSeconds();
+
+	if (UAudioComponent* Old = FlashRing.Get())
+	{
+		Old->Stop();
+	}
+	FlashRing = CSAudio::Spawn2D(this, UCSAudioSettings::Get()->FlashbangRing, 0.2f + 0.6f * FlashStrength);
+}
+
+float ACSCharacter::GetFlashAmount() const
+{
+	if (FlashSeconds <= 0.f || !GetWorld())
+	{
+		return 0.f;
+	}
+	const float Elapsed = GetWorld()->GetTimeSeconds() - FlashStart;
+	if (Elapsed >= FlashSeconds)
+	{
+		return 0.f;
+	}
+	// Full white for the first 40 %, then a slow fade - like the real thing.
+	const float Hold = FlashSeconds * 0.4f;
+	const float Fade = Elapsed <= Hold ? 1.f : 1.f - (Elapsed - Hold) / (FlashSeconds - Hold);
+	return FlashStrength * FMath::Clamp(Fade, 0.f, 1.f);
 }
 
 void ACSCharacter::RequestThrowGrenade()
@@ -1291,11 +1449,6 @@ void ACSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(InputConfig->IA_Drop, ETriggerEvent::Started, this, &ACSCharacter::Input_Drop);
 		++Bound;
 	}
-	if (InputConfig->IA_ToggleInventory)
-	{
-		Input->BindAction(InputConfig->IA_ToggleInventory, ETriggerEvent::Started, this, &ACSCharacter::Input_ToggleInventory);
-		++Bound;
-	}
 	if (InputConfig->IA_PauseMenu)
 	{
 		Input->BindAction(InputConfig->IA_PauseMenu, ETriggerEvent::Started, this, &ACSCharacter::Input_PauseMenu);
@@ -1455,26 +1608,18 @@ void ACSCharacter::Input_EquipSlot(const FInputActionValue& Value)
 {
 	// One action for all slot keys: each key carries a Scalar modifier equal
 	// to its number (see UCSInputConfig::BuildRuntimeMappingContext).
-	// Key 1 is the starter pistol, keys 2..N are inventory slots 0..N-2.
+	// v2.0: keys 1..5 are loadout slots 0..4 (primary, pistol, knife, frag, flash).
 	const int32 KeyNumber = FMath::RoundToInt(Value.Get<float>());
-	if (KeyNumber <= 0)
+	if (KeyNumber < 1 || KeyNumber > CSLoadout::NumSlots)
 	{
 		return;
 	}
-	RequestSlot(KeyNumber == 1 ? INDEX_NONE : KeyNumber - 2);
+	RequestSlot(KeyNumber - 1);
 }
 
 void ACSCharacter::Input_Drop(const FInputActionValue& /*Value*/)
 {
 	RequestDropEquipped();
-}
-
-void ACSCharacter::Input_ToggleInventory(const FInputActionValue& /*Value*/)
-{
-	if (ACSPlayerController* PC = Cast<ACSPlayerController>(GetController()))
-	{
-		PC->ToggleInventoryScreen();
-	}
 }
 
 void ACSCharacter::Input_BuyMenu(const FInputActionValue& /*Value*/)

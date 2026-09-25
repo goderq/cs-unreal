@@ -6,7 +6,6 @@
 #include "Dom/JsonObject.h"
 #include "UI/CSUIStyle.h"
 #include "Widgets/Images/SImage.h"
-#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -60,8 +59,6 @@ void SCSProfilePanel::Construct(const FArguments& InArgs)
 				LOCTEXT("Sub", "Your account, your lifetime numbers and the best players. Stats are counted when a match ends; bots and players without an account are left out."))
 		]
 		+ SVerticalBox::Slot().AutoHeight()[ MakeIdentityCard() ]
-		+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("NameLabel", "NAME")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ MakeRenameRow() ]
 
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 16.f, 0.f, 0.f)
 		[
@@ -182,71 +179,6 @@ TSharedRef<SWidget> SCSProfilePanel::MakeIdentityCard()
 					}), CSUI::Text)
 				]
 			]
-		];
-}
-
-TSharedRef<SWidget> SCSProfilePanel::MakeRenameRow()
-{
-	return SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
-			[
-				CSUI::MakeRow(LOCTEXT("NameRow", "Display name"),
-					SAssignNew(NameBox, SEditableTextBox)
-					.Font(CSUI::Font(16))
-					.HintText(LOCTEXT("NameHint", "3 to 20 characters"))
-					.IsEnabled_Lambda([this]()
-					{
-						const UCSAccountSubsystem* Account = GetAccount();
-						return Account && Account->IsReady() && !bRenaming;
-					})
-					.OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type Commit)
-					{
-						if (Commit == ETextCommit::OnEnter)
-						{
-							CommitNickname();
-						}
-					}))
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(12.f, 0.f, 0.f, 0.f)
-			[
-				SNew(SBox).WidthOverride(150.f)
-				[
-					CSUI::MakeButton(TAttribute<FText>::CreateLambda([this]()
-						{
-							return bRenaming ? LOCTEXT("Saving", "SAVING...") : LOCTEXT("Save", "SAVE");
-						}),
-						FOnClicked::CreateLambda([this]() { CommitNickname(); return FReply::Handled(); }),
-						CSUI::EButtonKind::Primary,
-						TAttribute<bool>::CreateLambda([this]()
-						{
-							const UCSAccountSubsystem* Account = GetAccount();
-							return Account && Account->IsReady() && !bRenaming;
-						}), 16)
-				]
-			]
-		]
-		+ SVerticalBox::Slot().AutoHeight().Padding(16.f, 4.f, 0.f, 0.f)
-		[
-			SNew(STextBlock).Font(CSUI::Font(13)).AutoWrapText(true)
-			.Text_Lambda([this]()
-			{
-				if (!RenameStatus.IsEmpty())
-				{
-					return RenameStatus;
-				}
-				return LOCTEXT("NameNote", "The name is unique across every player and is what others see in the killfeed and the scoreboard.");
-			})
-			.ColorAndOpacity_Lambda([this]()
-			{
-				if (RenameStatus.IsEmpty())
-				{
-					return FSlateColor(CSUI::TextDim);
-				}
-				return FSlateColor(bRenameOk ? CSUI::Money : CSUI::Danger);
-			})
 		];
 }
 
@@ -377,65 +309,8 @@ void SCSProfilePanel::FetchBoard()
 	});
 }
 
-void SCSProfilePanel::CommitNickname()
-{
-	UCSAccountSubsystem* Account = GetAccount();
-	if (!Account || !NameBox.IsValid() || bRenaming)
-	{
-		return;
-	}
-
-	const FString Wanted = NameBox->GetText().ToString().TrimStartAndEnd();
-	if (Wanted == Account->GetNickname())
-	{
-		RenameStatus = LOCTEXT("SameName", "That is already your name.");
-		bRenameOk = false;
-		return;
-	}
-
-	bRenaming = true;
-	RenameStatus = FText::GetEmpty();
-
-	TWeakPtr<SCSProfilePanel> WeakSelf = SharedThis(this);
-	Account->SetNickname(Wanted, [WeakSelf](bool bOk, const FString& Error)
-	{
-		const TSharedPtr<SCSProfilePanel> Self = WeakSelf.Pin();
-		if (!Self.IsValid())
-		{
-			return;
-		}
-		Self->bRenaming = false;
-		Self->bRenameOk = bOk;
-		Self->RenameStatus = bOk
-			? LOCTEXT("Renamed", "Saved.")
-			: FText::Format(LOCTEXT("RenameFailed", "Not saved: {0}"), FText::FromString(Error));
-		if (bOk)
-		{
-			// The board shows the old name until it is read again.
-			Self->FetchBoard();
-		}
-	});
-}
-
-void SCSProfilePanel::RequestRename(const FString& NewName)
-{
-	if (NameBox.IsValid())
-	{
-		NameBox->SetText(FText::FromString(NewName));
-	}
-	CommitNickname();
-}
-
 void SCSProfilePanel::Refresh()
 {
-	RenameStatus = FText::GetEmpty();
-	if (const UCSAccountSubsystem* Account = GetAccount())
-	{
-		if (NameBox.IsValid())
-		{
-			NameBox->SetText(FText::FromString(Account->GetNickname()));
-		}
-	}
 	FetchBoard();
 }
 

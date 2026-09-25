@@ -21,6 +21,9 @@ namespace CSAudio
 	/** 2D sound for the local player (UI, hit markers). Null-safe. */
 	void Play2D(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound, float Volume = 1.f, float Pitch = 1.f);
 
+	/** 2D sound that the caller can stop early (the flashbang ring). Null-safe. */
+	UAudioComponent* Spawn2D(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound, float Volume = 1.f, float Pitch = 1.f);
+
 	/** Looping 2D music; returns the component so the caller can stop it. */
 	UAudioComponent* PlayMusic(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound);
 

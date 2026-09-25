@@ -22,11 +22,14 @@
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
+#include "Items/CSShopSettings.h"
+#include "Pickups/CSAmmoMachine.h"
 #include "Pickups/CSWorldPickup.h"
 #include "Player/CSPlayerController.h"
 #include "Rendering/SlateRenderer.h"
 #include "Settings/CSSettingsSubsystem.h"
 #include "Styling/CoreStyle.h"
+#include "UI/CSMinimap.h"
 #include "UI/CSUIStyle.h"
 #include "Weapons/CSWeaponComponent.h"
 #include "Weapons/CSWeaponDefinition.h"
@@ -301,6 +304,17 @@ void ACSHUD::DrawHUD()
 		DrawShopStatus(Record);
 	}
 
+	// v2.0 minimap, top left under the mode tag.
+	if (Record.bAlive)
+	{
+		if (!Minimap)
+		{
+			Minimap = NewObject<UCSMinimap>(this);
+			Minimap->Initialize(GetWorld());
+		}
+		Minimap->Draw(Canvas, 24.f * S, 46.f * S, 230.f * S, S, Pawn, Director);
+	}
+
 	DrawDamageIndicators();
 	DrawMoney(Record);
 	DrawVitals(Record);
@@ -308,6 +322,16 @@ void ACSHUD::DrawHUD()
 	DrawQuickSlots();
 	DrawNotice();
 	DrawRoundOverlays();
+
+	// v2.0 flashbang: the screen goes white and fades back.
+	if (const ACSCharacter* Viewer = Cast<ACSCharacter>(GetOwningPawn()))
+	{
+		const float Flash = Viewer->GetFlashAmount();
+		if (Flash > 0.f)
+		{
+			DrawRect(FLinearColor(1.f, 1.f, 1.f, FMath::Clamp(Flash * 1.05f, 0.f, 1.f)), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +366,7 @@ bool ACSHUD::ShouldShowScoreboard() const
 	const ACSGameState* GS = GetCSGameState();
 	const ACSPlayerController* PC = Cast<ACSPlayerController>(GetOwningPlayerController());
 	const bool bPostMatch = GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch;
-	const bool bMenuOpen = PC && (PC->IsPauseMenuOpen() || PC->IsInventoryOpen() || PC->IsShopOpen());
+	const bool bMenuOpen = PC && (PC->IsPauseMenuOpen() || PC->IsShopOpen());
 	return !bMenuOpen && (bPostMatch || (PC && PC->IsScoreboardHeld()));
 }
 
@@ -994,8 +1018,7 @@ void ACSHUD::DrawAmmo()
 		return;
 	}
 
-	// From the authoritative loadout: the equipped inventory weapon or the
-	// starter pistol (unlimited reserve by design).
+	// From the authoritative loadout: whatever is in the equipped slot.
 	const FCSLoadoutView Loadout = Director->GetLoadout(Pawn->GetOwningPlayerId());
 	const UCSWeaponDefinition* Weapon = Loadout.Weapon;
 
@@ -1019,6 +1042,11 @@ void ACSHUD::DrawAmmo()
 		DrawLabel(TEXT("CLICK TO THROW"), X + 18.f, Y + 64.f, CSUI::Accent, 13.f, true);
 		return;
 	}
+	if (Loadout.bKnife)
+	{
+		DrawLabel(TEXT("LMB SLASH  -  RMB STAB"), X + 18.f, Y + 64.f, CSUI::Accent, 13.f, true);
+		return;
+	}
 
 	if (Loadout.bReloading)
 	{
@@ -1030,7 +1058,7 @@ void ACSHUD::DrawAmmo()
 		return;
 	}
 
-	const FString Reserve = Loadout.Reserve < 0 ? TEXT("INF") : FString::FromInt(Loadout.Reserve);
+	const FString Reserve = FString::FromInt(Loadout.Reserve);
 	const FLinearColor MagColor = Loadout.RoundsInMag == 0 ? CSUI::Danger
 		: (Loadout.RoundsInMag <= FMath::Max(1, Weapon->MagazineSize / 4) ? CSUI::Warning : CSUI::Text);
 
@@ -1114,7 +1142,8 @@ void ACSHUD::DrawInteractionPrompt()
 {
 	const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn());
 	const ACSWorldPickup* Pickup = Pawn ? Pawn->GetFocusedPickup() : nullptr;
-	if (!Pickup)
+	const ACSAmmoMachine* Machine = Pawn ? Pawn->GetFocusedMachine() : nullptr;
+	if (!Pickup && !Machine)
 	{
 		return;
 	}
@@ -1129,7 +1158,9 @@ void ACSHUD::DrawInteractionPrompt()
 	const float W = Canvas->ClipX / S;
 	const float H = Canvas->ClipY / S;
 	const FString KeyText = Key.GetDisplayName().ToString().ToUpper();
-	const FString Action = FString::Printf(TEXT("Pick up  %s"), *Pickup->GetPromptName().ToString());
+	const FString Action = Machine
+		? FString::Printf(TEXT("Buy ammo  $%d"), UCSShopSettings::Get()->AmmoMachinePrice)
+		: FString::Printf(TEXT("Pick up  %s"), *Pickup->GetPromptName().ToString());
 
 	const float WK = FMath::Max(28.f, TextWidth(KeyText, 16.f, true) + 14.f);
 	const float WA = TextWidth(Action, 18.f, false);
@@ -1221,14 +1252,14 @@ void ACSHUD::DrawQuickSlots()
 
 	const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Pawn->GetOwningPlayerId());
 	const int32 Equipped = Inventory ? Inventory->GetEquippedSlot() : INDEX_NONE;
-	const int32 NumSlots = Inventory ? Inventory->GetSlots().Num() : 0;
+	const int32 NumSlots = CSLoadout::NumSlots;
 
 	const float W = Canvas->ClipX / S;
 	const float H = Canvas->ClipY / S;
 	constexpr float BoxW = 104.f;
 	constexpr float BoxH = 50.f;
 	constexpr float Gap = 5.f;
-	const int32 Total = NumSlots + 1; // +1 for the starter pistol
+	const int32 Total = NumSlots;
 	const float StartX = W * 0.5f - (Total * (BoxW + Gap) - Gap) * 0.5f;
 	const float Y = H - BoxH - 26.f;
 
@@ -1245,13 +1276,14 @@ void ACSHUD::DrawQuickSlots()
 		}
 	};
 
-	// Slot 1 is always the starter pistol - it lives outside the inventory.
-	Slot(0, 1, TEXT("Pistol"), TEXT("starter"), Equipped == INDEX_NONE, false, FLinearColor(0.5f, 0.5f, 0.55f));
-
 	const UCSItemSettings* Settings = UCSItemSettings::Get();
 	for (int32 i = 0; i < NumSlots; ++i)
 	{
-		const FCSInventorySlot& Data = Inventory->GetSlots()[i];
+		FCSInventorySlot Data;
+		if (Inventory)
+		{
+			Inventory->GetSlot(i, Data);
+		}
 		const UCSItemDefinition* Item = Data.IsEmpty() ? nullptr : Settings->GetItem(Data.ItemIndex);
 
 		FString Label = Item ? Item->DisplayName.ToString() : TEXT("-");
@@ -1263,11 +1295,12 @@ void ACSHUD::DrawQuickSlots()
 		FString Sub;
 		if (Item)
 		{
-			Sub = Item->IsWeapon() ? FString::Printf(TEXT("%d rds"), Data.AmmoInMag)
+			const UCSWeaponDefinition* Weapon = Item->Weapon.LoadSynchronous();
+			Sub = (Weapon && Weapon->IsFirearm()) ? FString::Printf(TEXT("%d / %d"), Data.AmmoInMag, Data.Reserve)
 				: (Data.Count > 1 ? FString::Printf(TEXT("x%d"), Data.Count) : FString());
 		}
 
-		Slot(i + 1, i + 2, Label, Sub, Equipped == i, Item == nullptr, Item ? Item->PlaceholderColor : FLinearColor::Black);
+		Slot(i, i + 1, Label, Sub, Equipped == i, Item == nullptr, Item ? Item->PlaceholderColor : FLinearColor::Black);
 	}
 }
 

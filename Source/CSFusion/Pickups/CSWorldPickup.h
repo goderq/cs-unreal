@@ -50,6 +50,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "CS|Pickup")
 	int32 GetAmmoInMag() const { return AmmoInMag; }
 
+	/** v2.0: spare rounds that go with a dropped gun. */
+	int32 GetReserve() const { return Reserve; }
+
 	const UCSItemDefinition* GetItemDefinition() const;
 
 	/** "AK-47" or "Rifle Ammo x30", for the interaction prompt. */
@@ -61,7 +64,7 @@ public:
 	// --- Authority-only ----------------------------------------------------
 
 	/** Sets what this pickup contains. Dropped pickups expire; map pickups do not. */
-	void InitializeItem(int32 InItemIndex, int32 InCount, int32 InAmmoInMag, bool bInDropped);
+	void InitializeItem(int32 InItemIndex, int32 InCount, int32 InAmmoInMag, bool bInDropped, int32 InReserve = 0);
 
 	/** Claims and removes the pickup. Returns false if already claimed. */
 	bool Claim();
@@ -108,6 +111,9 @@ protected:
 
 	UPROPERTY(Replicated)
 	int32 AmmoInMag = 0;
+
+	UPROPERTY(Replicated)
+	int32 Reserve = 0;
 
 	/** Network time at which a dropped item vanishes. 0 = never. */
 	UPROPERTY(Replicated)

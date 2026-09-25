@@ -44,3 +44,13 @@ SourceArt/_download/
 
 # Accounts: local keys, never committed (template: Config/Backend.ini.example)
 Config/Backend.ini
+
+# v2.0: NVIDIA DLSS / Streamline plugins - NVIDIA's license does not allow
+# redistributing them in a public repository. Each developer downloads them
+# from developer.nvidia.com (see docs/ASSETS.md).
+Plugins/DLSS*/
+Plugins/Streamline*/
+Plugins/NIS/
+
+# Python bytecode from the content scripts
+__pycache__/

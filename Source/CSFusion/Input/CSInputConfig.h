@@ -70,6 +70,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Inventory")
 	TObjectPtr<UInputAction> IA_Interact;
 
+	/** v2.0: unused - the inventory screen is gone. Kept so saved assets still load. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Inventory")
 	TObjectPtr<UInputAction> IA_ToggleInventory;
 
@@ -177,7 +178,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	FKey Key_BuyMenu = EKeys::B;
 
-	/** Key 1 = starter pistol, keys 2..7 = inventory slots 1..6. */
+	/** v2.0: 1 primary, 2 pistol, 3 knife, 4 HE grenade, 5 flashbang. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
-	TArray<FKey> SlotKeys = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five, EKeys::Six, EKeys::Seven };
+	TArray<FKey> SlotKeys = { EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five };
 };

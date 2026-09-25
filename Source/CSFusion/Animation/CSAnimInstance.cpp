@@ -326,6 +326,14 @@ void UCSAnimInstance::AdvanceGameThread(float Dt)
 			ThrowTime = -1.f;
 		}
 	}
+	if (MeleeTime >= 0.f)
+	{
+		MeleeTime += Dt;
+		if (MeleeTime > (bMeleeHeavy ? 1.0f : 0.45f))
+		{
+			MeleeTime = -1.f;
+		}
+	}
 
 	const bool bWantIK = bLeftHandIK && UpperTime < 0.f && DeathTime < 0.f;
 	LeftHandIKAlpha = FMath::FInterpConstantTo(LeftHandIKAlpha, bWantIK ? 1.f : 0.f, Dt, 5.f);
@@ -403,6 +411,8 @@ void FCSAnimInstanceProxy::PreUpdate(UAnimInstance* InAnimInstance, float DeltaS
 	S.LandWeight = I->LandWeight;
 	S.CrouchAlpha = I->CrouchAlpha;
 	S.ThrowTime = I->bFirstPerson ? -1.f : I->ThrowTime;
+	S.MeleeTime = I->bFirstPerson ? -1.f : I->MeleeTime;
+	S.bMeleeHeavy = I->bMeleeHeavy;
 
 	S.IdleTime = I->IdleTime;
 	S.LocoPhase = I->LocoPhase;
@@ -587,6 +597,10 @@ bool FCSAnimInstanceProxy::Evaluate(FPoseContext& Output)
 	if (S.ThrowTime >= 0.f)
 	{
 		ApplyThrow(Output);
+	}
+	if (S.MeleeTime >= 0.f)
+	{
+		ApplyMelee(Output);
 	}
 
 	// 7. Left hand onto the weapon (v1.0). The weapon is rigid on hand_r, so
@@ -849,6 +863,66 @@ void FCSAnimInstanceProxy::ApplyThrow(FPoseContext& Output) const
 	FTransform ArmT = CSPose.GetComponentSpaceTransform(Arm);
 	// About the shoulder's side axis: positive swings the hand back and up.
 	ArmT.SetRotation(FQuat(FVector(1.f, 0.f, 0.f), FMath::DegreesToRadians(ArmPitch)) * ArmT.GetRotation());
+	Changed.Add(FBoneTransform(Arm, ArmT));
+	CSPose.SafeSetCSBoneTransforms(Changed);
+
+	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
+}
+
+void FCSAnimInstanceProxy::ApplyMelee(FPoseContext& Output) const
+{
+	// v2.0 knife on the third-person body: a flat slash across the chest, or a
+	// straight stab. Same component-space rotation as the throw (see ApplyThrow).
+	const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+	auto Index = [&Bones](const TCHAR* Name)
+	{
+		const int32 PoseIndex = Bones.GetPoseBoneIndexForBoneName(FName(Name));
+		return PoseIndex == INDEX_NONE ? FCompactPoseBoneIndex(INDEX_NONE)
+			: Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(PoseIndex));
+	};
+	const FCompactPoseBoneIndex Spine = Index(TEXT("spine_03"));
+	const FCompactPoseBoneIndex Arm = Index(TEXT("upperarm_r"));
+	if (Spine == INDEX_NONE || Arm == INDEX_NONE)
+	{
+		return;
+	}
+
+	const float T = Snapshot.MeleeTime;
+	float ChestYaw = 0.f;	// + = turns to the left
+	float ArmYaw = 0.f;		// swings the arm across the body
+	float ArmPitch = 0.f;	// + = arm back / up
+	if (Snapshot.bMeleeHeavy)
+	{
+		const float Back = FMath::SmoothStep(0.f, 1.f, FMath::Clamp(T / 0.18f, 0.f, 1.f));
+		const float Drive = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.18f) / 0.12f, 0.f, 1.f));
+		const float Out = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.55f) / 0.4f, 0.f, 1.f));
+		ArmPitch = (35.f * Back - 60.f * Drive) * (1.f - Out);
+		ChestYaw = (-15.f * Back + 20.f * Drive) * (1.f - Out);
+	}
+	else
+	{
+		const float Cock = FMath::SmoothStep(0.f, 1.f, FMath::Clamp(T / 0.08f, 0.f, 1.f));
+		const float Sweep = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.08f) / 0.14f, 0.f, 1.f));
+		const float Out = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.24f) / 0.2f, 0.f, 1.f));
+		ArmYaw = FMath::Lerp(-40.f * Cock, 70.f, Sweep) * (1.f - Out);
+		ChestYaw = FMath::Lerp(-20.f * Cock, 25.f, Sweep) * (1.f - Out);
+		ArmPitch = 20.f * (1.f - Out) * Cock;
+	}
+
+	FCSPose<FCompactPose> CSPose;
+	CSPose.InitPose(Output.Pose);
+
+	TArray<FBoneTransform> Changed;
+	FTransform SpineT = CSPose.GetComponentSpaceTransform(Spine);
+	SpineT.SetRotation(FQuat(FVector::UpVector, FMath::DegreesToRadians(ChestYaw)) * SpineT.GetRotation());
+	Changed.Add(FBoneTransform(Spine, SpineT));
+	CSPose.SafeSetCSBoneTransforms(Changed);
+
+	Changed.Reset();
+	FTransform ArmT = CSPose.GetComponentSpaceTransform(Arm);
+	const FQuat Swing = FQuat(FVector::UpVector, FMath::DegreesToRadians(ArmYaw))
+		* FQuat(FVector(1.f, 0.f, 0.f), FMath::DegreesToRadians(ArmPitch));
+	ArmT.SetRotation(Swing * ArmT.GetRotation());
 	Changed.Add(FBoneTransform(Arm, ArmT));
 	CSPose.SafeSetCSBoneTransforms(Changed);
 

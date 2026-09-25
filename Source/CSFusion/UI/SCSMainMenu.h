@@ -19,8 +19,8 @@ class SVerticalBox;
 class SWidgetSwitcher;
 class SCSSelector;
 class SCSSettingsPanel;
-class SCSInventoryPanel;
 class SCSProfilePanel;
+class SCSAdminPanel;
 
 class CSFUSION_API SCSMainMenu : public SCompoundWidget
 {
@@ -30,7 +30,7 @@ public:
 	SLATE_END_ARGS()
 
 	// The order is the order of the switcher slots in Construct.
-	enum class EPage : int32 { Home, Play, Create, Join, Browser, Inventory, Settings, Profile };
+	enum class EPage : int32 { Home, Play, Create, Join, Browser, Settings, Profile, Admin };
 
 	void Construct(const FArguments& InArgs);
 	virtual ~SCSMainMenu() override;
@@ -55,8 +55,6 @@ public:
 	/** Region code picked on the Play page; empty = best ping. */
 	FString GetSelectedRegion() const;
 
-	/** The profile page, for the menu self-test. */
-	TSharedPtr<SCSProfilePanel> GetProfilePanel() const { return ProfilePanel; }
 
 	// v1.1 mode and map choice (Play page).
 	ECSGameModeType GetSelectedMode() const { return SelectedMode; }
@@ -97,8 +95,8 @@ private:
 	TSharedPtr<SEditableTextBox> JoinNameBox;
 	TSharedPtr<SVerticalBox> RoomListBox;
 	TSharedPtr<SCSSettingsPanel> SettingsPanel;
-	TSharedPtr<SCSInventoryPanel> InventoryPanel;
 	TSharedPtr<SCSProfilePanel> ProfilePanel;
+	TSharedPtr<SCSAdminPanel> AdminPanel;
 
 	FDelegateHandle RoomListHandle;
 	FString LocalMessage;

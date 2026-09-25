@@ -155,6 +155,7 @@ void UCSAccountSubsystem::SignOut()
 	AccessToken.Reset();
 	ProfileId.Reset();
 	Nickname.Reset();
+	bIsAdmin = false;
 	Stats = FCSAccountStats();
 	SetState(ECSAccountState::SignedOut);
 }
@@ -293,6 +294,8 @@ void UCSAccountSubsystem::ExchangeTokenForSession(const FString& EpicToken)
 			Json->TryGetStringField(TEXT("token"), AccessToken);
 			(*Profile)->TryGetStringField(TEXT("id"), ProfileId);
 			(*Profile)->TryGetStringField(TEXT("nickname"), Nickname);
+			bIsAdmin = false;
+			(*Profile)->TryGetBoolField(TEXT("is_admin"), bIsAdmin);
 
 			const TSharedPtr<FJsonObject>* StatsJson = nullptr;
 			if (Json->TryGetObjectField(TEXT("stats"), StatsJson))
@@ -319,38 +322,30 @@ void UCSAccountSubsystem::ExchangeTokenForSession(const FString& EpicToken)
 	Request->ProcessRequest();
 }
 
-void UCSAccountSubsystem::SetNickname(const FString& NewNickname, TFunction<void(bool, const FString&)> OnDone)
+void UCSAccountSubsystem::AdminCall(const FString& Action, const TSharedRef<FJsonObject>& Params, TFunction<void(bool, int32, const TSharedPtr<FJsonObject>&)> OnDone)
 {
-	if (!IsReady())
+	if (!IsReady() || !bIsAdmin)
 	{
-		OnDone(false, TEXT("not signed in"));
+		OnDone(false, 403, nullptr);
 		return;
 	}
-	const FString Trimmed = NewNickname.TrimStartAndEnd();
-	if (Trimmed.Len() < 3 || Trimmed.Len() > 20)
-	{
-		OnDone(false, TEXT("the name must be 3 to 20 characters"));
-		return;
-	}
+	// The admin function checks is_admin again against the database; this
+	// flag only decides whether the panel is shown.
+	Params->SetStringField(TEXT("action"), Action);
+	FString Body;
+	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
+	FJsonSerializer::Serialize(Params, Writer);
 
 	const FCSBackendConfig& Config = FCSBackendConfig::Get();
-	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request =
-		MakeRequest(Config.RestUrl(FString::Printf(TEXT("profiles?id=eq.%s"), *ProfileId)), TEXT("PATCH"), true);
-	Request->SetHeader(TEXT("Prefer"), TEXT("return=representation"));
-	Request->SetContentAsString(FString::Printf(TEXT("{\"nickname\":\"%s\"}"), *Trimmed.ReplaceCharWithEscapedChar()));
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(Config.FunctionUrl(TEXT("admin")), TEXT("POST"), true);
+	Request->SetContentAsString(Body);
 	Request->OnProcessRequestComplete().BindWeakLambda(this,
-		[this, Trimmed, OnDone](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
+		[OnDone, Action](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
 		{
 			const int32 Code = (bConnected && Response.IsValid()) ? Response->GetResponseCode() : 0;
-			if (Code == 200 || Code == 204)
-			{
-				Nickname = Trimmed;
-				OnAccountChanged.Broadcast();
-				OnDone(true, FString());
-				return;
-			}
-			const FString Body = Response.IsValid() ? Response->GetContentAsString() : FString();
-			OnDone(false, Body.Contains(TEXT("duplicate")) ? TEXT("that name is taken") : ErrorFromBody(Body, TEXT("could not rename")));
+			const TSharedPtr<FJsonObject> Json = Response.IsValid() ? ParseJson(Response->GetContentAsString()) : nullptr;
+			UE_LOG(LogCS, Log, TEXT("Admin: %s -> %d"), *Action, Code);
+			OnDone(Code == 200, Code, Json);
 		});
 	Request->ProcessRequest();
 }

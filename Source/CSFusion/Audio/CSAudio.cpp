@@ -51,6 +51,16 @@ namespace CSAudio
 		UGameplayStatics::PlaySound2D(WorldContext, Asset, Volume, Pitch);
 	}
 
+	UAudioComponent* Spawn2D(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound, float Volume, float Pitch)
+	{
+		USoundBase* Asset = Resolve(Sound);
+		if (!Asset || !CanPlay(WorldContext))
+		{
+			return nullptr;
+		}
+		return UGameplayStatics::SpawnSound2D(WorldContext, Asset, Volume, Pitch);
+	}
+
 	UAudioComponent* PlayMusic(const UObject* WorldContext, const TSoftObjectPtr<USoundBase>& Sound)
 	{
 		USoundBase* Asset = Resolve(Sound);

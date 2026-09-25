@@ -10,8 +10,8 @@
 // the list is the same on every peer because it comes from DefaultGame.ini,
 // and an index costs one word on Fusion's wire.
 //
-// The starter pistol is deliberately NOT an item. It lives outside the
-// inventory by design and never appears in this registry.
+// v2.0: every weapon a player can hold is an item - the pistol, the knife and
+// both grenade types included - and LoadoutRole says which slot it fills.
 
 #pragma once
 
@@ -33,6 +33,18 @@ enum class ECSItemType : uint8
 	Armor		UMETA(DisplayName = "Armor"),
 	Medkit		UMETA(DisplayName = "Medkit"),
 	Misc		UMETA(DisplayName = "Misc")
+};
+
+/** v2.0 loadout: which of the five slots (keys 1-5) an item lives in. */
+UENUM(BlueprintType)
+enum class ECSLoadoutRole : uint8
+{
+	None		UMETA(DisplayName = "Not carried"),
+	Primary		UMETA(DisplayName = "Primary (1)"),
+	Pistol		UMETA(DisplayName = "Pistol (2)"),
+	Knife		UMETA(DisplayName = "Knife (3)"),
+	Frag		UMETA(DisplayName = "Frag grenade (4)"),
+	Flash		UMETA(DisplayName = "Flashbang (5)")
 };
 
 UENUM(BlueprintType)
@@ -68,6 +80,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
 	ECSItemRarity Rarity = ECSItemRarity::Common;
 
+	/** v2.0: the loadout slot this item goes into. None for armor (worn at once). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
+	ECSLoadoutRole LoadoutRole = ECSLoadoutRole::None;
+
 	// --- Stacking ----------------------------------------------------------
 
 	/** Weapons never stack: each carries its own magazine. */
@@ -91,12 +107,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon")
 	TSoftObjectPtr<UCSWeaponDefinition> Weapon;
 
-	/**
-	 * For ItemType == Weapon: which ammo item feeds it, by ItemId.
-	 * Reserve ammo is simply the count of that item in the inventory.
-	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon")
-	FName AmmoItemId = NAME_None;
+	// v2.0: spare rounds live with the weapon (FCSInventorySlot::Reserve), so
+	// there is no separate ammo item any more; UCSWeaponDefinition::ReserveAmmo
+	// is the most a weapon can carry.
 
 	/** For ItemType == Armor: armor points granted on use. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumable", meta = (ClampMin = "0.0"))

@@ -8,6 +8,9 @@
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
+#include "GameModes/CSGameMode.h"
+#include "Items/CSShopSettings.h"
+#include "Pickups/CSAmmoMachine.h"
 #include "Pickups/CSWorldPickup.h"
 #include "Weapons/CSWeaponDefinition.h"
 #include "Core/CSAuthority.h"
@@ -294,107 +297,203 @@ void ACSPlayerController::TestMoveTo(const FVector& Dest, TFunction<void()> OnAr
 
 void ACSPlayerController::CSTestLoot()
 {
-	// Full Stage 3 loop through real input: walk up to a weapon, E to pick it
-	// up, 2 to equip it, fire it, G to drop it. Each step is checked against
-	// the authoritative inventory, not against anything local.
+	// v2.0 loadout, through real input where the player would use it:
+	// spawn set, knife cannot be dropped, a shot, a bought primary with full
+	// ammunition, drop and pick up keeping the rounds, an ammo machine.
+	// Every check reads the authoritative loadout, not anything local.
 	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
-	const int32 Me = Self ? Self->GetOwningPlayerId() : 0;
-	if (!Self)
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!Self || !Director || !UCSAuthority::IsGameAuthority(this))
 	{
-		UE_LOG(LogCS, Warning, TEXT("LOOT TEST: no pawn."));
+		UE_LOG(LogCS, Warning, TEXT("LOADOUT TEST: needs an offline authority with a pawn."));
 		return;
 	}
+	const int32 Me = Self->GetOwningPlayerId();
+	const UCSItemSettings* Items = UCSItemSettings::Get();
 
-	ACSWorldPickup* Target = nullptr;
-	float BestDist = TNumericLimits<float>::Max();
-	for (TActorIterator<ACSWorldPickup> It(GetWorld()); It; ++It)
+	auto Slot = [this, Me](int32 Index)
 	{
-		const UCSItemDefinition* Item = It->GetItemDefinition();
-		if (It->IsAvailable() && Item && Item->IsWeapon())
+		FCSInventorySlot Data;
+		if (const ACSPlayerInventory* Inv = ACSPlayerInventory::Find(this, Me))
 		{
-			const float D = FVector::Dist(It->GetActorLocation(), Self->GetActorLocation());
-			if (D < BestDist)
-			{
-				BestDist = D;
-				Target = *It;
-			}
+			Inv->GetSlot(Index, Data);
 		}
+		return Data;
+	};
+
+	// 1. Spawn: knife in 3, a full pistol in 2 and in hand, nothing else.
+	{
+		const FCSInventorySlot Pistol = Slot(CSLoadout::Pistol);
+		const UCSItemDefinition* PistolItem = Items->GetItem(Pistol.ItemIndex);
+		const UCSWeaponDefinition* PistolWeapon = PistolItem ? PistolItem->Weapon.LoadSynchronous() : nullptr;
+		const FCSLoadoutView L = Director->GetLoadout(Me);
+		const bool bOk = !Slot(CSLoadout::Knife).IsEmpty() && PistolWeapon
+			&& Pistol.AmmoInMag == PistolWeapon->MagazineSize && Pistol.Reserve == PistolWeapon->ReserveAmmo
+			&& Slot(CSLoadout::Primary).IsEmpty() && L.Slot == CSLoadout::Pistol;
+		UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: spawn -> knife %s, pistol %d / %d, in hand slot %d -> %s"),
+			Slot(CSLoadout::Knife).IsEmpty() ? TEXT("missing") : TEXT("yes"), Pistol.AmmoInMag, Pistol.Reserve, L.Slot + 1,
+			bOk ? TEXT("SPAWN OK") : TEXT("SPAWN BROKEN"));
 	}
 
-	if (!Target)
+	// 2. Key 3, then G: the knife must stay.
+	PressKey(EKeys::Three);
+	GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot]()
 	{
-		UE_LOG(LogCS, Warning, TEXT("LOOT TEST RESULT: no weapon pickup in the world -> PICKUPS MISSING"));
-		return;
-	}
-
-	TestLootItemIndex = Target->GetItemIndex();
-	UE_LOG(LogCS, Log, TEXT("LOOT TEST: target %s (item %d) at %.0f cm; world has %d pickups"),
-		*Target->GetPromptName().ToString(), TestLootItemIndex, BestDist, ACSWorldPickup::CountAlive(this));
-
-	// Walk up to it and look at it (the owning client may move its own pawn).
-	const FVector Pos = Target->GetActorLocation();
-	TestMoveTo(FVector(Pos.X - 120.f, Pos.Y, 0.f), [this, Me, Pos]()
-	{
-	ACSCharacter* Walker = Cast<ACSCharacter>(GetPawn());
-	if (!Walker)
-	{
-		return;
-	}
-	FVector Eye, Unused;
-	Walker->GetAimRay(Eye, Unused);
-	SetControlRotation((Pos - Eye).Rotation());
-
-	GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me]()
-	{
-		PressKey(EKeys::E);
-
-		GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me]()
+		PressKey(EKeys::G);
+		GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot]()
 		{
-			const ACSPlayerInventory* Inv = ACSPlayerInventory::Find(this, Me);
-			const int32 Have = Inv ? Inv->CountItem(TestLootItemIndex) : -1;
-			UE_LOG(LogCS, Log, TEXT("LOOT TEST RESULT: pickup -> %s (count %d)"),
-				Have == 1 ? TEXT("PICKUP OK") : TEXT("PICKUP BROKEN"), Have);
+			const ACSMatchDirector* D = ACSMatchDirector::Get(this);
+			const FCSLoadoutView L = D ? D->GetLoadout(Me) : FCSLoadoutView();
+			UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: knife in hand %s, still carried after G %s -> %s"),
+				L.bKnife ? TEXT("yes") : TEXT("no"), Slot(CSLoadout::Knife).IsEmpty() ? TEXT("no") : TEXT("yes"),
+				(L.bKnife && !Slot(CSLoadout::Knife).IsEmpty()) ? TEXT("KNIFE KEPT OK") : TEXT("KNIFE KEPT BROKEN"));
 
-			PressKey(EKeys::Two); // slot 1 = first inventory slot
-
-			GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me]()
+			// 3. Key 2 and one shot.
+			PressKey(EKeys::Two);
+			GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot]()
 			{
-				const ACSMatchDirector* D = ACSMatchDirector::Get(this);
-				const FCSLoadoutView L = D ? D->GetLoadout(Me) : FCSLoadoutView();
-				UE_LOG(LogCS, Log, TEXT("LOOT TEST RESULT: equip -> %s (weapon %s, slot %d, rounds %d)"),
-					!L.IsStarter() ? TEXT("EQUIP OK") : TEXT("EQUIP BROKEN"),
-					L.Weapon ? *L.Weapon->DisplayName.ToString() : TEXT("none"), L.Slot, L.RoundsInMag);
-				TestRoundsBefore = L.RoundsInMag;
-
+				TestRoundsBefore = Slot(CSLoadout::Pistol).AmmoInMag;
 				PressKey(EKeys::LeftMouseButton);
-
-				GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me]()
+				GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot]()
 				{
-					const ACSMatchDirector* D2 = ACSMatchDirector::Get(this);
-					const FCSLoadoutView L2 = D2 ? D2->GetLoadout(Me) : FCSLoadoutView();
-					UE_LOG(LogCS, Log, TEXT("LOOT TEST RESULT: fire inventory weapon -> %s (rounds %d -> %d)"),
-						(!L2.IsStarter() && L2.RoundsInMag == TestRoundsBefore - 1) ? TEXT("FIRE OK") : TEXT("FIRE BROKEN"),
-						TestRoundsBefore, L2.RoundsInMag);
+					const int32 After = Slot(CSLoadout::Pistol).AmmoInMag;
+					UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: pistol shot -> rounds %d -> %d -> %s"),
+						TestRoundsBefore, After, After == TestRoundsBefore - 1 ? TEXT("FIRE OK") : TEXT("FIRE BROKEN"));
 
+					// 4. A bought AK-47: full magazine, full reserve, straight into the hands.
+					ACSMatchDirector* D = ACSMatchDirector::Get(this);
+					const int32 Ak = UCSItemSettings::Get()->FindItemIndex(TEXT("ak47"));
+					if (D)
+					{
+						D->GiveItem(Me, Ak, /*bEquip*/ true);
+					}
+					const FCSInventorySlot Primary = Slot(CSLoadout::Primary);
+					const UCSItemDefinition* AkItem = UCSItemSettings::Get()->GetItem(Ak);
+					const UCSWeaponDefinition* AkWeapon = AkItem ? AkItem->Weapon.LoadSynchronous() : nullptr;
+					const bool bFull = AkWeapon && Primary.ItemIndex == Ak && Primary.AmmoInMag == AkWeapon->MagazineSize
+						&& Primary.Reserve == AkWeapon->ReserveAmmo;
+					const bool bInHand = D && D->GetLoadout(Me).Slot == CSLoadout::Primary;
+					UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: bought AK-47 -> %d / %d, in hand %s -> %s"),
+						Primary.AmmoInMag, Primary.Reserve, bInHand ? TEXT("yes") : TEXT("no"),
+						(bFull && bInHand) ? TEXT("BUY OK") : TEXT("BUY BROKEN"));
+
+					// 5. G drops it with its rounds.
 					TestPickupsBefore = ACSWorldPickup::CountAlive(this);
 					PressKey(EKeys::G);
-
-					GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me]()
+					GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot, Ak]()
 					{
-						const ACSPlayerInventory* Inv2 = ACSPlayerInventory::Find(this, Me);
-						const int32 Left = Inv2 ? Inv2->CountItem(TestLootItemIndex) : -1;
-						const int32 After = ACSWorldPickup::CountAlive(this);
-						const ACSMatchDirector* D3 = ACSMatchDirector::Get(this);
-						const bool bBackToStarter = D3 && D3->GetLoadout(Me).IsStarter();
-						UE_LOG(LogCS, Log, TEXT("LOOT TEST RESULT: drop -> %s (in inventory %d, pickups %d -> %d, back to starter %s)"),
-							(Left == 0 && After == TestPickupsBefore + 1 && bBackToStarter) ? TEXT("DROP OK") : TEXT("DROP BROKEN"),
-							Left, TestPickupsBefore, After, bBackToStarter ? TEXT("yes") : TEXT("no"));
-					}, 2.0f, false);
+						ACSWorldPickup* Dropped = nullptr;
+						for (TActorIterator<ACSWorldPickup> It(GetWorld()); It; ++It)
+						{
+							if (It->IsAvailable() && It->GetItemIndex() == Ak)
+							{
+								Dropped = *It;
+							}
+						}
+						const bool bOk = Slot(CSLoadout::Primary).IsEmpty() && Dropped
+							&& ACSWorldPickup::CountAlive(this) == TestPickupsBefore + 1;
+						UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: drop -> primary empty %s, on the floor with %d / %d -> %s"),
+							Slot(CSLoadout::Primary).IsEmpty() ? TEXT("yes") : TEXT("no"),
+							Dropped ? Dropped->GetAmmoInMag() : -1, Dropped ? Dropped->GetReserve() : -1,
+							bOk ? TEXT("DROP OK") : TEXT("DROP BROKEN"));
+						if (!Dropped)
+						{
+							UE_LOG(LogCS, Log, TEXT("LOADOUT TEST: done."));
+							return;
+						}
+
+						// 6. Walk up, look at it, E: back in slot 1 with the same rounds.
+						const int32 MagOnFloor = Dropped->GetAmmoInMag();
+						const int32 SpareOnFloor = Dropped->GetReserve();
+						const FVector Pos = Dropped->GetActorLocation();
+						TestMoveTo(FVector(Pos.X - 110.f, Pos.Y, 0.f), [this, Me, Slot, Ak, Pos, MagOnFloor, SpareOnFloor]()
+						{
+							if (ACSCharacter* Walker = Cast<ACSCharacter>(GetPawn()))
+							{
+								FVector Eye, Unused;
+								Walker->GetAimRay(Eye, Unused);
+								SetControlRotation((Pos - Eye).Rotation());
+							}
+							GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot, Ak, MagOnFloor, SpareOnFloor]()
+							{
+								PressKey(EKeys::E);
+								GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot, Ak, MagOnFloor, SpareOnFloor]()
+								{
+									const FCSInventorySlot Back = Slot(CSLoadout::Primary);
+									const bool bOk = Back.ItemIndex == Ak && Back.AmmoInMag == MagOnFloor && Back.Reserve == SpareOnFloor;
+									UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: pickup -> %d / %d (dropped with %d / %d) -> %s"),
+										Back.AmmoInMag, Back.Reserve, MagOnFloor, SpareOnFloor, bOk ? TEXT("PICKUP OK") : TEXT("PICKUP BROKEN"));
+
+									// 7. Ammo machine: spend the reserve, then E at a machine.
+									ACSMatchDirector* D2 = ACSMatchDirector::Get(this);
+									ACSPlayerInventory* Inv = ACSPlayerInventory::Find(this, Me);
+									ACSCharacter* Walker = Cast<ACSCharacter>(GetPawn());
+									if (!D2 || !Inv || !Walker)
+									{
+										return;
+									}
+									Inv->SetSlotAmmo(CSLoadout::Primary, Back.AmmoInMag, 7);
+									D2->AddMoney(Me, 1000);
+									TestMoneyBefore = D2->GetMoney(Me);
+
+									// Current maps may not have one yet: stand one up in front of the player.
+									ACSAmmoMachine* Machine = nullptr;
+									for (ACSAmmoMachine* Candidate : ACSAmmoMachine::GetAllSorted(this))
+									{
+										Machine = Candidate;
+										break;
+									}
+									if (!Machine)
+									{
+										const FVector Here = Walker->GetActorLocation();
+										const FVector Ahead = Walker->GetActorForwardVector().GetSafeNormal2D();
+										FActorSpawnParameters Params;
+										Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+										Machine = GetWorld()->SpawnActor<ACSAmmoMachine>(ACSAmmoMachine::StaticClass(),
+											FVector(Here.X, Here.Y, Here.Z - 90.f) + Ahead * 400.f, (-Ahead).Rotation(), Params);
+									}
+									if (!Machine)
+									{
+										UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: ammo machine -> AMMO MACHINE MISSING"));
+										UE_LOG(LogCS, Log, TEXT("LOADOUT TEST: done."));
+										return;
+									}
+									const FVector Use = Machine->GetUsePoint();
+									const FVector Face = Machine->GetActorLocation() + FVector(0.f, 0.f, 120.f);
+									TestMoveTo(FVector(Use.X, Use.Y, 0.f), [this, Me, Slot, Face]()
+									{
+										if (ACSCharacter* W2 = Cast<ACSCharacter>(GetPawn()))
+										{
+											FVector Eye, Unused;
+											W2->GetAimRay(Eye, Unused);
+											SetControlRotation((Face - Eye).Rotation());
+										}
+										GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot]()
+										{
+											PressKey(EKeys::E);
+											GetWorldTimerManager().SetTimer(TestLootTimer, [this, Me, Slot]()
+											{
+												const ACSMatchDirector* D3 = ACSMatchDirector::Get(this);
+												const FCSInventorySlot Topped = Slot(CSLoadout::Primary);
+												const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(Topped.ItemIndex);
+												const UCSWeaponDefinition* Weapon = Item ? Item->Weapon.LoadSynchronous() : nullptr;
+												const int32 Paid = TestMoneyBefore - (D3 ? D3->GetMoney(Me) : 0);
+												const bool bOk = Weapon && Topped.Reserve == Weapon->ReserveAmmo
+													&& Paid == UCSShopSettings::Get()->AmmoMachinePrice;
+												UE_LOG(LogCS, Log, TEXT("LOADOUT TEST RESULT: ammo machine -> reserve 7 -> %d, paid $%d -> %s"),
+													Topped.Reserve, Paid, bOk ? TEXT("AMMO MACHINE OK") : TEXT("AMMO MACHINE BROKEN"));
+												UE_LOG(LogCS, Log, TEXT("LOADOUT TEST: done."));
+											}, 1.0f, false);
+										}, 0.4f, false);
+									});
+								}, 1.0f, false);
+							}, 0.4f, false);
+						});
+					}, 1.0f, false);
 				}, 0.8f, false);
-			}, 0.6f, false);
+			}, 0.8f, false);
 		}, 0.8f, false);
-	}, 0.3f, false);
-	}); // TestMoveTo
+	}, 0.8f, false);
 }
 
 void ACSPlayerController::CSTestContest()
@@ -420,9 +519,28 @@ void ACSPlayerController::CSTestContest()
 			break;
 		}
 	}
+	// v2.0: nothing lies on the maps, so the authority puts the contested
+	// rifle down itself, a few metres in front of the first player start.
+	if (!Target && UCSAuthority::IsGameAuthority(this))
+	{
+		const AGameModeBase* Mode = GetWorld()->GetAuthGameMode();
+		const ACSGameMode* CSMode = Cast<ACSGameMode>(Mode);
+		if (const AActor* Start = CSMode ? CSMode->GetPlayerStartByIndex(0) : nullptr)
+		{
+			if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+			{
+				FCSInventorySlot Rifle;
+				Rifle.ItemIndex = TestContestItem;
+				Rifle.Count = 1;
+				Rifle.AmmoInMag = 5;
+				Target = Director->SpawnDroppedItem(Rifle, Start->GetActorLocation() + Start->GetActorForwardVector() * 500.f, Start->GetActorLocation());
+			}
+		}
+	}
 	if (!Target)
 	{
-		UE_LOG(LogCS, Warning, TEXT("CONTEST TEST: sniper pickup not found."));
+		// A client waits for the authority's rifle to replicate.
+		GetWorldTimerManager().SetTimer(TestContestTimer, this, &ACSPlayerController::CSTestContest, 2.f, false);
 		return;
 	}
 
@@ -457,7 +575,8 @@ void ACSPlayerController::CSTestContest()
 		{
 			const ACSCharacter* Me = Cast<ACSCharacter>(GetPawn());
 			const ACSPlayerInventory* Inv = Me ? ACSPlayerInventory::Find(this, Me->GetOwningPlayerId()) : nullptr;
-			const int32 Have = Inv ? Inv->CountItem(TestContestItem) : -1;
+			FCSInventorySlot Primary;
+			const int32 Have = (Inv && Inv->GetSlot(CSLoadout::Primary, Primary) && Primary.ItemIndex == TestContestItem) ? 1 : 0;
 
 			int32 StillOnGround = 0;
 			for (TActorIterator<ACSWorldPickup> It(GetWorld()); It; ++It)
@@ -627,7 +746,7 @@ void ACSPlayerController::TestInputRelease()
 	// director state.
 	const ACSCharacter* CSPawn = Cast<ACSCharacter>(GetPawn());
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
-	TestRoundsBefore = (CSPawn && Director) ? Director->GetStarterRoundsInMag(CSPawn->GetOwningPlayerId()) : -1;
+	TestRoundsBefore = (CSPawn && Director) ? Director->GetLoadout(CSPawn->GetOwningPlayerId()).RoundsInMag : -1;
 
 	InputKey(FInputKeyEventArgs(Viewport, Device, EKeys::LeftMouseButton, IE_Pressed, 1.f, false, FPlatformTime::Cycles64()));
 	InputKey(FInputKeyEventArgs(Viewport, Device, EKeys::LeftMouseButton, IE_Released, 0.f, false, FPlatformTime::Cycles64()));
@@ -639,7 +758,7 @@ void ACSPlayerController::TestFireCheck()
 {
 	const ACSCharacter* CSPawn = Cast<ACSCharacter>(GetPawn());
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
-	const int32 After = (CSPawn && Director) ? Director->GetStarterRoundsInMag(CSPawn->GetOwningPlayerId()) : -1;
+	const int32 After = (CSPawn && Director) ? Director->GetLoadout(CSPawn->GetOwningPlayerId()).RoundsInMag : -1;
 
 	UE_LOG(LogCS, Log, TEXT("FIRE TEST RESULT: rounds %d -> %d -> %s"),
 		TestRoundsBefore, After, (After >= 0 && After == TestRoundsBefore - 1) ? TEXT("FIRE OK") : TEXT("FIRE BROKEN"));

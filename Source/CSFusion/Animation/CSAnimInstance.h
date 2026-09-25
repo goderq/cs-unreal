@@ -76,6 +76,9 @@ struct FCSAnimSnapshot
 	float LandWeight = 0.f;
 	float CrouchAlpha = 0.f;
 	float ThrowTime = -1.f;
+	/** v2.0 knife swing (< 0 inactive). */
+	float MeleeTime = -1.f;
+	bool bMeleeHeavy = false;
 
 	/** Left hand IK onto the weapon (v1.0): target in hand_r bone space, cm. */
 	float LeftHandIKAlpha = 0.f;
@@ -105,6 +108,7 @@ private:
 	void ApplyCrouch(FPoseContext& Output) const;
 	/** v1.1 procedural overarm throw (third person). */
 	void ApplyThrow(FPoseContext& Output) const;
+	void ApplyMelee(FPoseContext& Output) const;
 
 	FCSAnimSnapshot Snapshot;
 };
@@ -129,6 +133,8 @@ public:
 	void PlayHitReact(bool bFromFront);
 	/** v1.1: overarm grenade throw. */
 	void PlayThrow(float StartAt = 0.f) { ThrowTime = StartAt; }
+	/** v2.0: knife slash (light) or stab (heavy). */
+	void PlayMelee(bool bHeavy) { MeleeTime = 0.f; bMeleeHeavy = bHeavy; }
 
 	/**
 	 * v1.0: the left hand reaches for this point (hand_r bone space, cm) by
@@ -226,6 +232,8 @@ private:
 	float CrouchAlpha = 0.f;
 	bool bWasFalling = false;
 	float ThrowTime = -1.f;
+	float MeleeTime = -1.f;
+	bool bMeleeHeavy = false;
 
 	bool bLeftHandIK = false;
 	FVector LeftHandTargetInHandR = FVector::ZeroVector;

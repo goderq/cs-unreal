@@ -8,8 +8,9 @@
 // the requesting client sends. Per-player mutable state (rounds in the
 // magazine, last shot time) lives in the Master-Client-owned ACSMatchDirector.
 //
-// Stage 3 adds FItemDefinition on top of this for weapons that live in the
-// inventory. The starter pistol is not one of them.
+// Every weapon is carried through an item (UCSItemDefinition::Weapon). v2.0
+// adds the knife and the grenades as kinds of weapon, so the hands, the HUD
+// and the fire gate treat everything a player can hold the same way.
 
 #pragma once
 
@@ -27,7 +28,20 @@ UENUM(BlueprintType)
 enum class ECSWeaponStance : uint8
 {
 	Pistol	UMETA(DisplayName = "Pistol"),
-	Rifle	UMETA(DisplayName = "Rifle")
+	Rifle	UMETA(DisplayName = "Rifle"),
+	/** v2.0: one-handed, blade forward. */
+	Knife	UMETA(DisplayName = "Knife"),
+	/** v2.0: one-handed, the grenade in the right hand. */
+	Grenade	UMETA(DisplayName = "Grenade")
+};
+
+/** v2.0: what pulling the trigger does. */
+UENUM(BlueprintType)
+enum class ECSWeaponKind : uint8
+{
+	Firearm	UMETA(DisplayName = "Firearm"),
+	Knife	UMETA(DisplayName = "Knife"),
+	Grenade	UMETA(DisplayName = "Grenade")
 };
 
 UCLASS(BlueprintType)
@@ -48,13 +62,37 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity", meta = (MultiLine = "true"))
 	FText Description;
 
-	/**
-	 * True only for the starter pistol. Enforced by the authority: a weapon
-	 * with this flag is never added to, or removed from, an inventory, and is
-	 * never turned into loot.
-	 */
+	/** Firearm, knife or grenade. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
-	bool bIsStarterWeapon = false;
+	ECSWeaponKind Kind = ECSWeaponKind::Firearm;
+
+	// --- Knife (Kind == Knife) ----------------------------------------------
+
+	/** How far the blade reaches, from the eyes, in cm. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Knife", meta = (ClampMin = "30.0"))
+	float MeleeRange = 110.f;
+
+	/** Slash (left mouse); BaseDamage is not used by the knife. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Knife", meta = (ClampMin = "1.0"))
+	float MeleeDamage = 40.f;
+
+	/** Stab (right mouse): slower and harder. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Knife", meta = (ClampMin = "1.0"))
+	float MeleeHeavyDamage = 65.f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Knife", meta = (ClampMin = "0.1"))
+	float MeleeInterval = 0.45f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Knife", meta = (ClampMin = "0.1"))
+	float MeleeHeavyInterval = 1.1f;
+
+	/** Hits from behind (victim facing away) are multiplied by this. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Knife", meta = (ClampMin = "1.0"))
+	float BackstabMultiplier = 2.5f;
+
+	bool IsFirearm() const { return Kind == ECSWeaponKind::Firearm; }
+	bool IsKnife() const { return Kind == ECSWeaponKind::Knife; }
+	bool IsGrenade() const { return Kind == ECSWeaponKind::Grenade; }
 
 	// --- Ballistics --------------------------------------------------------
 
@@ -98,11 +136,11 @@ public:
 	int32 MagazineSize = 12;
 
 	/**
-	 * Reserve rounds carried. Negative means unlimited, which is what the
-	 * starter pistol uses so a player is never left unable to act.
+	 * The most spare rounds this weapon carries. A bought weapon comes with a
+	 * full magazine and this many spare; ammo machines top it back up.
 	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling")
-	int32 ReserveAmmo = -1;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling", meta = (ClampMin = "0"))
+	int32 ReserveAmmo = 90;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Handling", meta = (ClampMin = "0.1"))
 	float ReloadSeconds = 1.6f;
@@ -181,9 +219,6 @@ public:
 	{
 		return 60.f / FMath::Max(1.f, RoundsPerMinute);
 	}
-
-	UFUNCTION(BlueprintPure, Category = "CS|Weapon")
-	bool HasUnlimitedReserve() const { return ReserveAmmo < 0; }
 
 	/** Damage multiplier for a hit zone. */
 	UFUNCTION(BlueprintPure, Category = "CS|Weapon")

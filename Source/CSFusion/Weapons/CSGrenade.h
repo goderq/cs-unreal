@@ -24,6 +24,13 @@ class USphereComponent;
 class UStaticMeshComponent;
 class UProjectileMovementComponent;
 
+/** v2.0: what a grenade does when it goes off. Sent over the wire as an int32. */
+enum class ECSGrenadeType : uint8
+{
+	Frag = 0,
+	Flash = 1
+};
+
 UCLASS(NotBlueprintable)
 class CSFUSION_API ACSGrenade : public AActor
 {
@@ -33,7 +40,11 @@ public:
 	ACSGrenade();
 
 	/** Every peer: start flying. FuseSeconds counts from now. */
-	void Launch(int32 InSerial, int32 InThrowerId, const FVector& Velocity, float FuseSeconds);
+	void Launch(int32 InSerial, int32 InThrowerId, const FVector& Velocity, float FuseSeconds, ECSGrenadeType InType = ECSGrenadeType::Frag);
+
+	/** Before Launch or Explode, for copies that only ever see the blast. */
+	void SetType(ECSGrenadeType InType);
+	ECSGrenadeType GetType() const { return Type; }
 
 	/** Every peer: the blast, at Location (the authority's copy decides where). */
 	void Explode(const FVector& Location);
@@ -46,6 +57,9 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 
 protected:
+	/** The flashbang pop, and the local player's blindness. */
+	void ExplodeFlash(const FVector& Location);
+
 	UFUNCTION()
 	void HandleBounce(const FHitResult& ImpactResult, const FVector& ImpactVelocity);
 
@@ -61,6 +75,7 @@ protected:
 private:
 	int32 Serial = 0;
 	int32 ThrowerId = 0;
+	ECSGrenadeType Type = ECSGrenadeType::Frag;
 	double FuseEnd = 0.0;
 	bool bExploded = false;
 	double LastBounceSound = -10.0;

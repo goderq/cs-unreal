@@ -57,6 +57,26 @@ public:
 	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
 	TSoftObjectPtr<USoundBase> GrenadePin;
 
+	// v2.0: flashbang, knife, ammo machine
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> FlashbangExplode;
+
+	/** High ringing tone while blinded; its volume follows the flash strength. */
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> FlashbangRing;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> KnifeSwing;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> KnifeHitBody;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> KnifeHitWall;
+
+	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
+	TSoftObjectPtr<USoundBase> AmmoMachineBuy;
+
 	UPROPERTY(EditAnywhere, Config, Category = "Gameplay")
 	TSoftObjectPtr<USoundBase> BulletImpact;
 

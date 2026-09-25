@@ -69,6 +69,10 @@ struct CSFUSION_API FCSWeaponModel
 	UPROPERTY(Config, EditAnywhere, Category = "Aim")
 	bool bScope = false;
 
+	/** v2.0: held in the right hand only (knife, grenades); the left arm rests out of view. */
+	UPROPERTY(Config, EditAnywhere, Category = "Model")
+	bool bOneHanded = false;
+
 	/**
 	 * Hip fire: where the right-hand grip sits relative to the camera, cm
 	 * (X forward, Y right, Z up). Zero = leave the animation's own framing.

@@ -56,8 +56,14 @@ void SCSShopPanel::Construct(const FArguments& InArgs)
 
 	TSharedRef<SVerticalBox> Rail = SNew(SVerticalBox);
 	Rail->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)[ MakeCategoryButton(INDEX_NONE, LOCTEXT("All", "ALL")) ];
-	for (int32 Cat = 0; Cat <= static_cast<int32>(ECSShopCategory::Ammo); ++Cat)
+	// Only categories that have something in them (v2.0 has no ammo section).
+	for (int32 Cat = 0; Cat <= static_cast<int32>(ECSShopCategory::Grenades); ++Cat)
 	{
+		const bool bUsed = UCSShopSettings::Get()->Entries.ContainsByPredicate([Cat](const FCSShopEntry& E) { return static_cast<int32>(E.Category) == Cat; });
+		if (!bUsed)
+		{
+			continue;
+		}
 		Rail->AddSlot().AutoHeight().Padding(0.f, 0.f, 0.f, 4.f)
 		[
 			MakeCategoryButton(Cat, UCSShopSettings::CategoryName(static_cast<ECSShopCategory>(Cat)))
@@ -232,7 +238,10 @@ ECSBuyResult SCSShopPanel::Predict(int32 ShopIndex) const
 	}
 	const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(Pawn, PlayerId);
 	const int32 ItemIndex = UCSItemSettings::Get()->FindItemIndex(Entry->ItemId);
-	if (Item->IsWeapon() && Inventory && Inventory->CountItem(ItemIndex) > 0)
+	const int32 Slot = ACSPlayerInventory::SlotForItem(Item);
+	FCSInventorySlot Held;
+	const bool bHeld = Inventory && Inventory->GetSlot(Slot, Held) && !Held.IsEmpty();
+	if (CSLoadout::IsDroppable(Slot) && bHeld && Held.ItemIndex == ItemIndex)
 	{
 		return ECSBuyResult::AlreadyOwned;
 	}
@@ -244,7 +253,7 @@ ECSBuyResult SCSShopPanel::Predict(int32 ShopIndex) const
 	{
 		return ECSBuyResult::NotEnoughMoney;
 	}
-	if (Item->ItemType != ECSItemType::Armor && Inventory && !Inventory->CanAccept(ItemIndex, 1))
+	if (CSLoadout::IsGrenadeSlot(Slot) && bHeld && Held.Count >= Item->GetMaxStack())
 	{
 		return ECSBuyResult::InventoryFull;
 	}
@@ -469,6 +478,10 @@ void SCSShopPanel::RebuildList()
 		Visible.Add(i);
 		ListBox->AddSlot().AutoHeight()[ MakeRow(i, Visible.Num() <= 9 ? Visible.Num() : 0) ];
 	}
+	// The list is rebuilt from Tick, which runs while this panel paints - after
+	// the frame's layout prepass. Without measuring the new rows now they are
+	// arranged with zero size for one frame and drawn on top of each other.
+	ListBox->SlatePrepass();
 }
 
 void SCSShopPanel::RebuildDetails()
@@ -491,6 +504,7 @@ void SCSShopPanel::RebuildDetails()
 				SNew(STextBlock).Text(LOCTEXT("PickOne", "Point at an item to see its stats.\nClick or press its number to buy."))
 				.Font(CSUI::Font(14)).ColorAndOpacity(CSUI::TextDim).AutoWrapText(true)
 			]);
+		DetailsBox->SlatePrepass(); // same reason as in RebuildList
 		return;
 	}
 
@@ -557,6 +571,7 @@ void SCSShopPanel::RebuildDetails()
 	];
 
 	DetailsBox->SetContent(Box);
+	DetailsBox->SlatePrepass(); // same reason as in RebuildList
 }
 
 #undef LOCTEXT_NAMESPACE

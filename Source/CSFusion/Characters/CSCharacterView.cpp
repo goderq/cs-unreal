@@ -67,7 +67,8 @@ void ACSCharacter::UpdateHandTargets()
 		const USkeletalMeshSocket* Socket = MeshComp->GetSocketByName(WeaponSocket);
 		// First person places the weapon by the camera and IKs both hands
 		// (UpdateFirstPersonView); only the body uses the in-hand left-hand IK.
-		if (!Model || !Socket || MeshComp == FirstPersonMesh)
+		// One-handed things (knife, grenades) leave the left hand to the clip.
+		if (!Model || !Socket || MeshComp == FirstPersonMesh || Model->bOneHanded)
 		{
 			Anim->SetLeftHandTarget(false, FVector::ZeroVector);
 			continue;
@@ -106,6 +107,14 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 		if (ViewReloadTime > ViewReloadDuration)
 		{
 			ViewReloadTime = -1.f;
+		}
+	}
+	if (ViewMeleeTime >= 0.f)
+	{
+		ViewMeleeTime += DeltaSeconds;
+		if (ViewMeleeTime > (bViewMeleeHeavy ? 1.0f : 0.45f))
+		{
+			ViewMeleeTime = -1.f;
 		}
 	}
 	if (ViewThrowTime >= 0.f)
@@ -171,7 +180,31 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 	// Equip: rises from below, muzzle down. Reload: dips and rolls out, then back.
 	FVector ActionOffset = FVector::ZeroVector;
 	FRotator ActionRotation = FRotator::ZeroRotator;
-	if (ViewThrowTime >= 0.f)
+	if (ViewMeleeTime >= 0.f)
+	{
+		const float T = ViewMeleeTime;
+		if (bViewMeleeHeavy)
+		{
+			// Stab: draw back, drive straight forward, hold, recover.
+			const float Back = FMath::SmoothStep(0.f, 1.f, FMath::Clamp(T / 0.18f, 0.f, 1.f));
+			const float Drive = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.18f) / 0.12f, 0.f, 1.f));
+			const float Out = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.55f) / 0.4f, 0.f, 1.f));
+			ActionOffset = (FVector(-9.f, 2.f, 3.f) * Back + FVector(34.f, -4.f, -2.f) * Drive) * (1.f - Out);
+			ActionRotation = (FRotator(12.f, 0.f, 0.f) * Back + FRotator(-10.f, 6.f, -20.f) * Drive) * (1.f - Out);
+		}
+		else
+		{
+			// Slash: cock to the right, sweep across to the left, return.
+			const float Cock = FMath::SmoothStep(0.f, 1.f, FMath::Clamp(T / 0.08f, 0.f, 1.f));
+			const float Sweep = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.08f) / 0.14f, 0.f, 1.f));
+			const float Out = FMath::SmoothStep(0.f, 1.f, FMath::Clamp((T - 0.24f) / 0.2f, 0.f, 1.f));
+			const FVector From(4.f, 12.f, 6.f);
+			const FVector To(16.f, -22.f, -6.f);
+			ActionOffset = FMath::Lerp(From * Cock, To, Sweep) * (1.f - Out);
+			ActionRotation = FMath::Lerp(FRotator(10.f, 30.f, 40.f) * Cock, FRotator(-6.f, -55.f, -35.f), Sweep) * (1.f - Out);
+		}
+	}
+	else if (ViewThrowTime >= 0.f)
 	{
 		// Overarm throw: pull back and up, whip forward, hand drops away.
 		const float T = ViewThrowTime;
@@ -251,7 +284,13 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 		// (model = MeshInHand * socket  =>  socket = MeshInHand^-1 * model).
 		const FTransform GripWorld = Model->GetMeshInHand().Inverse() * ModelWorld;
 		const FTransform GripCS = GripWorld.GetRelativeTransform(MeshWorld);
-		const FVector SupportCS = MeshWorld.InverseTransformPosition(ModelWorld.TransformPosition(Model->Support));
+		// One-handed (knife, grenades): the left hand rests low and to the side,
+		// below the frame, instead of reaching for a forend that is not there.
+		const FVector RestCamera(12.f, -26.f, -58.f);
+		const FVector SupportWorld = Model->bOneHanded
+			? FirstPersonCamera->GetComponentTransform().TransformPosition(RestCamera)
+			: ModelWorld.TransformPosition(Model->Support);
+		const FVector SupportCS = MeshWorld.InverseTransformPosition(SupportWorld);
 		Arms->SetFirstPersonHands(bAlive, Socket->GetSocketLocalTransform(), GripCS, SupportCS);
 	}
 }

@@ -34,6 +34,13 @@ UCSAudioSettings::UCSAudioSettings()
 	GrenadeExplode = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Explode"));
 	GrenadeBounce = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Bounce"));
 	GrenadePin = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Grenade_Pin"));
+	// v2.0 (stand-ins from generate_audio.py until recordings replace them)
+	FlashbangExplode = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Flashbang_Explode"));
+	FlashbangRing = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Flashbang_Ring"));
+	KnifeSwing = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Knife_Swing"));
+	KnifeHitBody = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Knife_HitBody"));
+	KnifeHitWall = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_Knife_HitWall"));
+	AmmoMachineBuy = At<USoundBase>(TEXT("/Game/Audio/Weapons/S_AmmoMachine_Buy"));
 	BulletImpact = At<USoundBase>(TEXT("/Game/Audio/Impacts/S_Impact_Surface"));
 	BodyHit = At<USoundBase>(TEXT("/Game/Audio/Impacts/S_Impact_Body"));
 	Death = At<USoundBase>(TEXT("/Game/Audio/Player/S_Death"));

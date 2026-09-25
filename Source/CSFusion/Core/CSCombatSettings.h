@@ -26,16 +26,6 @@ public:
 
 	static const UCSCombatSettings* Get() { return GetDefault<UCSCombatSettings>(); }
 
-	/**
-	 * The starter pistol.
-	 *
-	 * Per the design it is NOT an inventory item: every player always has it,
-	 * it is never dropped on death or disconnect, it cannot be taken, and it
-	 * is restored on respawn. Stage 3 inventory never sees this asset.
-	 */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Weapons")
-	TSoftObjectPtr<UCSWeaponDefinition> StarterWeapon;
-
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Player", meta = (ClampMin = "1.0"))
 	float MaxHealth = 100.f;
 
@@ -84,7 +74,7 @@ public:
 	// --- v1.1 grenade ---
 
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
-	float GrenadeFuseSeconds = 2.2f;
+	float GrenadeFuseSeconds = 1.6f;
 
 	/** Throw speed along the view, cm/s (plus a little lift and the thrower's own motion). */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
@@ -100,4 +90,17 @@ public:
 	/** Seconds between two throws by one player (the authority enforces it). */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Grenade")
 	float GrenadeThrowInterval = 0.9f;
+
+	// --- v2.0 flashbang ---
+
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Flashbang")
+	float FlashFuseSeconds = 1.5f;
+
+	/** Beyond this distance a flashbang does nothing. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Flashbang", meta = (ClampMin = "100.0"))
+	float FlashRadius = 2200.f;
+
+	/** Blindness from a flash right in the face. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Flashbang", meta = (ClampMin = "0.5"))
+	float FlashMaxSeconds = 4.5f;
 };

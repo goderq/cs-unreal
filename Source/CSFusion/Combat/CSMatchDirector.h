@@ -82,10 +82,6 @@ struct CSFUSION_API FCSPlayerCombatRecord
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
 	int32 Deaths = 0;
 
-	/** Rounds left in the starter pistol's magazine. */
-	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
-	int32 StarterRoundsInMag = 0;
-
 	/** Fusion network time of the last accepted shot. Fire-rate check reads this. */
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
 	double LastFireNetworkTime = 0.0;
@@ -110,7 +106,7 @@ struct CSFUSION_API FCSPlayerCombatRecord
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
 	int32 RespawnCounter = 0;
 
-	/** Which weapon the running reload belongs to: INDEX_NONE = starter pistol, else an inventory slot. */
+	/** Which loadout slot the running reload belongs to (INDEX_NONE = none). */
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Combat")
 	int32 ReloadSlot = INDEX_NONE;
 
@@ -154,20 +150,23 @@ struct FCSLoadoutView
 {
 	const UCSWeaponDefinition* Weapon = nullptr;
 
-	/** INDEX_NONE = starter pistol, otherwise the inventory slot. */
+	/** Loadout slot in hand (CSLoadout::Primary..Flash), INDEX_NONE if nothing. */
 	int32 Slot = INDEX_NONE;
 
-	/** v1.1: a grenade stack is in hand (Weapon is its presentation stand-in; RoundsInMag = how many). */
+	/** A grenade stack is in hand (Weapon is its presentation stand-in; RoundsInMag = how many). */
 	bool bGrenade = false;
+
+	/** The knife is in hand: no ammunition, melee instead of shots. */
+	bool bKnife = false;
 
 	int32 RoundsInMag = 0;
 
-	/** Rounds available to reload from. -1 means unlimited (starter pistol). */
+	/** Spare rounds for the weapon in hand. */
 	int32 Reserve = 0;
 
 	bool bReloading = false;
 
-	bool IsStarter() const { return Slot == INDEX_NONE; }
+	bool IsFirearm() const { return Weapon && !bGrenade && !bKnife; }
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FCSPlayerKilled, int32, VictimId, int32, KillerId, ECSHitZone, Zone);
@@ -222,9 +221,6 @@ public:
 	float GetArmor(int32 PlayerId) const;
 
 	UFUNCTION(BlueprintPure, Category = "CS|Combat")
-	int32 GetStarterRoundsInMag(int32 PlayerId) const;
-
-	UFUNCTION(BlueprintPure, Category = "CS|Combat")
 	const TArray<FCSPlayerCombatRecord>& GetAllRecords() const { return Records; }
 
 	// --- v1.1 modes: reads (every peer) --------------------------------------
@@ -251,8 +247,22 @@ public:
 	/** v1.2 accounts: the authority remembers who is signed in, for the match report. */
 	void NoteIdentity(int32 PlayerId, const FString& ProfileId);
 	FString GetProfileIdFor(int32 PlayerId) const;
-	/** Validates everything (shop open, money, room) and delivers the item. */
+	/** Validates everything (shop open, money) and delivers the item. */
 	ECSBuyResult TryBuy(int32 PlayerId, int32 ShopIndex);
+	/** v2.0 ammo machine: tops up the reserves of both guns for AmmoMachinePrice. */
+	ECSBuyResult TryBuyAmmo(int32 PlayerId, const class ACSAmmoMachine* Machine, const FVector& PawnLocation);
+	/**
+	 * v2.0: puts an item into its loadout slot. Whatever gun occupied that slot
+	 * is dropped at the player's feet first; knives and grenades just fill up.
+	 * Firearms come with the given rounds (INDEX_NONE = full magazine / full reserve).
+	 */
+	bool GiveItem(int32 PlayerId, int32 ItemIndex, bool bEquip, int32 AmmoInMag = INDEX_NONE, int32 Reserve = INDEX_NONE);
+	/**
+	 * v2.0 knife: validates a swing (knife in hand, alive, swing rate, origin
+	 * near the pawn) and stamps its time. The pawn then resolves what the blade
+	 * hits and calls ApplyDamage - see ACSCharacter::RpcRequestMelee_Receive.
+	 */
+	bool AcceptMelee(int32 PlayerId, bool bHeavy, const FVector& ClaimedOrigin, const FVector& AuthoritativeOrigin);
 	/** Rounds modes: everyone back to life at their team's spawn, buy window open. */
 	void StartNewRound();
 	/** Match restart: scores, money, inventories, respawn everyone. */
@@ -267,12 +277,17 @@ public:
 	void ExplodeGrenade(class ACSGrenade* Grenade);
 
 	SEND_FUSIONRPC(TargetAllClients)
-	void RpcGrenadeThrown(int32 Serial, int32 ThrowerId, FVector Origin, FVector Velocity);
-	void RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, FVector Origin, FVector Velocity);
+	void RpcGrenadeThrown(int32 Serial, int32 ThrowerId, int32 Type, FVector Origin, FVector Velocity);
+	void RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, int32 Type, FVector Origin, FVector Velocity);
 
 	SEND_FUSIONRPC(TargetAllClients)
-	void RpcGrenadeExploded(int32 Serial, FVector Location);
-	void RpcGrenadeExploded_Receive(int32 Serial, FVector Location);
+	void RpcGrenadeExploded(int32 Serial, int32 Type, FVector Location);
+	void RpcGrenadeExploded_Receive(int32 Serial, int32 Type, FVector Location);
+
+	/** v2.0 flashbang: how blinded a viewer at Eye looking along Forward is (0..1), and for how long. */
+	static float ComputeFlashStrength(const UWorld* World, const FVector& Center, const FVector& Eye, const FVector& Forward, const AActor* Ignore, float& OutSeconds);
+	/** Authority: bots cannot see or shoot until this network time. */
+	bool IsBlinded(int32 PlayerId) const;
 
 	// --- Authority-only writes ---------------------------------------------
 
@@ -294,11 +309,14 @@ public:
 	void RemovePlayer(int32 PlayerId, ECSDeathReason Reason);
 
 	/**
-	 * Turns every item in a player's inventory into world pickups scattered
-	 * around Where, and empties the inventory. The starter pistol is never
-	 * involved - it is not in the inventory. Returns the number of pickups.
+	 * Empties a player's loadout and turns the guns in it (primary and pistol,
+	 * with their rounds) into world pickups around Where. Grenades and the
+	 * knife are not dropped. Returns the number of pickups.
 	 */
 	int32 DropInventoryAsLoot(int32 PlayerId, const FVector& Where, ECSDeathReason Reason);
+
+	/** Spawns one dropped weapon (authority). */
+	class ACSWorldPickup* SpawnDroppedItem(const struct FCSInventorySlot& Item, const FVector& Where, const FVector& FlyFrom);
 
 	/** The pawn of a player, by Fusion ownership. Null if it does not exist. */
 	static class ACSCharacter* FindPawnForPlayer(const UObject* WorldContextObject, int32 PlayerId);
@@ -424,7 +442,9 @@ private:
 	TSet<int32> ProtectionArrived;
 
 	void BeginProtection(FCSPlayerCombatRecord& Record);
-	/** Full health, fresh starter magazine, alive at a start; bumps RespawnCounter so the owner teleports. */
+	/** Knife always, and the spawn pistol if the pistol slot is empty; the pistol goes to the hands. */
+	void GiveSpawnLoadout(int32 PlayerId);
+	/** Full health, spawn loadout, alive at a start; bumps RespawnCounter so the owner teleports. */
 	void ResetLife(FCSPlayerCombatRecord& Record, int32 SpawnPointIndex);
 	void WatchProtection(FCSPlayerCombatRecord& Record, const class ACSCharacter* Pawn);
 
@@ -447,6 +467,10 @@ private:
 	FString CombatWeaponOverride;
 	int32 NextGrenadeSerial = 1;
 	TMap<int32, double> LastThrowTime;
+	TMap<int32, double> LastMeleeTime;
+	TMap<int32, double> LastAmmoBuyTime;
+	/** Authority: bots blinded by a flashbang, until this network time. */
+	TMap<int32, double> BlindedUntil;
 	/** Authority only: Photon player id -> Supabase profile id (empty for bots and guests). */
 	TMap<int32, FString> ProfileIds;
 };

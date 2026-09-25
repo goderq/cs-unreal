@@ -32,13 +32,13 @@ $EditorCmd = Join-Path $EngineDir "Binaries\Win64\UnrealEditor-Cmd.exe"
 # exits, so stopping the launcher would leave the game running. Start it directly.
 $GameExe = Join-Path $Root "Build\Development\Windows\CSFusion\Binaries\Win64\CSFusion.exe"
 $LogDir = if ($Packaged) { Join-Path $Root "Build\Development\Windows\CSFusion\Saved\Logs" } else { Join-Path $Root "Saved\Logs" }
-$Map = "/Game/Maps/Lvl_Warehouse"
+$Map = "/Game/Maps/Lvl_Depot"
 $FailPattern = "BROKEN|NOT STOPPED|STILL BLOCKED|MISSING|NOT DETECTED|no frames"
 
 # Name, extra flags, regex of the LAST result line, timeout seconds.
 $Suites = @(
     @{ Name = "input";      Flags = "-cstestinput";            Done = "FIRE TEST RESULT";              Timeout = 60 },
-    @{ Name = "loot";       Flags = "-cstestloot";             Done = "LOOT TEST RESULT: drop";        Timeout = 70 },
+    @{ Name = "loadout";    Flags = "-cstestloot";             Done = "LOADOUT TEST: done";            Timeout = 90 },
     @{ Name = "doubledrop"; Flags = "-cstestdoubledrop";       Done = "DOUBLE DROP TEST RESULT";       Timeout = 60 },
     @{ Name = "ui";         Flags = "-cstestui";               Done = "UI TEST RESULT: combat HUD";    Timeout = 80 },
     @{ Name = "bots";       Flags = "-bots=4 -cstestbots";     Done = "BOT TEST RESULT";               Timeout = 150 },
@@ -68,7 +68,7 @@ function Start-Client([string]$ClientArgs, [string]$LogName, [string]$StartMap =
     # no spawn protection. The v1.1 mode suites (-cstestmodes*) run the real rules.
     # Self-tests cannot sign in to Epic, so they always run without an account.
     $ClientArgs = "-noaccount $ClientArgs"
-    if ($ClientArgs -notmatch "cstestmodes|cstestposes|cstestcomp") { $ClientArgs = "-mapweapons -nospawnprotection $ClientArgs" }
+    if ($ClientArgs -notmatch "cstestmodes|cstestposes|cstestcomp") { $ClientArgs = "-nospawnprotection $ClientArgs" }
     if ($Packaged) {
         return Start-Process -FilePath $GameExe -ArgumentList "$StartMap -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
     }

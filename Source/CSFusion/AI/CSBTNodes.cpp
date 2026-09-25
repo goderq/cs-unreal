@@ -16,6 +16,8 @@
 #include "Items/CSItemSettings.h"
 #include "NavigationSystem.h"
 #include "Navigation/PathFollowingComponent.h"
+#include "Items/CSShopSettings.h"
+#include "Pickups/CSAmmoMachine.h"
 #include "Pickups/CSWorldPickup.h"
 #include "Weapons/CSWeaponDefinition.h"
 
@@ -43,15 +45,11 @@ namespace
 		return (Item && Item->IsWeapon()) ? Item->Weapon.LoadSynchronous() : nullptr;
 	}
 
-	/** Rounds available to reload the weapon in this inventory slot. */
-	int32 ReserveFor(const ACSPlayerInventory* Inventory, const UCSItemDefinition* WeaponItem)
+	/** Rounds a gun slot can still shoot: loaded plus spare. */
+	int32 RoundsLeft(const ACSPlayerInventory* Inventory, int32 Slot)
 	{
-		if (!Inventory || !WeaponItem || WeaponItem->AmmoItemId.IsNone())
-		{
-			return 0;
-		}
-		const int32 AmmoIndex = UCSItemSettings::Get()->FindItemIndex(WeaponItem->AmmoItemId);
-		return AmmoIndex == INDEX_NONE ? 0 : Inventory->CountItem(AmmoIndex);
+		FCSInventorySlot Data;
+		return (Inventory && Inventory->GetSlot(Slot, Data) && !Data.IsEmpty()) ? Data.AmmoInMag + Data.Reserve : 0;
 	}
 }
 
@@ -174,9 +172,33 @@ void UCSBTTask_Engage::TryFire(ACSBotController* Controller, ACSCharacter* Bot, 
 		return;
 	}
 
+	// A flashbang leaves it blind: no shooting until it wears off.
+	if (Director->IsBlinded(Bot->GetOwningPlayerId()))
+	{
+		return;
+	}
+
 	const FCSLoadoutView Loadout = Director->GetLoadout(Bot->GetOwningPlayerId());
 	if (!Loadout.Weapon || Loadout.bReloading || Loadout.bGrenade)
 	{
+		return;
+	}
+	if (Loadout.bKnife)
+	{
+		// Only a knife left: swing once the target is within reach (the
+		// movement closes in, see UpdateMovement). A stab from behind.
+		const float Distance = FVector::Dist(Bot->GetActorLocation(), Target->GetActorLocation());
+		if (Distance > Loadout.Weapon->MeleeRange + 45.f)
+		{
+			return;
+		}
+		FVector Eye;
+		FVector Unused;
+		Bot->GetAimRay(Eye, Unused);
+		const FVector ToTarget = (Target->GetActorLocation() - Eye).GetSafeNormal();
+		const bool bBehind = FVector::DotProduct(Target->GetActorForwardVector(), ToTarget) > 0.5f;
+		Bot->BotMelee(Eye, ToTarget, /*bHeavy*/ bBehind);
+		NextFireTime = T + (bBehind ? Loadout.Weapon->MeleeHeavyInterval : Loadout.Weapon->MeleeInterval) * FMath::FRandRange(1.05f, 1.4f);
 		return;
 	}
 	if (Loadout.RoundsInMag <= 0)
@@ -237,17 +259,9 @@ bool UCSBTTask_Engage::TryThrowGrenade(ACSBotController* Controller, ACSCharacte
 	{
 		return false;
 	}
-	int32 GrenadeSlot = INDEX_NONE;
-	const TArray<FCSInventorySlot>& Slots = Inventory->GetSlots();
-	for (int32 i = 0; i < Slots.Num(); ++i)
-	{
-		const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(Slots[i].ItemIndex);
-		if (!Slots[i].IsEmpty() && Item && Item->ItemType == ECSItemType::Grenade)
-		{
-			GrenadeSlot = i;
-			break;
-		}
-	}
+	// HE first; a flashbang when that is all there is.
+	const int32 GrenadeSlot = Inventory->HasItemInSlot(CSLoadout::Frag) ? CSLoadout::Frag
+		: (Inventory->HasItemInSlot(CSLoadout::Flash) ? CSLoadout::Flash : INDEX_NONE);
 	if (GrenadeSlot == INDEX_NONE)
 	{
 		return false;
@@ -264,8 +278,8 @@ bool UCSBTTask_Engage::TryThrowGrenade(ACSBotController* Controller, ACSCharacte
 	Lob.Pitch += FMath::Clamp(6.f + Distance / 130.f, 8.f, 24.f);
 	const bool bThrown = Director->TryThrowGrenade(Id, Eye, Lob.Vector(), Eye, Bot->GetVelocity());
 
-	// Back to the gun (TryThrowGrenade already switched to the pistol if that was the last one).
-	if (Previous != GrenadeSlot && Previous != INDEX_NONE)
+	// Back to the gun (TryThrowGrenade already switched away if that was the last one).
+	if (Previous != GrenadeSlot)
 	{
 		Inventory->SetEquippedSlot(Previous);
 	}
@@ -290,7 +304,15 @@ void UCSBTTask_Engage::UpdateMovement(ACSBotController* Controller, ACSCharacter
 	const FVector Forward = ToTarget.GetSafeNormal2D();
 	const FVector Side = FVector::CrossProduct(FVector::UpVector, Forward) * (FMath::RandBool() ? 1.f : -1.f);
 
-	// Close in when far, back off when too close, strafe otherwise.
+	// Close in when far, back off when too close, strafe otherwise. With only
+	// the knife in hand: straight at the target.
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(Bot);
+	if (Director && Director->GetLoadout(Bot->GetOwningPlayerId()).bKnife)
+	{
+		NextMoveTime = T + 0.35;
+		Controller->MoveToLocation(Target->GetActorLocation() - Forward * 60.f, 20.f, /*bStopOnOverlap*/ false);
+		return;
+	}
 	FVector Offset = Side * FMath::FRandRange(150.f, 350.f);
 	if (Distance > 1800.f)
 	{
@@ -486,10 +508,18 @@ EBTNodeResult::Type UCSBTTask_PickupLoot::ExecuteTask(UBehaviorTreeComponent& Ow
 	ACSBotController* Controller = BotController(OwnerComp);
 	ACSCharacter* Bot = Controller ? Controller->GetBot() : nullptr;
 	UBlackboardComponent* BB = OwnerComp.GetBlackboardComponent();
-	ACSWorldPickup* Pickup = BB ? Cast<ACSWorldPickup>(BB->GetValueAsObject(CSBotBehavior::KeyLootTarget)) : nullptr;
+	UObject* Target = BB ? BB->GetValueAsObject(CSBotBehavior::KeyLootTarget) : nullptr;
+	ACSWorldPickup* Pickup = Cast<ACSWorldPickup>(Target);
 	if (BB)
 	{
 		BB->ClearValue(CSBotBehavior::KeyLootTarget);
+	}
+	// v2.0: an ammo machine is a "loot" target too; buying is its pickup.
+	if (ACSAmmoMachine* Machine = Cast<ACSAmmoMachine>(Target); Machine && Bot)
+	{
+		Bot->BotBuyAmmo(Machine);
+		Controller->IgnorePickup(Machine, 30.f);
+		return EBTNodeResult::Succeeded;
 	}
 	if (!Bot || !Pickup || !Pickup->IsAvailable())
 	{
@@ -604,87 +634,50 @@ void UCSBTService_BotBrain::ManageInventory(ACSBotController* Controller, ACSCha
 	const int32 Id = Bot->GetOwningPlayerId();
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(Bot);
 	const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(Bot, Id);
-	FCSPlayerCombatRecord Record;
-	if (!Director || !Inventory || !Director->GetRecord(Id, Record))
+	if (!Director || !Inventory)
 	{
 		return;
 	}
-	const UCSItemSettings* Items = UCSItemSettings::Get();
 	const FCSLoadoutView Loadout = Director->GetLoadout(Id);
 
-	// Best usable weapon: highest damage per second that has rounds to shoot.
-	int32 BestSlot = INDEX_NONE;
-	float BestScore = WeaponScore(UCSCombatSettings::Get()->StarterWeapon.LoadSynchronous());
-	int32 MedkitSlot = INDEX_NONE;
-	int32 ArmorSlot = INDEX_NONE;
-	const TArray<FCSInventorySlot>& Slots = Inventory->GetSlots();
-	for (int32 i = 0; i < Slots.Num(); ++i)
+	// Best gun that can still shoot: the higher damage per second of the
+	// primary and the pistol. Nothing left in either means the knife.
+	int32 BestSlot = CSLoadout::Knife;
+	float BestScore = 0.f;
+	for (const int32 Slot : { CSLoadout::Primary, CSLoadout::Pistol })
 	{
-		if (Slots[i].IsEmpty())
+		const UCSWeaponDefinition* Weapon = ItemWeapon(Inventory->GetItemInSlot(Slot));
+		if (Weapon && Weapon->IsFirearm() && RoundsLeft(Inventory, Slot) > 0 && WeaponScore(Weapon) > BestScore)
 		{
-			continue;
-		}
-		const UCSItemDefinition* Item = Items->GetItem(Slots[i].ItemIndex);
-		if (!Item)
-		{
-			continue;
-		}
-		if (const UCSWeaponDefinition* Weapon = ItemWeapon(Item))
-		{
-			const bool bCanShoot = Slots[i].AmmoInMag > 0 || ReserveFor(Inventory, Item) > 0;
-			const float Score = WeaponScore(Weapon);
-			if (bCanShoot && Score > BestScore)
-			{
-				BestScore = Score;
-				BestSlot = i;
-			}
-		}
-		else if (Item->ItemType == ECSItemType::Medkit)
-		{
-			MedkitSlot = i;
-		}
-		else if (Item->ItemType == ECSItemType::Armor)
-		{
-			ArmorSlot = i;
+			BestScore = WeaponScore(Weapon);
+			BestSlot = Slot;
 		}
 	}
 
-	if (Inventory->GetEquippedSlot() != BestSlot && !Loadout.bReloading)
+	// A grenade in hand is only held for the moment of a throw.
+	const bool bHoldingGrenade = CSLoadout::IsGrenadeSlot(Inventory->GetEquippedSlot());
+	if ((Inventory->GetEquippedSlot() != BestSlot || bHoldingGrenade) && !Loadout.bReloading)
 	{
 		Bot->BotSelectSlot(BestSlot);
 		LastInventoryAction = T;
 		return;
 	}
 
-	if (!bInCombat)
+	// Top up the magazine between fights.
+	if (!bInCombat && Loadout.IsFirearm() && !Loadout.bReloading
+		&& Loadout.RoundsInMag < Loadout.Weapon->MagazineSize / 2 && Loadout.Reserve > 0)
 	{
-		if (Record.Health < 65.f && MedkitSlot != INDEX_NONE)
-		{
-			Bot->BotSelectSlot(MedkitSlot);
-			LastInventoryAction = T;
-			return;
-		}
-		if (Record.Armor < 50.f && ArmorSlot != INDEX_NONE)
-		{
-			Bot->BotSelectSlot(ArmorSlot);
-			LastInventoryAction = T;
-			return;
-		}
-		// Top up the magazine between fights.
-		if (Loadout.Weapon && !Loadout.bReloading && Loadout.RoundsInMag < Loadout.Weapon->MagazineSize / 2
-			&& (Loadout.Reserve != 0))
-		{
-			Bot->BotReload();
-			LastInventoryAction = T;
-		}
+		Bot->BotReload();
+		LastInventoryAction = T;
 	}
 }
 
 void UCSBTService_BotBrain::ChooseLoot(ACSBotController* Controller, ACSCharacter* Bot, UBlackboardComponent* BB)
 {
-	if (ACSWorldPickup* Current = Cast<ACSWorldPickup>(BB->GetValueAsObject(CSBotBehavior::KeyLootTarget)))
+	if (UObject* Current = BB->GetValueAsObject(CSBotBehavior::KeyLootTarget))
 	{
-		if (!Current->IsAvailable())
+		const ACSWorldPickup* Pickup = Cast<ACSWorldPickup>(Current);
+		if (Pickup && !Pickup->IsAvailable())
 		{
 			BB->ClearValue(CSBotBehavior::KeyLootTarget);
 		}
@@ -699,38 +692,38 @@ void UCSBTService_BotBrain::ChooseLoot(ACSBotController* Controller, ACSCharacte
 	{
 		return;
 	}
-	const UCSItemSettings* Items = UCSItemSettings::Get();
 
-	// What the bot carries decides what is worth a detour.
-	float CarriedBest = WeaponScore(Director->GetLoadout(Id).Weapon);
-	TSet<FName> WantedAmmo;
-	bool bHasMedkit = false;
-	bool bHasArmor = false;
-	bool bHasFreeSlot = false;
-	for (const FCSInventorySlot& Slot : Inventory->GetSlots())
+	// 1. Running low on rounds with money to spare: the nearest ammo machine.
+	bool bLow = false;
+	for (const int32 Slot : { CSLoadout::Primary, CSLoadout::Pistol })
 	{
-		if (Slot.IsEmpty())
+		const UCSWeaponDefinition* Weapon = ItemWeapon(Inventory->GetItemInSlot(Slot));
+		if (Weapon && Weapon->IsFirearm() && RoundsLeft(Inventory, Slot) < Weapon->MagazineSize * 2)
 		{
-			bHasFreeSlot = true;
-			continue;
+			bLow = true;
 		}
-		const UCSItemDefinition* Item = Items->GetItem(Slot.ItemIndex);
-		if (!Item)
+	}
+	if (bLow && Record.Money >= UCSShopSettings::Get()->AmmoMachinePrice)
+	{
+		ACSAmmoMachine* Nearest = nullptr;
+		float NearestDistance = 4500.f;
+		for (ACSAmmoMachine* Machine : ACSAmmoMachine::GetAllSorted(Bot))
 		{
-			continue;
-		}
-		if (const UCSWeaponDefinition* Weapon = ItemWeapon(Item))
-		{
-			CarriedBest = FMath::Max(CarriedBest, WeaponScore(Weapon));
-			if (ReserveFor(Inventory, Item) < Weapon->MagazineSize * 2)
+			const float Distance = FVector::Dist(Machine->GetActorLocation(), Bot->GetActorLocation());
+			if (Distance < NearestDistance && !Controller->IsPickupIgnored(Machine))
 			{
-				WantedAmmo.Add(Item->AmmoItemId);
+				NearestDistance = Distance;
+				Nearest = Machine;
 			}
 		}
-		bHasMedkit |= Item->ItemType == ECSItemType::Medkit;
-		bHasArmor |= Item->ItemType == ECSItemType::Armor;
+		if (Nearest)
+		{
+			BB->SetValueAsObject(CSBotBehavior::KeyLootTarget, Nearest);
+			return;
+		}
 	}
 
+	// 2. A better gun on the floor than the one carried in that slot.
 	ACSWorldPickup* Best = nullptr;
 	float BestDistance = 3000.f;
 	for (TActorIterator<ACSWorldPickup> It(Bot->GetWorld()); It; ++It)
@@ -741,29 +734,15 @@ void UCSBTService_BotBrain::ChooseLoot(ACSBotController* Controller, ACSCharacte
 			continue;
 		}
 		const UCSItemDefinition* Item = Pickup->GetItemDefinition();
-		if (!Item)
+		const UCSWeaponDefinition* Weapon = ItemWeapon(Item);
+		const int32 Slot = ACSPlayerInventory::SlotForItem(Item);
+		if (!Weapon || !CSLoadout::IsDroppable(Slot) || Pickup->GetAmmoInMag() + Pickup->GetReserve() <= 0)
 		{
 			continue;
 		}
-
-		bool bWanted = false;
-		if (const UCSWeaponDefinition* Weapon = ItemWeapon(Item))
-		{
-			bWanted = bHasFreeSlot && WeaponScore(Weapon) > CarriedBest * 1.1f;
-		}
-		else if (Item->ItemType == ECSItemType::Ammo)
-		{
-			bWanted = WantedAmmo.Contains(Item->ItemId);
-		}
-		else if (Item->ItemType == ECSItemType::Medkit)
-		{
-			bWanted = !bHasMedkit && (bHasFreeSlot || Record.Health < 100.f);
-		}
-		else if (Item->ItemType == ECSItemType::Armor)
-		{
-			bWanted = !bHasArmor && Record.Armor < 75.f;
-		}
-		if (!bWanted)
+		const UCSWeaponDefinition* Carried = ItemWeapon(Inventory->GetItemInSlot(Slot));
+		const float CarriedScore = (Carried && RoundsLeft(Inventory, Slot) > 0) ? WeaponScore(Carried) : 0.f;
+		if (WeaponScore(Weapon) <= CarriedScore * 1.1f)
 		{
 			continue;
 		}

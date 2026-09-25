@@ -12,8 +12,8 @@
 #include "Account/CSAccountSubsystem.h"
 #include "Core/CSModeSettings.h"
 #include "UI/CSUIStyle.h"
-#include "UI/SCSInventoryPanel.h"
 #include "UI/SCSSettingsPanel.h"
+#include "UI/SCSAdminPanel.h"
 #include "UI/SCSProfilePanel.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -91,12 +91,6 @@ void SCSMainMenu::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot()[ MakeBrowserPage() ]
 					+ SWidgetSwitcher::Slot()
 					[
-						SAssignNew(InventoryPanel, SCSInventoryPanel)
-						.WorldContext(WorldContext)
-						.ShowCloseButton(false)
-					]
-					+ SWidgetSwitcher::Slot()
-					[
 						SAssignNew(SettingsPanel, SCSSettingsPanel)
 						.WorldContext(WorldContext)
 						.OnClose_Lambda([this]() { ShowPage(EPage::Home); })
@@ -104,6 +98,11 @@ void SCSMainMenu::Construct(const FArguments& InArgs)
 					+ SWidgetSwitcher::Slot()
 					[
 						SAssignNew(ProfilePanel, SCSProfilePanel)
+						.WorldContext(WorldContext)
+					]
+					+ SWidgetSwitcher::Slot()
+					[
+						SAssignNew(AdminPanel, SCSAdminPanel)
 						.WorldContext(WorldContext)
 					]
 				]
@@ -241,7 +240,7 @@ TSharedRef<SWidget> SCSMainMenu::MakeNav()
 			SNew(SButton).IsFocusable(false)
 			.ButtonStyle(&CSUI::ButtonStyle(CSUI::EButtonKind::Normal))
 			.ContentPadding(FMargin(16.f, 12.f))
-			.ToolTipText(LOCTEXT("ProfileTip", "Profile: rename yourself and see the top players"))
+			.ToolTipText(LOCTEXT("ProfileTip", "Profile: your numbers and the top players"))
 			.OnClicked_Lambda([this]() { ShowPage(EPage::Profile); return FReply::Handled(); })
 			.Visibility_Lambda([this]()
 			{
@@ -289,8 +288,20 @@ TSharedRef<SWidget> SCSMainMenu::MakeNav()
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("JoinNav", "Join Session"), EPage::Join, true) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("BrowserNav", "Session Browser"), EPage::Browser, true) ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 10.f, 0.f, 0.f)[ Nav(LOCTEXT("Profile", "PROFILE"), EPage::Profile) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("Inventory", "INVENTORY"), EPage::Inventory) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("Settings", "SETTINGS"), EPage::Settings) ]
+		// v2.0: only for profiles with admin rights.
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SBox)
+			.Visibility_Lambda([this]()
+			{
+				const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(WorldContext.Get());
+				return (Account && Account->IsAdmin()) ? EVisibility::Visible : EVisibility::Collapsed;
+			})
+			[
+				Nav(LOCTEXT("Admin", "ADMIN"), EPage::Admin)
+			]
+		]
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			SNew(SButton).IsFocusable(false)
@@ -731,6 +742,10 @@ void SCSMainMenu::ShowPage(EPage Page)
 	else if (Page == EPage::Profile)
 	{
 		ProfilePanel->Refresh();
+	}
+	else if (Page == EPage::Admin)
+	{
+		AdminPanel->Refresh();
 	}
 	else if (Page == EPage::Create)
 	{

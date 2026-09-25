@@ -121,6 +121,11 @@ bool ACSBotController::CanSee(const AActor* Target) const
 	{
 		return false;
 	}
+	// Blinded by a flashbang: sees nothing until it wears off.
+	if (const ACSMatchDirector* Director = ACSMatchDirector::Get(this); Director && GetBot() && Director->IsBlinded(GetBot()->GetOwningPlayerId()))
+	{
+		return false;
+	}
 	TArray<AActor*> Seen;
 	Perception->GetCurrentlyPerceivedActors(UAISense_Sight::StaticClass(), Seen);
 	return Seen.Contains(Target);
@@ -130,6 +135,10 @@ ACSCharacter* ACSBotController::FindBestVisibleEnemy() const
 {
 	const APawn* Self = GetPawn();
 	if (!Self || !Perception)
+	{
+		return nullptr;
+	}
+	if (const ACSMatchDirector* Blind = ACSMatchDirector::Get(this); Blind && GetBot() && Blind->IsBlinded(GetBot()->GetOwningPlayerId()))
 	{
 		return nullptr;
 	}
@@ -414,16 +423,9 @@ void ACSBotController::TryShopping()
 		return I != INDEX_NONE && Director->TryBuy(Id, I) == ECSBuyResult::Ok;
 	};
 
-	// Already carrying a real weapon (a survivor in 5 vs 5)? Then only extras.
-	bool bHasWeapon = false;
-	if (const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Id))
-	{
-		for (const FCSInventorySlot& Slot : Inventory->GetSlots())
-		{
-			const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(Slot.ItemIndex);
-			bHasWeapon |= !Slot.IsEmpty() && Item && Item->IsWeapon();
-		}
-	}
+	// Already carrying a primary (a survivor in 5 vs 5)? Then only extras.
+	const ACSPlayerInventory* Carried = ACSPlayerInventory::Find(this, Id);
+	const bool bHasWeapon = Carried && Carried->HasItemInSlot(CSLoadout::Primary);
 
 	if (!bHasWeapon)
 	{
@@ -453,19 +455,14 @@ void ACSBotController::TryShopping()
 	{
 		Buy(TEXT("grenade"));
 	}
-	// Whatever was bought, the gun goes in hand; grenades are thrown on purpose.
+	if (Tuning.GrenadeChance > 0.f && Money() >= 200 && FMath::FRand() < 0.35f)
+	{
+		Buy(TEXT("flashbang"));
+	}
+	// Whatever was bought, the best gun goes in hand; grenades are thrown on purpose.
 	if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Id))
 	{
-		const TArray<FCSInventorySlot>& Slots = Inventory->GetSlots();
-		for (int32 i = 0; i < Slots.Num(); ++i)
-		{
-			const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(Slots[i].ItemIndex);
-			if (!Slots[i].IsEmpty() && Item && Item->IsWeapon())
-			{
-				Inventory->SetEquippedSlot(i);
-				break;
-			}
-		}
+		Inventory->SetEquippedSlot(Inventory->GetBestWeaponSlot());
 	}
 	UE_LOG(LogCSAI, Log, TEXT("Bot %d shopped, $%d left."), Id, Money());
 }

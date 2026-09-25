@@ -55,7 +55,16 @@ namespace
 	{
 		const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(Context, PlayerId);
 		const int32 Index = UCSItemSettings::Get()->FindItemIndex(ItemId);
-		return (Inventory && Index != INDEX_NONE) ? Inventory->CountItem(Index) : 0;
+		if (!Inventory || Index == INDEX_NONE)
+		{
+			return 0;
+		}
+		int32 Total = 0;
+		for (const FCSInventorySlot& Slot : Inventory->GetSlots())
+		{
+			Total += (!Slot.IsEmpty() && Slot.ItemIndex == Index) ? Slot.Count : 0;
+		}
+		return Total;
 	}
 
 	int32 SlotOf(const UObject* Context, int32 PlayerId, FName ItemId)

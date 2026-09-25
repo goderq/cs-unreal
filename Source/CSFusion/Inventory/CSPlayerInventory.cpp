@@ -56,6 +56,23 @@ ACSPlayerInventory* ACSPlayerInventory::Find(const UObject* WorldContextObject, 
 	return nullptr;
 }
 
+int32 ACSPlayerInventory::SlotForItem(const UCSItemDefinition* Item)
+{
+	if (!Item)
+	{
+		return INDEX_NONE;
+	}
+	switch (Item->LoadoutRole)
+	{
+	case ECSLoadoutRole::Primary:	return CSLoadout::Primary;
+	case ECSLoadoutRole::Pistol:	return CSLoadout::Pistol;
+	case ECSLoadoutRole::Knife:		return CSLoadout::Knife;
+	case ECSLoadoutRole::Frag:		return CSLoadout::Frag;
+	case ECSLoadoutRole::Flash:		return CSLoadout::Flash;
+	default:						return INDEX_NONE;
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 // ---------------------------------------------------------------------------
@@ -70,19 +87,6 @@ bool ACSPlayerInventory::GetSlot(int32 Slot, FCSInventorySlot& OutSlot) const
 	return true;
 }
 
-int32 ACSPlayerInventory::CountItem(int32 ItemIndex) const
-{
-	int32 Total = 0;
-	for (const FCSInventorySlot& Slot : Slots)
-	{
-		if (Slot.ItemIndex == ItemIndex)
-		{
-			Total += Slot.Count;
-		}
-	}
-	return Total;
-}
-
 const UCSItemDefinition* ACSPlayerInventory::GetItemInSlot(int32 Slot) const
 {
 	if (!Slots.IsValidIndex(Slot) || Slots[Slot].IsEmpty())
@@ -95,29 +99,19 @@ const UCSItemDefinition* ACSPlayerInventory::GetItemInSlot(int32 Slot) const
 const UCSWeaponDefinition* ACSPlayerInventory::GetEquippedWeapon() const
 {
 	const UCSItemDefinition* Item = GetItemInSlot(EquippedSlot);
-	return (Item && Item->IsWeapon()) ? Item->Weapon.LoadSynchronous() : nullptr;
+	return Item ? Item->Weapon.LoadSynchronous() : nullptr;
 }
 
-bool ACSPlayerInventory::CanAccept(int32 ItemIndex, int32 Count) const
+int32 ACSPlayerInventory::GetBestWeaponSlot() const
 {
-	const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(ItemIndex);
-	if (!Item || Count <= 0)
+	for (const int32 Slot : { CSLoadout::Primary, CSLoadout::Pistol, CSLoadout::Knife })
 	{
-		return false;
-	}
-
-	for (const FCSInventorySlot& Slot : Slots)
-	{
-		if (Slot.IsEmpty())
+		if (HasItemInSlot(Slot))
 		{
-			return true;
-		}
-		if (Slot.ItemIndex == ItemIndex && Slot.Count < Item->GetMaxStack())
-		{
-			return true;
+			return Slot;
 		}
 	}
-	return false;
+	return CSLoadout::Knife;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,70 +123,64 @@ void ACSPlayerInventory::InitializeFor(int32 PlayerId)
 	CS_AUTHORITY_ONLY(this);
 
 	OwnerPlayerId = PlayerId;
-	Slots.SetNum(UCSItemSettings::Get()->InventorySlots);
+	Slots.SetNum(CSLoadout::NumSlots);
 	for (FCSInventorySlot& Slot : Slots)
 	{
 		Slot.Clear();
 	}
-	EquippedSlot = INDEX_NONE;
+	EquippedSlot = CSLoadout::Knife;
 	MarkChanged();
 }
 
-int32 ACSPlayerInventory::AddItem(int32 ItemIndex, int32 Count, int32 AmmoInMag)
+int32 ACSPlayerInventory::AddItem(int32 ItemIndex, int32 Count, int32 AmmoInMag, int32 Reserve)
 {
 	CS_AUTHORITY_ONLY_RET(this, Count);
 
 	const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(ItemIndex);
-	if (!Item || Count <= 0)
+	const int32 Slot = SlotForItem(Item);
+	if (!Item || Count <= 0 || !Slots.IsValidIndex(Slot))
 	{
 		return Count;
 	}
 
-	const int32 MaxStack = Item->GetMaxStack();
-	int32 Remaining = Count;
+	FCSInventorySlot& Target = Slots[Slot];
 
-	// Top up existing stacks first.
-	if (Item->bStackable)
+	// Grenades stack in their own slot; everything else is one per slot and
+	// only goes into an empty one.
+	if (CSLoadout::IsGrenadeSlot(Slot))
 	{
-		for (FCSInventorySlot& Slot : Slots)
+		if (!Target.IsEmpty() && Target.ItemIndex != ItemIndex)
 		{
-			if (Remaining <= 0)
-			{
-				break;
-			}
-			if (Slot.ItemIndex == ItemIndex && Slot.Count < MaxStack)
-			{
-				const int32 Added = FMath::Min(MaxStack - Slot.Count, Remaining);
-				Slot.Count += Added;
-				Remaining -= Added;
-			}
+			return Count;
 		}
-	}
-
-	// Then empty slots.
-	for (FCSInventorySlot& Slot : Slots)
-	{
-		if (Remaining <= 0)
+		const int32 Room = Item->GetMaxStack() - (Target.IsEmpty() ? 0 : Target.Count);
+		const int32 Added = FMath::Clamp(Count, 0, Room);
+		if (Added <= 0)
 		{
-			break;
+			return Count;
 		}
-		if (Slot.IsEmpty())
-		{
-			const int32 Added = FMath::Min(MaxStack, Remaining);
-			Slot.ItemIndex = ItemIndex;
-			Slot.Count = Added;
-			Slot.AmmoInMag = Item->IsWeapon() ? AmmoInMag : 0;
-			Remaining -= Added;
-		}
-	}
-
-	if (Remaining != Count)
-	{
-		UE_LOG(LogCSInventory, Log, TEXT("Player %d +%d x %s (%d did not fit)"),
-			OwnerPlayerId, Count - Remaining, *Item->ItemId.ToString(), Remaining);
+		Target.ItemIndex = ItemIndex;
+		Target.Count = (Target.Count > 0 ? Target.Count : 0) + Added;
 		MarkChanged();
+		return Count - Added;
 	}
-	return Remaining;
+
+	if (!Target.IsEmpty())
+	{
+		return Count;
+	}
+
+	const UCSWeaponDefinition* Weapon = Item->Weapon.LoadSynchronous();
+	const bool bFirearm = Weapon && Weapon->IsFirearm();
+	Target.ItemIndex = ItemIndex;
+	Target.Count = 1;
+	Target.AmmoInMag = bFirearm ? FMath::Clamp(AmmoInMag, 0, Weapon->MagazineSize) : 0;
+	Target.Reserve = bFirearm ? FMath::Clamp(Reserve, 0, Weapon->ReserveAmmo) : 0;
+
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d slot %d <- %s (%d / %d)"),
+		OwnerPlayerId, Slot + 1, *Item->ItemId.ToString(), Target.AmmoInMag, Target.Reserve);
+	MarkChanged();
+	return Count - 1;
 }
 
 FCSInventorySlot ACSPlayerInventory::RemoveFromSlot(int32 Slot, int32 Count)
@@ -208,9 +196,8 @@ FCSInventorySlot ACSPlayerInventory::RemoveFromSlot(int32 Slot, int32 Count)
 	FCSInventorySlot& Source = Slots[Slot];
 	const int32 Taken = FMath::Min(Count, Source.Count);
 
-	Removed.ItemIndex = Source.ItemIndex;
+	Removed = Source;
 	Removed.Count = Taken;
-	Removed.AmmoInMag = Source.AmmoInMag;
 
 	Source.Count -= Taken;
 	if (Source.Count <= 0)
@@ -218,9 +205,8 @@ FCSInventorySlot ACSPlayerInventory::RemoveFromSlot(int32 Slot, int32 Count)
 		Source.Clear();
 		if (EquippedSlot == Slot)
 		{
-			// The weapon in hand is gone; fall back to the starter pistol,
-			// which by design can never be lost.
-			EquippedSlot = INDEX_NONE;
+			// What was in hand is gone: the next best thing comes up.
+			EquippedSlot = GetBestWeaponSlot();
 		}
 	}
 
@@ -228,35 +214,14 @@ FCSInventorySlot ACSPlayerInventory::RemoveFromSlot(int32 Slot, int32 Count)
 	return Removed;
 }
 
-int32 ACSPlayerInventory::ConsumeItem(int32 ItemIndex, int32 Count)
-{
-	CS_AUTHORITY_ONLY_RET(this, 0);
-
-	int32 Consumed = 0;
-	for (int32 i = 0; i < Slots.Num() && Consumed < Count; ++i)
-	{
-		if (Slots[i].ItemIndex == ItemIndex)
-		{
-			Consumed += RemoveFromSlot(i, Count - Consumed).Count;
-		}
-	}
-	return Consumed;
-}
-
 bool ACSPlayerInventory::SetEquippedSlot(int32 Slot)
 {
 	CS_AUTHORITY_ONLY_RET(this, false);
 
-	if (Slot != INDEX_NONE)
+	if (!HasItemInSlot(Slot))
 	{
-		const UCSItemDefinition* Item = GetItemInSlot(Slot);
-		// Weapons, and (v1.1) grenades, which are held and thrown.
-		if (!Item || (!Item->IsWeapon() && Item->ItemType != ECSItemType::Grenade))
-		{
-			return false;
-		}
+		return false;
 	}
-
 	if (EquippedSlot != Slot)
 	{
 		EquippedSlot = Slot;
@@ -265,13 +230,14 @@ bool ACSPlayerInventory::SetEquippedSlot(int32 Slot)
 	return true;
 }
 
-void ACSPlayerInventory::SetSlotAmmo(int32 Slot, int32 AmmoInMag)
+void ACSPlayerInventory::SetSlotAmmo(int32 Slot, int32 AmmoInMag, int32 Reserve)
 {
 	CS_AUTHORITY_ONLY(this);
 
-	if (Slots.IsValidIndex(Slot) && !Slots[Slot].IsEmpty())
+	if (HasItemInSlot(Slot))
 	{
 		Slots[Slot].AmmoInMag = FMath::Max(0, AmmoInMag);
+		Slots[Slot].Reserve = FMath::Max(0, Reserve);
 		MarkChanged();
 	}
 }
@@ -289,7 +255,7 @@ TArray<FCSInventorySlot> ACSPlayerInventory::TakeAll()
 			Slot.Clear();
 		}
 	}
-	EquippedSlot = INDEX_NONE;
+	EquippedSlot = CSLoadout::Knife;
 	MarkChanged();
 	return Taken;
 }

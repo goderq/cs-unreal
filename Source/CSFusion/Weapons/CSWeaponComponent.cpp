@@ -11,6 +11,8 @@
 #include "Core/CSLog.h"
 #include "Engine/World.h"
 #include "GameModes/CSGameState.h"
+#include "Items/CSItemDefinition.h"
+#include "Items/CSItemSettings.h"
 #include "Weapons/CSWeaponDefinition.h"
 
 UCSWeaponComponent::UCSWeaponComponent()
@@ -30,17 +32,18 @@ ACSMatchDirector* UCSWeaponComponent::GetDirector() const
 	return ACSMatchDirector::Get(this);
 }
 
-const UCSWeaponDefinition* UCSWeaponComponent::GetStarterWeapon() const
+const UCSWeaponDefinition* UCSWeaponComponent::GetKnifeWeapon() const
 {
-	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
-	return Settings ? Settings->StarterWeapon.LoadSynchronous() : nullptr;
+	const UCSItemSettings* Items = UCSItemSettings::Get();
+	const UCSItemDefinition* Knife = Items->GetItem(Items->FindItemIndex(Items->KnifeItem));
+	return Knife ? Knife->Weapon.LoadSynchronous() : nullptr;
 }
 
 const UCSWeaponDefinition* UCSWeaponComponent::GetActiveWeapon() const
 {
-	// The equipped inventory weapon if any, else the starter pistol, which is
-	// always available by design. Resolved from authoritative state, so the
-	// client and the authority agree on what is in hand.
+	// Whatever is in the equipped loadout slot, resolved from authoritative
+	// state so the client and the authority agree on what is in hand. Until the
+	// loadout has replicated the hands show the knife, which everybody carries.
 	if (OwnerCharacter)
 	{
 		if (const ACSMatchDirector* Director = GetDirector())
@@ -51,7 +54,7 @@ const UCSWeaponDefinition* UCSWeaponComponent::GetActiveWeapon() const
 			}
 		}
 	}
-	return GetStarterWeapon();
+	return GetKnifeWeapon();
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +68,13 @@ bool UCSWeaponComponent::IsAiming() const
 		return false;
 	}
 	const ACSMatchDirector* Director = GetDirector();
-	return !(Director && Director->GetLoadout(OwnerCharacter->GetOwningPlayerId()).bGrenade);
+	if (!Director)
+	{
+		return true;
+	}
+	// Nothing to aim with a grenade or a knife (right click stabs instead).
+	const FCSLoadoutView Loadout = Director->GetLoadout(OwnerCharacter->GetOwningPlayerId());
+	return !Loadout.bGrenade && !Loadout.bKnife;
 }
 
 void UCSWeaponComponent::StartFire()
@@ -122,9 +131,7 @@ void UCSWeaponComponent::TryFireOnce()
 	const UCSWeaponDefinition* Weapon = GetActiveWeapon();
 	if (!Weapon)
 	{
-		UE_LOG(LogCSCombat, Warning,
-			TEXT("No starter weapon configured. Set CS Combat > StarterWeapon in Project Settings."));
-		return;
+		return; // loadout not replicated yet
 	}
 
 	// Local gate. This only keeps the client from spamming the wire and makes
@@ -154,6 +161,13 @@ void UCSWeaponComponent::TryFireOnce()
 			return;
 		}
 		const FCSLoadoutView Loadout = Director->GetLoadout(LocalId);
+		// v2.0: the knife slashes, one swing per click.
+		if (Loadout.bKnife)
+		{
+			bTriggerHeld = false;
+			TrySwing(/*bHeavy*/ false);
+			return;
+		}
 		// v1.1: a grenade in hand is thrown, one per click.
 		if (Loadout.bGrenade)
 		{
@@ -195,6 +209,41 @@ void UCSWeaponComponent::TryFireOnce()
 
 	// Authoritative request. The result comes back as replicated director state.
 	OwnerCharacter->RequestFire(Origin, Direction, bAiming);
+}
+
+void UCSWeaponComponent::SetAiming(bool bNewAiming)
+{
+	// Right mouse with the knife in hand is the heavy stab, not aiming.
+	if (bNewAiming && OwnerCharacter && OwnerCharacter->IsLocallyControlled())
+	{
+		if (const ACSMatchDirector* Director = GetDirector())
+		{
+			if (Director->GetLoadout(OwnerCharacter->GetOwningPlayerId()).bKnife)
+			{
+				TrySwing(/*bHeavy*/ true);
+				bAiming = false;
+				return;
+			}
+		}
+	}
+	bAiming = bNewAiming;
+}
+
+void UCSWeaponComponent::TrySwing(bool bHeavy)
+{
+	const UCSWeaponDefinition* Knife = GetActiveWeapon();
+	if (!OwnerCharacter || !Knife || !Knife->IsKnife())
+	{
+		return;
+	}
+	// Local rate gate; the authority re-checks with its own clock.
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+	if (Now < LocalNextSwingTime)
+	{
+		return;
+	}
+	LocalNextSwingTime = Now + (bHeavy ? Knife->MeleeHeavyInterval : Knife->MeleeInterval);
+	OwnerCharacter->RequestMelee(bHeavy);
 }
 
 void UCSWeaponComponent::RequestReload()

@@ -11,11 +11,14 @@
 #include "Core/CSLog.h"
 #include "Core/CSModeSettings.h"
 #include "EngineUtils.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "GameModes/CSGameMode.h"
 #include "GameModes/CSGameState.h"
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
+#include "Pickups/CSAmmoMachine.h"
 #include "Pickups/CSWorldPickup.h"
 #include "Net/UnrealNetwork.h"
 #include "Weapons/CSWeaponDefinition.h"
@@ -140,12 +143,6 @@ float ACSMatchDirector::GetArmor(int32 PlayerId) const
 	return Index == INDEX_NONE ? 0.f : Records[Index].Armor;
 }
 
-int32 ACSMatchDirector::GetStarterRoundsInMag(int32 PlayerId) const
-{
-	const int32 Index = FindRecordIndex(PlayerId);
-	return Index == INDEX_NONE ? 0 : Records[Index].StarterRoundsInMag;
-}
-
 // ---------------------------------------------------------------------------
 // Authority-only writes
 // ---------------------------------------------------------------------------
@@ -160,8 +157,6 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 	}
 
 	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
-	const UCSWeaponDefinition* Starter = Settings->StarterWeapon.LoadSynchronous();
-	const int32 StartingRounds = Starter ? Starter->MagazineSize : 12;
 
 	if (FCSPlayerCombatRecord* Existing = FindRecordMutable(PlayerId))
 	{
@@ -191,7 +186,6 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 	Record.Health = Settings->MaxHealth;
 	Record.Armor = 0.f;
 	Record.bAlive = true;
-	Record.StarterRoundsInMag = StartingRounds;
 	Record.LastFireNetworkTime = 0.0;
 	Record.RespawnCounter = 1;
 
@@ -224,8 +218,7 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 		}
 	}
 
-	// Every player gets a Master-Client-owned inventory, created empty: per
-	// the design a player starts with the starter pistol and nothing else.
+	// Every player gets a Master-Client-owned loadout: a knife and a pistol.
 	if (!ACSPlayerInventory::Find(this, PlayerId))
 	{
 		FActorSpawnParameters Params;
@@ -236,9 +229,10 @@ void ACSMatchDirector::EnsurePlayer(int32 PlayerId)
 			Inventory->InitializeFor(PlayerId);
 		}
 	}
+	GiveSpawnLoadout(PlayerId);
 
-	UE_LOG(LogCSAuth, Log, TEXT("Registered player %d (hp %.0f, %d rounds, team %d, $%d)."),
-		PlayerId, Record.Health, Record.StarterRoundsInMag, Record.Team, Record.Money);
+	UE_LOG(LogCSAuth, Log, TEXT("Registered player %d (hp %.0f, team %d, $%d)."),
+		PlayerId, Record.Health, Record.Team, Record.Money);
 
 	OnRecordsChanged.Broadcast(PlayerId);
 }
@@ -338,59 +332,75 @@ int32 ACSMatchDirector::DropInventoryAsLoot(int32 PlayerId, const FVector& Where
 		return 0;
 	}
 
-	// TakeAll empties the inventory in the same step. That is what makes a
+	// TakeAll empties the loadout in the same step. That is what makes a
 	// repeated call harmless: the second one finds nothing left to drop.
-	const TArray<FCSInventorySlot> Contents = Inventory->TakeAll();
-	if (Contents.Num() == 0)
+	// Only the guns go on the floor; grenades and the knife are lost.
+	TArray<FCSInventorySlot> Guns;
+	for (const FCSInventorySlot& Slot : Inventory->TakeAll())
+	{
+		const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(Slot.ItemIndex);
+		const int32 SlotIndex = ACSPlayerInventory::SlotForItem(Item);
+		if (CSLoadout::IsDroppable(SlotIndex))
+		{
+			Guns.Add(Slot);
+		}
+	}
+	if (Guns.Num() == 0)
 	{
 		return 0;
 	}
 
-	ACSWorldPickup::MakeRoomForDrops(this, Contents.Num());
+	ACSWorldPickup::MakeRoomForDrops(this, Guns.Num());
+
+	int32 Spawned = 0;
+	for (int32 i = 0; i < Guns.Num(); ++i)
+	{
+		// Golden-angle ring, so two guns never land on one spot.
+		const float Angle = i * 2.39996f;
+		const float Radius = 55.f + 35.f * i;
+		const FVector Flat = Where + FVector(FMath::Cos(Angle) * Radius, FMath::Sin(Angle) * Radius, 0.f);
+		if (SpawnDroppedItem(Guns[i], Flat, Where + FVector(0.f, 0.f, 40.f)))
+		{
+			++Spawned;
+		}
+	}
+
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d loadout -> %d dropped gun(s) (%s)."),
+		PlayerId, Spawned, *UEnum::GetValueAsString(Reason));
+	return Spawned;
+}
+
+ACSWorldPickup* ACSMatchDirector::SpawnDroppedItem(const FCSInventorySlot& Item, const FVector& Where, const FVector& FlyFrom)
+{
+	CS_AUTHORITY_ONLY_RET(this, nullptr);
 
 	UWorld* World = GetWorld();
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(CSLootScatter), false);
-	// Ignore every pawn so loot lands on the floor, not on a body.
+	// Ignore every pawn so the gun lands on the floor, not on a body.
 	for (TActorIterator<ACSCharacter> It(World); It; ++It)
 	{
 		Params.AddIgnoredActor(*It);
 	}
 
-	int32 Spawned = 0;
-	for (int32 i = 0; i < Contents.Num(); ++i)
+	// Settle onto whatever is below.
+	FVector Target = Where;
+	FHitResult Hit;
+	if (World->LineTraceSingleByChannel(Hit, Where + FVector(0.f, 0.f, 80.f), Where - FVector(0.f, 0.f, 400.f), ECC_WorldStatic, Params))
 	{
-		const FCSInventorySlot& Item = Contents[i];
-
-		// Deterministic ring: golden-angle spacing, growing radius, so items
-		// never stack on one spot however many there are.
-		const float Angle = i * 2.39996f;
-		const float Radius = FMath::Min(55.f + 28.f * i, 220.f);
-		const FVector Flat = Where + FVector(FMath::Cos(Angle) * Radius, FMath::Sin(Angle) * Radius, 0.f);
-
-		// Settle onto whatever is below.
-		FVector Target = Flat;
-		FHitResult Hit;
-		if (World->LineTraceSingleByChannel(Hit, Flat + FVector(0.f, 0.f, 80.f),
-				Flat - FVector(0.f, 0.f, 400.f), ECC_WorldStatic, Params))
-		{
-			Target = Hit.ImpactPoint + FVector(0.f, 0.f, 25.f);
-		}
-
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		if (ACSWorldPickup* Pickup = World->SpawnActor<ACSWorldPickup>(
-				ACSWorldPickup::StaticClass(), Target, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), SpawnParams))
-		{
-			// Weapons keep the rounds they had; stacks keep their count.
-			Pickup->InitializeItem(Item.ItemIndex, Item.Count, Item.AmmoInMag, /*bDropped*/ true);
-			Pickup->SetDropOrigin(Where + FVector(0.f, 0.f, 40.f));
-			++Spawned;
-		}
+		Target = Hit.ImpactPoint + FVector(0.f, 0.f, 25.f);
 	}
 
-	UE_LOG(LogCSInventory, Log, TEXT("Player %d inventory -> %d loot pickups (%s)."),
-		PlayerId, Spawned, *UEnum::GetValueAsString(Reason));
-	return Spawned;
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ACSWorldPickup* Pickup = World->SpawnActor<ACSWorldPickup>(
+		ACSWorldPickup::StaticClass(), Target, FRotator(0.f, FMath::RandRange(0.f, 360.f), 0.f), SpawnParams);
+	if (Pickup)
+	{
+		// The gun keeps the rounds it had, loaded and spare.
+		Pickup->InitializeItem(Item.ItemIndex, 1, Item.AmmoInMag, /*bDropped*/ true, Item.Reserve);
+		Pickup->SetDropOrigin(FlyFrom);
+	}
+	return Pickup;
 }
 
 FCSLoadoutView ACSMatchDirector::GetLoadout(int32 PlayerId) const
@@ -405,45 +415,36 @@ FCSLoadoutView ACSMatchDirector::GetLoadout(int32 PlayerId) const
 		View.bReloading = Record->ReloadCompleteNetworkTime > 0.0 && Now < Record->ReloadCompleteNetworkTime;
 	}
 
-	// An equipped inventory weapon takes precedence ...
-	if (const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
+	const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	const int32 Slot = Inventory ? Inventory->GetEquippedSlot() : INDEX_NONE;
+	FCSInventorySlot SlotData;
+	if (!Inventory || !Inventory->GetSlot(Slot, SlotData) || SlotData.IsEmpty())
 	{
-		const int32 Slot = Inventory->GetEquippedSlot();
-		// v1.1: a grenade in hand. Its weapon asset only drives the model and hands.
-		if (const UCSItemDefinition* Held = Inventory->GetItemInSlot(Slot); Held && Held->ItemType == ECSItemType::Grenade)
-		{
-			FCSInventorySlot SlotData;
-			Inventory->GetSlot(Slot, SlotData);
-			View.bGrenade = true;
-			View.Slot = Slot;
-			View.Weapon = Held->Weapon.LoadSynchronous();
-			View.RoundsInMag = SlotData.Count;
-			View.Reserve = 0;
-			View.bReloading = false;
-			return View;
-		}
-		if (const UCSWeaponDefinition* Weapon = Inventory->GetEquippedWeapon())
-		{
-			FCSInventorySlot SlotData;
-			Inventory->GetSlot(Slot, SlotData);
-
-			View.Weapon = Weapon;
-			View.Slot = Slot;
-			View.RoundsInMag = SlotData.AmmoInMag;
-
-			const UCSItemSettings* ItemSettings = UCSItemSettings::Get();
-			const UCSItemDefinition* Item = ItemSettings->GetItem(SlotData.ItemIndex);
-			const int32 AmmoIndex = Item ? ItemSettings->FindItemIndex(Item->AmmoItemId) : INDEX_NONE;
-			View.Reserve = AmmoIndex != INDEX_NONE ? Inventory->CountItem(AmmoIndex) : 0;
-			return View;
-		}
+		// Nothing resolvable in hand yet (the loadout has not replicated).
+		View.bReloading = false;
+		return View;
 	}
 
-	// ... otherwise the starter pistol, which is always there.
-	View.Weapon = UCSCombatSettings::Get()->StarterWeapon.LoadSynchronous();
-	View.Slot = INDEX_NONE;
-	View.RoundsInMag = Record ? Record->StarterRoundsInMag : 0;
-	View.Reserve = -1;
+	View.Slot = Slot;
+	View.Weapon = Inventory->GetEquippedWeapon();
+
+	if (CSLoadout::IsGrenadeSlot(Slot))
+	{
+		// A grenade stack: its weapon asset only drives the model and the hands.
+		View.bGrenade = true;
+		View.RoundsInMag = SlotData.Count;
+		View.bReloading = false;
+		return View;
+	}
+	if (View.Weapon && View.Weapon->IsKnife())
+	{
+		View.bKnife = true;
+		View.bReloading = false;
+		return View;
+	}
+
+	View.RoundsInMag = SlotData.AmmoInMag;
+	View.Reserve = SlotData.Reserve;
 	return View;
 }
 
@@ -456,8 +457,8 @@ ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const FCSLoadout
 	{
 		return ECSFireRejection::NoWeapon;
 	}
-	// Grenades are thrown (TryThrowGrenade), never fired.
-	if (Loadout.bGrenade)
+	// Grenades are thrown (TryThrowGrenade), knives swung (TryMelee), never fired.
+	if (!Loadout.IsFirearm())
 	{
 		return ECSFireRejection::NoWeapon;
 	}
@@ -498,8 +499,8 @@ ECSFireRejection ACSMatchDirector::ValidateFire(int32 PlayerId, const FCSLoadout
 		return ECSFireRejection::Reloading;
 	}
 
-	// The magazine comes from the loadout the AUTHORITY resolved - the starter
-	// record or the inventory slot - never from anything the client claims.
+	// The magazine comes from the loadout the AUTHORITY resolved, never from
+	// anything the client claims.
 	if (Loadout.RoundsInMag <= 0)
 	{
 		return ECSFireRejection::OutOfAmmo;
@@ -536,13 +537,9 @@ void ACSMatchDirector::CommitFire(int32 PlayerId)
 	}
 
 	const FCSLoadoutView Loadout = GetLoadout(PlayerId);
-	if (Loadout.IsStarter())
+	if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId); Inventory && Loadout.IsFirearm())
 	{
-		Record->StarterRoundsInMag = FMath::Max(0, Record->StarterRoundsInMag - 1);
-	}
-	else if (ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId))
-	{
-		Inventory->SetSlotAmmo(Loadout.Slot, Loadout.RoundsInMag - 1);
+		Inventory->SetSlotAmmo(Loadout.Slot, Loadout.RoundsInMag - 1, Loadout.Reserve);
 	}
 
 	Record->LastFireNetworkTime = UCSAuthority::GetNetworkTimeSeconds(this);
@@ -563,7 +560,7 @@ bool ACSMatchDirector::BeginReload(int32 PlayerId)
 	}
 
 	const FCSLoadoutView Loadout = GetLoadout(PlayerId);
-	if (!Loadout.Weapon || Loadout.bReloading)
+	if (!Loadout.IsFirearm() || Loadout.bReloading)
 	{
 		return false;
 	}
@@ -603,33 +600,20 @@ void ACSMatchDirector::CompleteReload(FCSPlayerCombatRecord& Record)
 	Record.ReloadCompleteNetworkTime = 0.0;
 	Record.ReloadSlot = INDEX_NONE;
 
-	if (Slot == INDEX_NONE)
-	{
-		const UCSWeaponDefinition* Starter = UCSCombatSettings::Get()->StarterWeapon.LoadSynchronous();
-		Record.StarterRoundsInMag = Starter ? Starter->MagazineSize : 12;
-		return;
-	}
-
-	// Inventory weapon: move rounds from the matching ammo stack into the
-	// magazine. Re-resolve everything - the weapon may have been dropped or
-	// swapped while the reload ran.
+	// Move rounds from the weapon's own reserve into its magazine. Re-resolve
+	// everything - the weapon may have been dropped or swapped meanwhile.
 	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Record.PlayerId);
 	const UCSItemDefinition* Item = Inventory ? Inventory->GetItemInSlot(Slot) : nullptr;
 	const UCSWeaponDefinition* Weapon = (Item && Item->IsWeapon()) ? Item->Weapon.LoadSynchronous() : nullptr;
-	if (!Weapon)
+	if (!Weapon || !Weapon->IsFirearm())
 	{
 		return;
 	}
 
 	FCSInventorySlot SlotData;
 	Inventory->GetSlot(Slot, SlotData);
-
-	const int32 AmmoIndex = UCSItemSettings::Get()->FindItemIndex(Item->AmmoItemId);
-	const int32 Needed = Weapon->MagazineSize - SlotData.AmmoInMag;
-	const int32 Taken = (AmmoIndex != INDEX_NONE && Needed > 0) ? Inventory->ConsumeItem(AmmoIndex, Needed) : 0;
-
-	// ConsumeItem can compact stacks; the weapon slot itself is untouched.
-	Inventory->SetSlotAmmo(Slot, SlotData.AmmoInMag + Taken);
+	const int32 Taken = FMath::Clamp(Weapon->MagazineSize - SlotData.AmmoInMag, 0, SlotData.Reserve);
+	Inventory->SetSlotAmmo(Slot, SlotData.AmmoInMag + Taken, SlotData.Reserve - Taken);
 }
 
 float ACSMatchDirector::Heal(int32 PlayerId, float Amount)
@@ -793,21 +777,99 @@ void ACSMatchDirector::RespawnPlayer(int32 PlayerId, int32 SpawnPointIndex)
 void ACSMatchDirector::ResetLife(FCSPlayerCombatRecord& Record, int32 SpawnPointIndex)
 {
 	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
-	const UCSWeaponDefinition* Starter = Settings->StarterWeapon.LoadSynchronous();
 
 	Record.Health = Settings->MaxHealth;
 	Record.bAlive = true;
-	// The starter pistol is restored in full on every respawn, by design: it is
-	// not an inventory item and can never be lost.
-	Record.StarterRoundsInMag = Starter ? Starter->MagazineSize : 12;
 	Record.LastFireNetworkTime = 0.0;
 	Record.ReloadCompleteNetworkTime = 0.0;
 	Record.ReloadSlot = INDEX_NONE;
 	Record.RespawnAtNetworkTime = 0.0;
 	Record.RespawnPointIndex = SpawnPointIndex;
 	Record.RespawnCounter += 1;
+	BlindedUntil.Remove(Record.PlayerId);
 
+	// Whoever lost their guns comes back with a knife and a pistol; a round
+	// survivor keeps what they carry.
+	GiveSpawnLoadout(Record.PlayerId);
 	BeginProtection(Record);
+}
+
+void ACSMatchDirector::GiveSpawnLoadout(int32 PlayerId)
+{
+	CS_AUTHORITY_ONLY(this);
+
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	if (!Inventory)
+	{
+		return;
+	}
+	const UCSItemSettings* Items = UCSItemSettings::Get();
+	if (!Inventory->HasItemInSlot(CSLoadout::Knife))
+	{
+		Inventory->AddItem(Items->FindItemIndex(Items->KnifeItem), 1, 0, 0);
+	}
+	if (!Inventory->HasItemInSlot(CSLoadout::Pistol))
+	{
+		GiveItem(PlayerId, Items->FindItemIndex(Items->SpawnPistolItem), /*bEquip*/ false);
+	}
+	// Self-tests: -testprimary=ak47 on the authority hands every spawn a primary
+	// (the tests that used to pick a gun up from the floor).
+	FString TestPrimary;
+	if (!Inventory->HasItemInSlot(CSLoadout::Primary) && FParse::Value(FCommandLine::Get(), TEXT("testprimary="), TestPrimary))
+	{
+		GiveItem(PlayerId, Items->FindItemIndex(FName(*TestPrimary)), /*bEquip*/ false);
+	}
+	// Spawn with the best gun in hand.
+	Inventory->SetEquippedSlot(Inventory->GetBestWeaponSlot());
+}
+
+bool ACSMatchDirector::GiveItem(int32 PlayerId, int32 ItemIndex, bool bEquip, int32 AmmoInMag, int32 Reserve)
+{
+	CS_AUTHORITY_ONLY_RET(this, false);
+
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(ItemIndex);
+	const int32 Slot = ACSPlayerInventory::SlotForItem(Item);
+	if (!Inventory || !Item || Slot == INDEX_NONE)
+	{
+		return false;
+	}
+
+	// A gun slot holds one gun: the old one goes on the floor in front of the player.
+	if (CSLoadout::IsDroppable(Slot) && Inventory->HasItemInSlot(Slot))
+	{
+		if (Inventory->GetEquippedSlot() == Slot)
+		{
+			CancelReload(PlayerId);
+		}
+		const FCSInventorySlot Old = Inventory->RemoveFromSlot(Slot, 1);
+		FVector Where = FVector::ZeroVector;
+		if (GetLastKnownLocation(PlayerId, Where) && !Old.IsEmpty())
+		{
+			FVector Forward = FVector::ForwardVector;
+			if (const ACSCharacter* Pawn = FindPawnForPlayer(this, PlayerId))
+			{
+				Where = Pawn->GetActorLocation();
+				Forward = Pawn->GetActorForwardVector();
+			}
+			ACSWorldPickup::MakeRoomForDrops(this, 1);
+			SpawnDroppedItem(Old, Where + Forward * 70.f - FVector(0.f, 0.f, 60.f), Where + FVector(0.f, 0.f, 30.f));
+		}
+	}
+
+	const UCSWeaponDefinition* Weapon = Item->Weapon.LoadSynchronous();
+	const int32 Mag = (AmmoInMag == INDEX_NONE && Weapon) ? Weapon->MagazineSize : AmmoInMag;
+	const int32 Spare = (Reserve == INDEX_NONE && Weapon) ? Weapon->ReserveAmmo : Reserve;
+	if (Inventory->AddItem(ItemIndex, 1, FMath::Max(0, Mag), FMath::Max(0, Spare)) > 0)
+	{
+		return false; // grenade slot full
+	}
+	if (bEquip && !CSLoadout::IsGrenadeSlot(Slot))
+	{
+		CancelReload(PlayerId);
+		Inventory->SetEquippedSlot(Slot);
+	}
+	return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,62 +1153,42 @@ ECSBuyResult ACSMatchDirector::TryBuy(int32 PlayerId, int32 ShopIndex)
 		return ECSBuyResult::NotEnoughMoney;
 	}
 
-	switch (Item->ItemType)
+	const int32 Slot = ACSPlayerInventory::SlotForItem(Item);
+	if (Item->ItemType == ECSItemType::Armor)
 	{
-	case ECSItemType::Weapon:
-	{
-		const UCSWeaponDefinition* Weapon = Item->Weapon.LoadSynchronous();
-		if (!Weapon)
-		{
-			return ECSBuyResult::Invalid;
-		}
-		if (Inventory->CountItem(ItemIndex) > 0)
-		{
-			return ECSBuyResult::AlreadyOwned;
-		}
-		if (!Inventory->CanAccept(ItemIndex, 1) || Inventory->AddItem(ItemIndex, 1, Weapon->MagazineSize) > 0)
-		{
-			return ECSBuyResult::InventoryFull;
-		}
-		// Spare magazines, as far as they fit.
-		const int32 AmmoIndex = ItemSettings->FindItemIndex(Item->AmmoItemId);
-		if (AmmoIndex != INDEX_NONE && Entry->Bundle > 0)
-		{
-			Inventory->AddItem(AmmoIndex, Entry->Bundle * Weapon->MagazineSize, 0);
-		}
-		// Straight into the hands.
-		const TArray<FCSInventorySlot>& Slots = Inventory->GetSlots();
-		for (int32 Slot = 0; Slot < Slots.Num(); ++Slot)
-		{
-			if (Slots[Slot].ItemIndex == ItemIndex && !Slots[Slot].IsEmpty())
-			{
-				CancelReload(PlayerId);
-				Inventory->SetEquippedSlot(Slot);
-				break;
-			}
-		}
-		break;
-	}
-
-	case ECSItemType::Armor:
 		// Worn at once rather than carried.
 		if (AddArmor(PlayerId, Item->ArmorAmount) <= 0.f)
 		{
 			return ECSBuyResult::AlreadyOwned;
 		}
-		break;
-
-	default:
+	}
+	else if (Slot == INDEX_NONE || Slot == CSLoadout::Knife)
 	{
-		// Medkits, ammo: into the inventory.
-		const int32 Count = FMath::Max(1, Entry->Bundle) * FMath::Max(1, Item->DefaultPickupCount);
-		if (!Inventory->CanAccept(ItemIndex, Count))
+		return ECSBuyResult::Invalid;
+	}
+	else if (CSLoadout::IsGrenadeSlot(Slot))
+	{
+		FCSInventorySlot Held;
+		Inventory->GetSlot(Slot, Held);
+		if (!Held.IsEmpty() && Held.Count >= Item->GetMaxStack())
 		{
 			return ECSBuyResult::InventoryFull;
 		}
-		Inventory->AddItem(ItemIndex, Count, 0);
-		break;
+		GiveItem(PlayerId, ItemIndex, /*bEquip*/ false);
 	}
+	else
+	{
+		// The same gun again would only swap it for an identical one.
+		FCSInventorySlot Held;
+		if (Inventory->GetSlot(Slot, Held) && Held.ItemIndex == ItemIndex && !Held.IsEmpty())
+		{
+			return ECSBuyResult::AlreadyOwned;
+		}
+		// Full magazine and full reserve; the previous gun drops, the new one comes up.
+		if (!GiveItem(PlayerId, ItemIndex, /*bEquip*/ true))
+		{
+			return ECSBuyResult::Invalid;
+		}
 	}
 
 	// Re-find: AddArmor and friends do not reallocate, but stay safe.
@@ -1160,12 +1202,108 @@ ECSBuyResult ACSMatchDirector::TryBuy(int32 PlayerId, int32 ShopIndex)
 	return ECSBuyResult::Ok;
 }
 
+ECSBuyResult ACSMatchDirector::TryBuyAmmo(int32 PlayerId, const ACSAmmoMachine* Machine, const FVector& PawnLocation)
+{
+	CS_AUTHORITY_ONLY_RET(this, ECSBuyResult::Invalid);
+
+	const UCSShopSettings* Shop = UCSShopSettings::Get();
+	FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, PlayerId);
+	if (!Machine || !Record || !Inventory)
+	{
+		return ECSBuyResult::Invalid;
+	}
+	if (!Record->bAlive)
+	{
+		return ECSBuyResult::Dead;
+	}
+	// Distance from where the AUTHORITY believes the pawn is.
+	if (FVector::DistSquared(PawnLocation, Machine->GetActorLocation()) > FMath::Square(Shop->AmmoMachineReach))
+	{
+		return ECSBuyResult::Invalid;
+	}
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+	if (const double* Last = LastAmmoBuyTime.Find(PlayerId); Last && Now - *Last < 1.0)
+	{
+		return ECSBuyResult::Invalid;
+	}
+
+	// Both guns, up to what each can carry. Nothing missing means nothing to sell.
+	TArray<TPair<int32, int32>> TopUps;
+	for (const int32 Slot : { CSLoadout::Primary, CSLoadout::Pistol })
+	{
+		FCSInventorySlot Gun;
+		const UCSItemDefinition* Item = Inventory->GetItemInSlot(Slot);
+		const UCSWeaponDefinition* Weapon = Item ? Item->Weapon.LoadSynchronous() : nullptr;
+		if (Weapon && Weapon->IsFirearm() && Inventory->GetSlot(Slot, Gun) && Gun.Reserve < Weapon->ReserveAmmo)
+		{
+			TopUps.Add(TPair<int32, int32>(Slot, Weapon->ReserveAmmo));
+		}
+	}
+	if (TopUps.Num() == 0)
+	{
+		return ECSBuyResult::AlreadyOwned;
+	}
+	if (Record->Money < Shop->AmmoMachinePrice)
+	{
+		return ECSBuyResult::NotEnoughMoney;
+	}
+
+	for (const TPair<int32, int32>& TopUp : TopUps)
+	{
+		FCSInventorySlot Gun;
+		Inventory->GetSlot(TopUp.Key, Gun);
+		Inventory->SetSlotAmmo(TopUp.Key, Gun.AmmoInMag, TopUp.Value);
+	}
+	Record->Money -= Shop->AmmoMachinePrice;
+	LastAmmoBuyTime.Add(PlayerId, Now);
+	UE_LOG(LogCSInventory, Log, TEXT("Player %d refilled %d gun(s) at an ammo machine ($%d left)."),
+		PlayerId, TopUps.Num(), Record->Money);
+	OnRecordsChanged.Broadcast(PlayerId);
+	return ECSBuyResult::Ok;
+}
+
+bool ACSMatchDirector::AcceptMelee(int32 PlayerId, bool bHeavy, const FVector& ClaimedOrigin, const FVector& AuthoritativeOrigin)
+{
+	CS_AUTHORITY_ONLY_RET(this, false);
+
+	const FCSPlayerCombatRecord* Record = FindRecordMutable(PlayerId);
+	if (!Record || !Record->bAlive)
+	{
+		return false;
+	}
+	const ACSGameState* GS = ModeState(this);
+	if (GS && GS->GetMatchPhase() == ECSMatchPhase::PostMatch)
+	{
+		return false;
+	}
+	const FCSLoadoutView Loadout = GetLoadout(PlayerId);
+	if (!Loadout.bKnife || !Loadout.Weapon)
+	{
+		return false;
+	}
+	if (FVector::DistSquared(ClaimedOrigin, AuthoritativeOrigin) > FMath::Square(UCSCombatSettings::Get()->MaxFireOriginDeviation))
+	{
+		return false;
+	}
+
+	const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+	const float Interval = bHeavy ? Loadout.Weapon->MeleeHeavyInterval : Loadout.Weapon->MeleeInterval;
+	if (const double* Last = LastMeleeTime.Find(PlayerId); Last && Now - *Last < Interval * 0.85)
+	{
+		return false;
+	}
+	LastMeleeTime.Add(PlayerId, Now);
+	CancelProtection(PlayerId, TEXT("used the knife"));
+	return true;
+}
+
 void ACSMatchDirector::StartNewRound()
 {
 	CS_AUTHORITY_ONLY(this);
 
-	// Survivors keep their weapons and armor, the fallen come back with the
-	// starter pistol; everybody returns to their team's spawn.
+	// Survivors keep their weapons and armor, the fallen come back with a knife
+	// and a pistol; everybody returns to their team's spawn.
 	for (FCSPlayerCombatRecord& Record : Records)
 	{
 		const float KeptArmor = Record.bAlive ? Record.Armor : 0.f;
@@ -1545,14 +1683,10 @@ bool ACSMatchDirector::TryThrowGrenade(int32 PlayerId, const FVector& Origin, co
 	}
 	LastThrowTime.Add(PlayerId, Now);
 
-	// Consume it; an empty hand goes back to the pistol.
+	// Consume it; an empty hand goes to the best gun (RemoveFromSlot does that).
 	const int32 Slot = Loadout.Slot;
+	const ECSGrenadeType Type = Slot == CSLoadout::Flash ? ECSGrenadeType::Flash : ECSGrenadeType::Frag;
 	Inventory->RemoveFromSlot(Slot, 1);
-	FCSInventorySlot Left;
-	if (!Inventory->GetSlot(Slot, Left) || Left.IsEmpty())
-	{
-		Inventory->SetEquippedSlot(INDEX_NONE);
-	}
 	CancelProtection(PlayerId, TEXT("threw a grenade"));
 
 	// Along the view with a little lift, plus some of the thrower's own motion.
@@ -1560,20 +1694,21 @@ bool ACSMatchDirector::TryThrowGrenade(int32 PlayerId, const FVector& Origin, co
 	const FVector Start = Origin + Dir * 30.f - FVector(0.f, 0.f, 8.f);
 	const int32 Serial = NextGrenadeSerial++ + PlayerId * 100000;
 
-	UE_LOG(LogCSCombat, Log, TEXT("Player %d threw grenade %d."), PlayerId, Serial);
+	UE_LOG(LogCSCombat, Log, TEXT("Player %d threw %s %d."), PlayerId,
+		Type == ECSGrenadeType::Flash ? TEXT("a flashbang") : TEXT("a grenade"), Serial);
 	if (UCSAuthority::IsSessionActive(this))
 	{
-		RpcGrenadeThrown(Serial, PlayerId, Start, Velocity);
+		RpcGrenadeThrown(Serial, PlayerId, static_cast<int32>(Type), Start, Velocity);
 	}
 	else
 	{
-		RpcGrenadeThrown_Receive(Serial, PlayerId, Start, Velocity);
+		RpcGrenadeThrown_Receive(Serial, PlayerId, static_cast<int32>(Type), Start, Velocity);
 	}
 	OnRecordsChanged.Broadcast(PlayerId);
 	return true;
 }
 
-void ACSMatchDirector::RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, FVector Origin, FVector Velocity)
+void ACSMatchDirector::RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, int32 Type, FVector Origin, FVector Velocity)
 {
 	UWorld* World = GetWorld();
 	if (!World || ACSGrenade::FindBySerial(this, Serial))
@@ -1585,7 +1720,10 @@ void ACSMatchDirector::RpcGrenadeThrown_Receive(int32 Serial, int32 ThrowerId, F
 	Params.ObjectFlags |= RF_Transient;
 	if (ACSGrenade* Grenade = World->SpawnActor<ACSGrenade>(ACSGrenade::StaticClass(), Origin, Velocity.Rotation(), Params))
 	{
-		Grenade->Launch(Serial, ThrowerId, Velocity, UCSCombatSettings::Get()->GrenadeFuseSeconds);
+		const ECSGrenadeType GrenadeType = Type == static_cast<int32>(ECSGrenadeType::Flash) ? ECSGrenadeType::Flash : ECSGrenadeType::Frag;
+		const UCSCombatSettings* Settings = UCSCombatSettings::Get();
+		Grenade->Launch(Serial, ThrowerId, Velocity,
+			GrenadeType == ECSGrenadeType::Flash ? Settings->FlashFuseSeconds : Settings->GrenadeFuseSeconds, GrenadeType);
 	}
 	// Everybody else sees the throwing motion (the thrower already played it).
 	if (ACSCharacter* Thrower = FindPawnForPlayer(this, ThrowerId))
@@ -1609,6 +1747,41 @@ void ACSMatchDirector::ExplodeGrenade(ACSGrenade* Grenade)
 	const FVector Center = Grenade->GetActorLocation() + FVector(0.f, 0.f, 10.f);
 	const int32 ThrowerId = Grenade->GetThrowerId();
 	const int32 Serial = Grenade->GetSerial();
+	const int32 Type = static_cast<int32>(Grenade->GetType());
+
+	if (Grenade->GetType() == ECSGrenadeType::Flash)
+	{
+		// No damage. Humans are blinded by their own peer (it knows where they
+		// look); bots are blinded here, and cannot see or shoot until it wears off.
+		const double Now = UCSAuthority::GetNetworkTimeSeconds(this);
+		for (const FCSPlayerCombatRecord& Record : Records)
+		{
+			const ACSCharacter* Pawn = (Record.bAlive && CSBots::IsBotId(Record.PlayerId)) ? FindPawnForPlayer(this, Record.PlayerId) : nullptr;
+			if (!Pawn)
+			{
+				continue;
+			}
+			FVector Eye;
+			FVector Forward;
+			Pawn->GetAimRay(Eye, Forward);
+			float Seconds = 0.f;
+			if (ComputeFlashStrength(GetWorld(), Center, Eye, Forward, Grenade, Seconds) > 0.25f)
+			{
+				BlindedUntil.Add(Record.PlayerId, Now + Seconds);
+			}
+		}
+		Grenade->Explode(Center);
+		UE_LOG(LogCSCombat, Log, TEXT("Flashbang %d by %d went off."), Serial, ThrowerId);
+		if (UCSAuthority::IsSessionActive(this))
+		{
+			RpcGrenadeExploded(Serial, Type, Center);
+		}
+		else
+		{
+			RpcGrenadeExploded_Receive(Serial, Type, Center);
+		}
+		return;
+	}
 
 	// Walls stop the blast: only players with a clear line to the centre are hit.
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(CSGrenadeBlast), false, Grenade);
@@ -1658,15 +1831,54 @@ void ACSMatchDirector::ExplodeGrenade(ACSGrenade* Grenade)
 	UE_LOG(LogCSCombat, Log, TEXT("Grenade %d by %d exploded, %d player(s) hit."), Serial, ThrowerId, Hits.Num());
 	if (UCSAuthority::IsSessionActive(this))
 	{
-		RpcGrenadeExploded(Serial, Center);
+		RpcGrenadeExploded(Serial, Type, Center);
 	}
 	else
 	{
-		RpcGrenadeExploded_Receive(Serial, Center);
+		RpcGrenadeExploded_Receive(Serial, Type, Center);
 	}
 }
 
-void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, FVector Location)
+float ACSMatchDirector::ComputeFlashStrength(const UWorld* World, const FVector& Center, const FVector& Eye,
+	const FVector& Forward, const AActor* Ignore, float& OutSeconds)
+{
+	OutSeconds = 0.f;
+	const UCSCombatSettings* Settings = UCSCombatSettings::Get();
+	const FVector ToFlash = Center - Eye;
+	const float Distance = ToFlash.Size();
+	if (!World || Distance > Settings->FlashRadius)
+	{
+		return 0.f;
+	}
+
+	// A wall between the eyes and the flash stops it completely.
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CSFlashSight), false, Ignore);
+	for (TActorIterator<ACSCharacter> It(const_cast<UWorld*>(World)); It; ++It)
+	{
+		Params.AddIgnoredActor(*It);
+	}
+	if (World->LineTraceTestByChannel(Eye, Center, ECC_Visibility, Params))
+	{
+		return 0.f;
+	}
+
+	// Looking straight at it is the worst; with your back turned a close one
+	// still leaves you dazed, a far one does nothing.
+	const float Facing = FVector::DotProduct(Forward.GetSafeNormal(), ToFlash.GetSafeNormal());
+	const float FacingFactor = Facing > 0.3f ? 1.f : (Facing > -0.3f ? 0.55f : 0.2f);
+	const float DistanceFactor = FMath::Clamp(1.f - Distance / Settings->FlashRadius, 0.f, 1.f);
+	const float Strength = FMath::Clamp(FacingFactor * (0.35f + 0.65f * DistanceFactor), 0.f, 1.f);
+	OutSeconds = Settings->FlashMaxSeconds * Strength;
+	return OutSeconds > 0.3f ? Strength : 0.f;
+}
+
+bool ACSMatchDirector::IsBlinded(int32 PlayerId) const
+{
+	const double* Until = BlindedUntil.Find(PlayerId);
+	return Until && UCSAuthority::GetNetworkTimeSeconds(this) < *Until;
+}
+
+void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, int32 Type, FVector Location)
 {
 	if (const ACSGrenade* Done = ACSGrenade::FindBySerial(this, Serial, /*bIncludeExploded*/ true); Done && !ACSGrenade::FindBySerial(this, Serial))
 	{
@@ -1683,6 +1895,7 @@ void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, FVector Location
 	Params.ObjectFlags |= RF_Transient;
 	if (ACSGrenade* Grenade = GetWorld()->SpawnActor<ACSGrenade>(ACSGrenade::StaticClass(), Location, FRotator::ZeroRotator, Params))
 	{
+		Grenade->SetType(Type == static_cast<int32>(ECSGrenadeType::Flash) ? ECSGrenadeType::Flash : ECSGrenadeType::Frag);
 		Grenade->Explode(Location);
 	}
 }

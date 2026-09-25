@@ -327,6 +327,32 @@ def make_grenade():
     write("Weapons", "S_Grenade_Pin", pin, peak=0.55)
 
 
+def make_v20():
+    # v2.0 stand-ins until the Sonniss recordings are in: flashbang, the ring
+    # it leaves, the knife and the ammo machine. Own random stream again.
+    global rng
+    rng = random.Random(2020)
+    bang = mix(
+        gain(env_exp(highpass(noise(0.5), 900), 0.06), 1.4),
+        env_exp(sine(95, 0.6, 40), 0.12),
+        gain(env_exp(lowpass(noise(0.9), 3000, 400), 0.22), 0.8),
+    )
+    bang = echo(soft_clip(bang, 3.0), [(0.07, 0.3), (0.16, 0.18)])
+    write("Weapons", "S_Flashbang_Explode", fade_tail(bang, 0.15), peak=0.97)
+    # Tinnitus: a pure high tone with a slight beat, fading over five seconds.
+    ring = env_exp(mix(sine(3900, 5.5, 3860), gain(sine(4100, 5.5, 4060), 0.35)), 2.2, 0.05)
+    write("Weapons", "S_Flashbang_Ring", fade_tail(ring, 0.5), peak=0.35)
+    swing = env_adsr(bandpass(noise(0.32), 700, 5200), 0.09, 0.2)
+    write("Weapons", "S_Knife_Swing", swing, peak=0.55)
+    hit_body = mix(env_exp(lowpass(noise(0.3), 900), 0.05), gain(env_exp(sine(120, 0.3, 70), 0.06), 0.8))
+    write("Weapons", "S_Knife_HitBody", hit_body, peak=0.75)
+    hit_wall = mix(resonator(env_exp(noise(0.3), 0.003), 2900, 0.9975), gain(env_exp(highpass(noise(0.15), 3000), 0.02), 0.5))
+    write("Weapons", "S_Knife_HitWall", env_exp(hit_wall, 0.12), peak=0.6)
+    clunk = mix(mechanical_click(900, 0.05, 2500), gain(mechanical_click(1800, 0.02, 5000), 0.7),
+                gain(env_exp(lowpass(noise(0.4), 700), 0.1), 0.6), offsets=[0.0, 0.12, 0.2])
+    write("Weapons", "S_AmmoMachine_Buy", clunk, peak=0.7)
+
+
 if __name__ == "__main__":
     make_weapons()
     make_player()
@@ -335,4 +361,5 @@ if __name__ == "__main__":
     make_ui()
     make_music()
     make_grenade()
+    make_v20()
     print("done ->", ROOT)

@@ -30,9 +30,13 @@ public:
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Registry")
 	TArray<TSoftObjectPtr<UCSItemDefinition>> Items;
 
-	/** Inventory slots per player. Also bounded by the FusionArraySize below. */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Inventory", meta = (ClampMin = "1", ClampMax = "8"))
-	int32 InventorySlots = 6;
+	/** v2.0: the pistol everybody spawns with (slot 2). */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Loadout")
+	FName SpawnPistolItem = TEXT("pistol");
+
+	/** v2.0: the knife (slot 3), always carried. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Loadout")
+	FName KnifeItem = TEXT("knife");
 
 	/**
 	 * How far a player may be from a pickup, measured by the AUTHORITY from

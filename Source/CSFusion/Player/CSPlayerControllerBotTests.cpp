@@ -88,10 +88,7 @@ void ACSPlayerController::CSTestBots()
 			int32 Items = 0;
 			if (const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Id))
 			{
-				for (const FCSInventorySlot& Slot : Inventory->GetSlots())
-				{
-					Items += Slot.IsEmpty() ? 0 : 1;
-				}
+				Items = Inventory->HasItemInSlot(CSLoadout::Primary) ? 1 : 0;
 			}
 			BotTestMaxItems.FindOrAdd(Id) = FMath::Max(BotTestMaxItems.FindRef(Id), Items);
 
@@ -135,7 +132,9 @@ void ACSPlayerController::CSTestBots()
 			}
 			const int32 Bots = BotTestStart.Num();
 			const bool bStuck = BotTestMaxStill >= 30.f;
-			const bool bOk = Bots > 0 && Moved == Bots && BotTestHits > 0 && BotTestKills > 0 && Looted > 0 && !bStuck;
+			// v2.0: nothing lies on the floor, so looting is no longer required;
+			// "looted" now counts bots that ever carried a primary.
+			const bool bOk = Bots > 0 && Moved == Bots && BotTestHits > 0 && BotTestKills > 0 && !bStuck;
 			UE_LOG(LogCS, Log, TEXT("BOT TEST RESULT: %d bot(s), %d roamed > 8 m, %d hit(s), %d kill(s), %d looted, %d death(s)/respawn(s), longest standstill %.0f s -> %s"),
 				Bots, Moved, BotTestHits, BotTestKills, Looted, Deaths, BotTestMaxStill,
 				bOk ? TEXT("BOTS OK") : TEXT("BOTS BROKEN"));

@@ -83,7 +83,9 @@ public:
 
 	const FCSStanceAnimSet& GetStance(ECSWeaponStance Stance) const
 	{
-		return Stance == ECSWeaponStance::Pistol ? Pistol : Rifle;
+		// The knife and grenades are one-handed: the pistol set (a one-hand
+		// carry) fits them far better than the rifle set.
+		return Stance == ECSWeaponStance::Rifle ? Rifle : Pistol;
 	}
 
 	UPROPERTY(EditAnywhere, Config, Category = "Stances")

@@ -22,7 +22,10 @@ enum class ECSShopCategory : uint8
 	Heavy		UMETA(DisplayName = "Heavy"),
 	Snipers		UMETA(DisplayName = "Snipers"),
 	Gear		UMETA(DisplayName = "Gear"),
-	Ammo		UMETA(DisplayName = "Ammo")
+	Ammo		UMETA(DisplayName = "Ammo"),
+	// v2.0
+	Pistols		UMETA(DisplayName = "Pistols"),
+	Grenades	UMETA(DisplayName = "Grenades")
 };
 
 USTRUCT(BlueprintType)
@@ -35,8 +38,8 @@ struct CSFUSION_API FCSShopEntry
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Shop") int32 Price = 0;
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Shop") ECSShopCategory Category = ECSShopCategory::Rifles;
 
-	/** Weapons: spare magazines of their ammo that come with them. Ammo: stacks given. */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Shop") int32 Bundle = 2;
+	/** Grenades: how many one purchase gives. Firearms always come with a full magazine and a full reserve. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Shop") int32 Bundle = 1;
 
 	/** One-line description in the shop. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Shop") FString Blurb;
@@ -52,6 +55,14 @@ public:
 
 	UPROPERTY(Config, EditAnywhere, Category = "Shop")
 	TArray<FCSShopEntry> Entries;
+
+	/** v2.0 ammo machines: price of topping up the reserves of both guns. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ammo machines", meta = (ClampMin = "0"))
+	int32 AmmoMachinePrice = 100;
+
+	/** How close to a machine a player must stand, as the authority sees it. */
+	UPROPERTY(Config, EditAnywhere, Category = "Ammo machines", meta = (ClampMin = "50.0"))
+	float AmmoMachineReach = 260.f;
 
 	static const UCSShopSettings* Get() { return GetDefault<UCSShopSettings>(); }
 	const FCSShopEntry* GetEntry(int32 Index) const { return Entries.IsValidIndex(Index) ? &Entries[Index] : nullptr; }

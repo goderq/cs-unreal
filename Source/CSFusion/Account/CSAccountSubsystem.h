@@ -101,8 +101,16 @@ public:
 	const FString& GetLastError() const { return LastError; }
 	const FCSAccountStats& GetStats() const { return Stats; }
 
-	/** Rename: the backend enforces uniqueness and shape (3..20 characters). */
-	void SetNickname(const FString& NewNickname, TFunction<void(bool bOk, const FString& Error)> OnDone);
+	/** v2.0: the profile has admin rights (decides whether the admin panel shows). */
+	bool IsAdmin() const { return IsReady() && bIsAdmin; }
+
+	/**
+	 * v2.0 admin panel: one call to the admin Edge Function. Params gets
+	 * "action" added. OnDone(bOk, HttpCode, ResponseJson) - the server
+	 * re-checks is_admin, so a modified client gains nothing from this.
+	 */
+	void AdminCall(const FString& Action, const TSharedRef<FJsonObject>& Params,
+		TFunction<void(bool bOk, int32 Code, const TSharedPtr<FJsonObject>& Response)> OnDone);
 
 	/** Top players by kills, for the menu. */
 	void FetchLeaderboard(TFunction<void(bool bOk, const TArray<TSharedPtr<FJsonObject>>& Rows)> OnDone);
@@ -137,6 +145,7 @@ private:
 	FString AccessToken;
 	FString LastError;
 	FCSAccountStats Stats;
+	bool bIsAdmin = false;
 	FDelegateHandle LoginHandle;
 	double TokenExpiresAt = 0.0;
 };

@@ -41,17 +41,31 @@ namespace
 			bAim ? IE_Pressed : IE_Released, bAim ? 1.f : 0.f, false, FPlatformTime::Cycles64()));
 	}
 
+	/** v2.0: the guns a player carries (primary, pistol) - exactly what drops on death. */
 	int32 CountFilledSlots(const ACSPlayerInventory* Inventory)
 	{
-		int32 Filled = 0;
+		int32 Guns = 0;
+		if (Inventory)
+		{
+			Guns += Inventory->HasItemInSlot(CSLoadout::Primary) ? 1 : 0;
+			Guns += Inventory->HasItemInSlot(CSLoadout::Pistol) ? 1 : 0;
+		}
+		return Guns;
+	}
+
+	bool HasItem(const ACSPlayerInventory* Inventory, int32 ItemIndex)
+	{
 		if (Inventory)
 		{
 			for (const FCSInventorySlot& Slot : Inventory->GetSlots())
 			{
-				Filled += Slot.IsEmpty() ? 0 : 1;
+				if (!Slot.IsEmpty() && Slot.ItemIndex == ItemIndex)
+				{
+					return true;
+				}
 			}
 		}
-		return Filled;
+		return false;
 	}
 
 	ACSWorldPickup* FindNearestPickup(UWorld* World, const FVector& From, TFunctionRef<bool(const ACSWorldPickup&)> Filter)
@@ -79,11 +93,6 @@ namespace
 		return Item && Item->IsWeapon();
 	}
 
-	bool IsAmmoPickup(const ACSWorldPickup& P)
-	{
-		const UCSItemDefinition* Item = P.GetItemDefinition();
-		return Item && Item->ItemType == ECSItemType::Ammo;
-	}
 }
 
 void ACSPlayerController::TestWalkUpAndPress(ACSWorldPickup* Pickup, TFunction<void()> AfterPress)
@@ -164,22 +173,12 @@ void ACSPlayerController::CSTestGrab()
 		return;
 	}
 
-	TestWalkUpAndPress(FindNearestPickup(GetWorld(), Self->GetActorLocation(), IsWeaponPickup), [this]()
-	{
-		ACSCharacter* Me = Cast<ACSCharacter>(GetPawn());
-		if (!Me)
-		{
-			return;
-		}
-		TestWalkUpAndPress(FindNearestPickup(GetWorld(), Me->GetActorLocation(), IsAmmoPickup), [this]()
-		{
-			const ACSCharacter* Me2 = Cast<ACSCharacter>(GetPawn());
-			const ACSPlayerInventory* Inv = Me2 ? ACSPlayerInventory::Find(this, Me2->GetOwningPlayerId()) : nullptr;
-			UE_LOG(LogCS, Log, TEXT("GRAB TEST RESULT: player %d holds %d filled slots -> %s"),
-				Me2 ? Me2->GetOwningPlayerId() : 0, CountFilledSlots(Inv),
-				CountFilledSlots(Inv) >= 2 ? TEXT("GRAB OK") : TEXT("GRAB BROKEN"));
-		});
-	});
+	// v2.0: nothing lies on the floor to grab. The authority hands every spawn
+	// a primary with -testprimary=; this checks both guns arrived.
+	const ACSPlayerInventory* Inv = ACSPlayerInventory::Find(this, Self->GetOwningPlayerId());
+	UE_LOG(LogCS, Log, TEXT("GRAB TEST RESULT: player %d carries %d gun(s) -> %s"),
+		Self->GetOwningPlayerId(), CountFilledSlots(Inv),
+		CountFilledSlots(Inv) >= 2 ? TEXT("GRAB OK") : TEXT("GRAB BROKEN"));
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +287,8 @@ void ACSPlayerController::TestKillVerifyLoot()
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
 	const int32 ItemsLeft = CountFilledSlots(ACSPlayerInventory::Find(this, TestVictimId));
 	const int32 PickupsNow = ACSWorldPickup::CountAlive(this);
-	const bool bStarterKept = Director && Director->GetLoadout(TestVictimId).IsStarter();
+	// Dead: the whole loadout is gone until the respawn hands out a knife and a pistol.
+	const bool bStarterKept = Director && Director->GetLoadout(TestVictimId).Weapon == nullptr;
 
 	// A bot victim dies among other bots, and bots loot within a second: the
 	// exact pickup count can only be checked for a human victim. For a bot,
@@ -298,7 +298,7 @@ void ACSPlayerController::TestKillVerifyLoot()
 		? PickupsNow >= TestPickupsBefore + FMath::Min(1, TestVictimItemsBefore)
 		: PickupsNow == TestPickupsBefore + TestVictimItemsBefore;
 	const bool bOk = ItemsLeft == 0 && bCountOk && bStarterKept;
-	UE_LOG(LogCS, Log, TEXT("DEATH LOOT RESULT: victim inventory %d -> %d, pickups %d -> %d%s, starter kept %s -> %s"),
+	UE_LOG(LogCS, Log, TEXT("DEATH LOOT RESULT: victim inventory %d -> %d, pickups %d -> %d%s, loadout emptied %s -> %s"),
 		TestVictimItemsBefore, ItemsLeft, TestPickupsBefore, PickupsNow,
 		bBotVictim ? TEXT(" (bot victim: other bots may loot first)") : TEXT(""), bStarterKept ? TEXT("yes") : TEXT("no"),
 		bOk ? TEXT("DEATH LOOT OK") : TEXT("DEATH LOOT BROKEN"));
@@ -321,7 +321,7 @@ void ACSPlayerController::TestKillVerifyLoot()
 	{
 		const ACSCharacter* Me = Cast<ACSCharacter>(GetPawn());
 		const ACSPlayerInventory* Inv = Me ? ACSPlayerInventory::Find(this, Me->GetOwningPlayerId()) : nullptr;
-		const int32 Have = Inv ? Inv->CountItem(TestLootItemIndex) : 0;
+		const int32 Have = HasItem(Inv, TestLootItemIndex) ? 1 : 0;
 		// Gone from the floor but not in our inventory: someone else got it
 		// first. That is correct behaviour (exactly one winner) - with bots
 		// around it is expected, not a failure.
@@ -344,13 +344,16 @@ void ACSPlayerController::TestKillVerifyLoot()
 		const FCSLoadoutView L = D ? D->GetLoadout(TestVictimId) : FCSLoadoutView();
 		const int32 Items = CountFilledSlots(ACSPlayerInventory::Find(this, TestVictimId));
 		// A bot is back in a fight at once - shot again, looting again - so for a
-		// bot the check is that it did respawn, with the starter pistol.
+		// bot the check is that it did respawn, with something in hand.
 		const bool bBot = CSBots::IsBotId(TestVictimId);
+		const ACSPlayerInventory* VictimLoadout = ACSPlayerInventory::Find(this, TestVictimId);
+		const bool bFresh = L.Slot == CSLoadout::Pistol && L.Weapon && L.RoundsInMag == L.Weapon->MagazineSize
+			&& VictimLoadout && VictimLoadout->HasItemInSlot(CSLoadout::Knife);
 		const bool bOk = bBot
 			? (bHave && R.RespawnCounter > TestVictimRespawnsAtDeath && L.Weapon != nullptr)
-			: (bHave && R.bAlive && R.Health >= 100.f && L.IsStarter() && L.RoundsInMag > 0 && Items == 0);
-		UE_LOG(LogCS, Log, TEXT("RESPAWN RESULT: alive %s, hp %.0f, starter %s (%d rds), inventory %d -> %s"),
-			(bHave && R.bAlive) ? TEXT("yes") : TEXT("no"), R.Health, L.IsStarter() ? TEXT("yes") : TEXT("no"),
+			: (bHave && R.bAlive && R.Health >= 100.f && bFresh && Items == 1);
+		UE_LOG(LogCS, Log, TEXT("RESPAWN RESULT: alive %s, hp %.0f, fresh pistol + knife %s (%d rds), guns %d -> %s"),
+			(bHave && R.bAlive) ? TEXT("yes") : TEXT("no"), R.Health, bFresh ? TEXT("yes") : TEXT("no"),
 			L.RoundsInMag, Items, bOk ? TEXT("RESPAWN OK") : TEXT("RESPAWN BROKEN"));
 	}, 4.5f, false);
 }
@@ -438,7 +441,7 @@ void ACSPlayerController::CSTestWatchLeave()
 				const ACSCharacter* Me2 = Cast<ACSCharacter>(GetPawn());
 				const ACSPlayerInventory* Inv = Me2 ? ACSPlayerInventory::Find(this, Me2->GetOwningPlayerId()) : nullptr;
 				UE_LOG(LogCS, Log, TEXT("LEAVE CLAIM RESULT: took the leaver's weapon -> %s"),
-					(Inv && Inv->CountItem(TestLootItemIndex) > 0) ? TEXT("CLAIM OK") : TEXT("CLAIM BROKEN"));
+					HasItem(Inv, TestLootItemIndex) ? TEXT("CLAIM OK") : TEXT("CLAIM BROKEN"));
 			});
 		}, 1.0f, false);
 	}, 1.0f, true);
@@ -471,9 +474,8 @@ void ACSPlayerController::CSTestDoubleDrop()
 	}
 
 	const UCSItemSettings* Items = UCSItemSettings::Get();
-	Inventory->AddItem(Items->FindItemIndex(TEXT("m4")), 1, 30);
-	Inventory->AddItem(Items->FindItemIndex(TEXT("ammo_rifle")), 60, 0);
-	Inventory->AddItem(Items->FindItemIndex(TEXT("medkit")), 2, 0);
+	Director->GiveItem(FakeId, Items->FindItemIndex(TEXT("m4")), /*bEquip*/ true);
+	Director->GiveItem(FakeId, Items->FindItemIndex(TEXT("grenade")), /*bEquip*/ false);
 	const int32 Carried = CountFilledSlots(Inventory);
 
 	const int32 Before = ACSWorldPickup::CountAlive(this);

@@ -57,8 +57,6 @@ public:
 
 	// --- In-match menus (Slate, see UI/) -------------------------------------
 
-	/** Inventory screen on/off (Tab by default). */
-	void ToggleInventoryScreen();
 
 	/** ESC menu on/off. Closes the inventory screen first if it is open. */
 	void TogglePauseMenu();
@@ -69,7 +67,6 @@ public:
 	void ToggleShopScreen();
 	bool IsShopOpen() const { return bShopOpen; }
 
-	bool IsInventoryOpen() const { return bInventoryOpen; }
 	bool IsPauseMenuOpen() const { return bPauseOpen; }
 
 	/** Scoreboard key held (the HUD also shows it by itself after a round). */
@@ -215,10 +212,7 @@ protected:
 	void RefreshMenuInputMode();
 
 	TSharedPtr<class SCSPauseMenu> PauseMenu;
-	TSharedPtr<class SCSInventoryPanel> InventoryPanel;
-	TSharedPtr<SWidget> InventoryHost;
 	bool bPauseOpen = false;
-	bool bInventoryOpen = false;
 	TSharedPtr<class SCSShopPanel> ShopPanel;
 	TSharedPtr<SWidget> ShopHost;
 	bool bShopOpen = false;
@@ -267,6 +261,7 @@ protected:
 	void TestInputRelease();
 	void TestFireCheck();
 	int32 TestRoundsBefore = -1;
+	int32 TestMoneyBefore = 0;
 
 	FTimerHandle TestInputTimer;
 	FVector TestStartLocation = FVector::ZeroVector;

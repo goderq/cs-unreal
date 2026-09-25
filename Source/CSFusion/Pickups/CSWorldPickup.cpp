@@ -57,6 +57,7 @@ void ACSWorldPickup::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(ACSWorldPickup, ItemIndex);
 	DOREPLIFETIME(ACSWorldPickup, Count);
 	DOREPLIFETIME(ACSWorldPickup, AmmoInMag);
+	DOREPLIFETIME(ACSWorldPickup, Reserve);
 	DOREPLIFETIME(ACSWorldPickup, ExpiresAtNetworkTime);
 	DOREPLIFETIME(ACSWorldPickup, SpawnNetworkTime);
 	DOREPLIFETIME(ACSWorldPickup, DropOrigin);
@@ -131,13 +132,14 @@ FText ACSWorldPickup::GetPromptName() const
 	return Item->DisplayName;
 }
 
-void ACSWorldPickup::InitializeItem(int32 InItemIndex, int32 InCount, int32 InAmmoInMag, bool bInDropped)
+void ACSWorldPickup::InitializeItem(int32 InItemIndex, int32 InCount, int32 InAmmoInMag, bool bInDropped, int32 InReserve)
 {
 	CS_AUTHORITY_ONLY(this);
 
 	ItemIndex = InItemIndex;
 	Count = FMath::Max(1, InCount);
 	AmmoInMag = FMath::Max(0, InAmmoInMag);
+	Reserve = FMath::Max(0, InReserve);
 
 	const float Lifetime = UCSItemSettings::Get()->DroppedItemLifetimeSeconds;
 	SpawnNetworkTime = UCSAuthority::GetNetworkTimeSeconds(this);

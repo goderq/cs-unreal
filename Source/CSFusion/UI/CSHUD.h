@@ -133,6 +133,10 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "CS|HUD")
 	int32 KillFeedMaxEntries = 5;
 
+	/** v2.0 minimap (created on first draw, local only). */
+	UPROPERTY(Transient)
+	TObjectPtr<class UCSMinimap> Minimap;
+
 private:
 	struct FKillFeedEntry
 	{

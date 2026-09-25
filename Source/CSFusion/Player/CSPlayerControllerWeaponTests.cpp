@@ -15,6 +15,7 @@
 #include "Camera/CameraComponent.h"
 #include "Characters/CSCharacter.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Combat/CSMatchDirector.h"
 #include "Components/StaticMeshComponent.h"
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
@@ -44,18 +45,16 @@ void ACSPlayerController::CSTestWeapons()
 		return;
 	}
 
-	// Every weapon item into the inventory (authority, offline).
-	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Self->GetOwningPlayerId());
+	// v2.0: one gun per slot, so each weapon item is handed over in turn
+	// (authority, offline) - the primary is swapped for the next one.
 	const UCSItemSettings* Items = GetDefault<UCSItemSettings>();
 	WeaponTestSlots.Reset();
-	WeaponTestSlots.Add(INDEX_NONE); // starter pistol
-	int32 Slot = 0;
-	for (int32 i = 0; Inventory && Items->IsValidIndex(i); ++i)
+	for (int32 i = 0; Items->IsValidIndex(i); ++i)
 	{
 		const UCSItemDefinition* Item = Items->GetItem(i);
-		if (Item && Item->IsWeapon() && Inventory->AddItem(i, 1, 999) == 0)
+		if (Item && ACSPlayerInventory::SlotForItem(Item) != INDEX_NONE)
 		{
-			WeaponTestSlots.Add(Slot++);
+			WeaponTestSlots.Add(i); // item index, not a slot
 		}
 	}
 	UE_LOG(LogCS, Log, TEXT("WEAPON TEST: %d weapons to check."), WeaponTestSlots.Num());
@@ -71,7 +70,12 @@ void ACSPlayerController::WeaponTestNext()
 		UE_LOG(LogCS, Log, TEXT("WEAPON TEST: done."));
 		return;
 	}
-	Self->RequestSlot(WeaponTestSlots[WeaponTestIndex]);
+	const int32 ItemIndex = WeaponTestSlots[WeaponTestIndex];
+	if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+	{
+		Director->GiveItem(Self->GetOwningPlayerId(), ItemIndex, /*bEquip*/ true);
+	}
+	Self->RequestSlot(ACSPlayerInventory::SlotForItem(UCSItemSettings::Get()->GetItem(ItemIndex)));
 
 	// Equip clip plays ~0.6 s; the view settles after it.
 	GetWorldTimerManager().SetTimer(TestWeaponsTimer, [this]()
@@ -119,8 +123,10 @@ void ACSPlayerController::WeaponTestNext()
 				SightOff = FVector2D(InCam.Y, InCam.Z).Size();
 			}
 			const bool bScope = M && M->bScope;
-			const bool bHandOk = WeaponTestGap >= 0.f && WeaponTestGap < 3.f;
-			const bool bAimOk = bScope ? S2->IsScopedView() : (SightOff >= 0.f && SightOff < 1.5f);
+			// One-handed things (knife, grenades) neither aim nor put the left hand on them.
+			const bool bOneHanded = M && M->bOneHanded;
+			const bool bHandOk = bOneHanded || (WeaponTestGap >= 0.f && WeaponTestGap < 3.f);
+			const bool bAimOk = bOneHanded || (bScope ? S2->IsScopedView() : (SightOff >= 0.f && SightOff < 1.5f));
 			UE_LOG(LogCS, Log, TEXT("WEAPON TEST: view pitch %.1f"), GetControlRotation().Pitch);
 			UE_LOG(LogCS, Log, TEXT("WEAPON TEST RESULT: %s -> left hand gap %.1f cm, %s, aim alpha %.2f -> %s"),
 				*Name, WeaponTestGap,

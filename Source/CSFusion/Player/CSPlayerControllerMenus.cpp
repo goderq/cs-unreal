@@ -21,7 +21,6 @@
 #include "TimerManager.h"
 #include "UI/CSHUD.h"
 #include "UI/CSUIStyle.h"
-#include "UI/SCSInventoryPanel.h"
 #include "UI/SCSPauseMenu.h"
 #include "UI/SCSShopPanel.h"
 #include "Combat/CSMatchDirector.h"
@@ -69,7 +68,7 @@ void ACSPlayerController::HideMenuWidget(const TSharedPtr<SWidget>& Widget)
 
 void ACSPlayerController::RefreshMenuInputMode()
 {
-	if (bPauseOpen || bInventoryOpen || bShopOpen)
+	if (bPauseOpen || bShopOpen)
 	{
 		FInputModeUIOnly Mode;
 		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
@@ -81,10 +80,6 @@ void ACSPlayerController::RefreshMenuInputMode()
 		{
 			Mode.SetWidgetToFocus(ShopPanel);
 		}
-		else if (InventoryPanel.IsValid())
-		{
-			Mode.SetWidgetToFocus(InventoryPanel);
-		}
 		SetInputMode(Mode);
 		SetShowMouseCursor(true);
 	}
@@ -94,59 +89,6 @@ void ACSPlayerController::RefreshMenuInputMode()
 		SetShowMouseCursor(false);
 		FlushPressedKeys();
 	}
-}
-
-void ACSPlayerController::ToggleInventoryScreen()
-{
-	if (!IsLocalController() || bPauseOpen)
-	{
-		return;
-	}
-
-	if (bInventoryOpen)
-	{
-		bInventoryOpen = false;
-		HideMenuWidget(InventoryHost);
-		RefreshMenuInputMode();
-		return;
-	}
-
-	if (!InventoryHost.IsValid())
-	{
-		// The key that closes the screen is whatever the player bound it to.
-		FKey CloseKey = EKeys::Tab;
-		{
-			const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
-			const UCSInputConfig* Config = GetDefault<UCSInputConfig>();
-			CloseKey = Settings ? Settings->GetKeyFor(TEXT("ToggleInventory"), Config->Key_ToggleInventory) : Config->Key_ToggleInventory;
-		}
-
-		InventoryHost = SNew(SOverlay)
-			+ SOverlay::Slot()
-			[
-				SNew(SImage).Image(CSUI::WhiteBrush()).ColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.55f))
-			]
-			+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center).Padding(FMargin(16.f, 32.f))
-			[
-				SNew(SBox).WidthOverride(1240.f).HeightOverride(780.f)
-				[
-					SNew(SBorder)
-					.BorderImage(CSUI::WhiteBrush())
-					.BorderBackgroundColor(CSUI::Panel)
-					.Padding(FMargin(36.f, 30.f))
-					[
-						SAssignNew(InventoryPanel, SCSInventoryPanel)
-						.WorldContext(this)
-						.ShowCloseButton(true)
-						.CloseKey(CloseKey)
-						.OnClose_Lambda([this]() { if (bInventoryOpen) { ToggleInventoryScreen(); } })
-					]
-				]
-			];
-	}
-
-	bInventoryOpen = true;
-	ShowMenuWidget(InventoryHost.ToSharedRef(), InventoryPanel.ToSharedRef());
 }
 
 void ACSPlayerController::ToggleShopScreen()
@@ -174,11 +116,6 @@ void ACSPlayerController::ToggleShopScreen()
 			HUD->FlashNotice(NSLOCTEXT("CSShop", "ShopClosedNotice", "The shop is closed"));
 		}
 		return;
-	}
-
-	if (bInventoryOpen)
-	{
-		ToggleInventoryScreen();
 	}
 
 	if (!ShopHost.IsValid())
@@ -233,12 +170,6 @@ void ACSPlayerController::TogglePauseMenu()
 		return;
 	}
 
-	if (bInventoryOpen)
-	{
-		// ESC on the inventory screen just closes it.
-		ToggleInventoryScreen();
-		return;
-	}
 	if (bShopOpen)
 	{
 		ToggleShopScreen();
@@ -267,7 +198,7 @@ void ACSPlayerController::TogglePauseMenu()
 
 void ACSPlayerController::CloseMenus()
 {
-	const bool bWasOpen = bPauseOpen || bInventoryOpen || bShopOpen;
+	const bool bWasOpen = bPauseOpen || bShopOpen;
 	if (bShopOpen)
 	{
 		bShopOpen = false;
@@ -277,11 +208,6 @@ void ACSPlayerController::CloseMenus()
 	{
 		bPauseOpen = false;
 		HideMenuWidget(PauseMenu);
-	}
-	if (bInventoryOpen)
-	{
-		bInventoryOpen = false;
-		HideMenuWidget(InventoryHost);
 	}
 	if (bWasOpen && IsLocalController())
 	{
@@ -319,8 +245,7 @@ void ACSPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	const TSharedPtr<SWidget> Wanted = bPauseOpen ? StaticCastSharedPtr<SWidget>(PauseMenu)
-		: (bInventoryOpen ? StaticCastSharedPtr<SWidget>(InventoryPanel)
-		: (bShopOpen ? StaticCastSharedPtr<SWidget>(ShopPanel) : nullptr));
+		: (bShopOpen ? StaticCastSharedPtr<SWidget>(ShopPanel) : nullptr);
 	if (Wanted.IsValid())
 	{
 		const TSharedPtr<SWidget> Focused = FSlateApplication::Get().GetKeyboardFocusedWidget();
@@ -359,18 +284,7 @@ void ACSPlayerController::CSTestUI()
 
 	GetWorldTimerManager().SetTimer(TestUITimer, [this]()
 	{
-		ToggleInventoryScreen();
-		const bool bFocused = InventoryPanel.IsValid() && FSlateApplication::Get().GetKeyboardFocusedWidget() == InventoryPanel;
-		UE_LOG(LogCS, Log, TEXT("UI TEST RESULT: inventory open -> %s (focused %s, cursor %s)"),
-			bInventoryOpen ? TEXT("OPEN OK") : TEXT("OPEN BROKEN"), bFocused ? TEXT("yes") : TEXT("no"),
-			ShouldShowMouseCursor() ? TEXT("yes") : TEXT("no"));
-		TestScreenshot(TEXT("inventory"));
-
-		GetWorldTimerManager().SetTimer(TestUITimer, [this]()
-		{
-			ToggleInventoryScreen();
-			UE_LOG(LogCS, Log, TEXT("UI TEST RESULT: inventory close -> %s"), !bInventoryOpen ? TEXT("CLOSE OK") : TEXT("CLOSE BROKEN"));
-
+		// v2.0: no inventory screen any more; the test starts at the ESC menu.
 			TogglePauseMenu();
 			UE_LOG(LogCS, Log, TEXT("UI TEST RESULT: ESC menu open -> %s"), bPauseOpen ? TEXT("OPEN OK") : TEXT("OPEN BROKEN"));
 			TestScreenshot(TEXT("pause"));
@@ -441,6 +355,5 @@ void ACSPlayerController::CSTestUI()
 					}, 11.f, false);
 				}, 1.5f, false);
 			}, 1.5f, false);
-		}, 1.5f, false);
 	}, 1.0f, false);
 }

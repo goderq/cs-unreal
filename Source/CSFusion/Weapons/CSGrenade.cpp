@@ -54,21 +54,28 @@ ACSGrenade::ACSGrenade()
 	Movement->bAutoActivate = false;
 }
 
-void ACSGrenade::Launch(int32 InSerial, int32 InThrowerId, const FVector& Velocity, float FuseSeconds)
+void ACSGrenade::SetType(ECSGrenadeType InType)
 {
-	Serial = InSerial;
-	ThrowerId = InThrowerId;
-	FuseEnd = GetWorld()->GetTimeSeconds() + FuseSeconds;
+	Type = InType;
 
-	// The grenade model is the item's world mesh (see bootstrap_v11.py).
+	// The model is the item's world mesh (see bootstrap_v11.py / bootstrap_v20.py).
 	const UCSItemSettings* Items = UCSItemSettings::Get();
-	if (const UCSItemDefinition* Item = Items->GetItem(Items->FindItemIndex(TEXT("grenade"))))
+	const TCHAR* ItemId = Type == ECSGrenadeType::Flash ? TEXT("flashbang") : TEXT("grenade");
+	if (const UCSItemDefinition* Item = Items->GetItem(Items->FindItemIndex(ItemId)))
 	{
 		if (UStaticMesh* Mesh = Item->WorldMesh.LoadSynchronous())
 		{
 			Model->SetStaticMesh(Mesh);
 		}
 	}
+}
+
+void ACSGrenade::Launch(int32 InSerial, int32 InThrowerId, const FVector& Velocity, float FuseSeconds, ECSGrenadeType InType)
+{
+	Serial = InSerial;
+	ThrowerId = InThrowerId;
+	FuseEnd = GetWorld()->GetTimeSeconds() + FuseSeconds;
+	SetType(InType);
 
 	Movement->OnProjectileBounce.AddDynamic(this, &ACSGrenade::HandleBounce);
 	Movement->Velocity = Velocity;
@@ -139,6 +146,13 @@ void ACSGrenade::Explode(const FVector& Location)
 
 	UWorld* World = GetWorld();
 
+	if (Type == ECSGrenadeType::Flash)
+	{
+		ExplodeFlash(Location);
+		SetLifeSpan(0.5f);
+		return;
+	}
+
 	// Fireball: a bright flash with a big light, then a rolling smoke ball.
 	ACSTransientFX::FParams Flash;
 	Flash.Color = FLinearColor(1.f, 0.55f, 0.18f);
@@ -203,6 +217,51 @@ void ACSGrenade::Explode(const FVector& Location)
 	}
 
 	SetLifeSpan(0.5f);
+}
+
+void ACSGrenade::ExplodeFlash(const FVector& Location)
+{
+	UWorld* World = GetWorld();
+
+	// A white-hot pop: very bright, very short, with a light that floods the room.
+	ACSTransientFX::FParams Pop;
+	Pop.Color = FLinearColor(1.f, 0.97f, 0.9f);
+	Pop.Intensity = 80.f;
+	Pop.Lifetime = 0.12f;
+	Pop.StartScale = FVector(0.4f);
+	Pop.EndScale = FVector(2.2f);
+	Pop.LightIntensity = 400000.f;
+	Pop.LightRadius = 2600.f;
+	ACSTransientFX::Spawn(World, FTransform(Location + FVector(0.f, 0.f, 15.f)), Pop);
+
+	ACSTransientFX::FParams Wisp;
+	Wisp.bAdditive = false;
+	Wisp.Color = FLinearColor(0.55f, 0.55f, 0.56f);
+	Wisp.Opacity = 0.35f;
+	Wisp.Lifetime = 1.4f;
+	Wisp.StartScale = FVector(0.3f);
+	Wisp.EndScale = FVector(1.4f);
+	ACSTransientFX::Spawn(World, FTransform(Location + FVector(0.f, 0.f, 20.f)), Wisp);
+
+	CSAudio::PlayAt(World, UCSAudioSettings::Get()->FlashbangExplode, Location, 1.f, FMath::FRandRange(0.97f, 1.03f));
+
+	// Blind the local player according to what they can see of it. Every peer
+	// decides this for its own camera; the authority separately blinds bots.
+	if (APlayerController* PC = World->GetFirstPlayerController())
+	{
+		if (ACSCharacter* Viewer = Cast<ACSCharacter>(PC->GetPawn()))
+		{
+			FVector Eye;
+			FRotator ViewRotation;
+			PC->GetPlayerViewPoint(Eye, ViewRotation);
+			float Seconds = 0.f;
+			const float Strength = ACSMatchDirector::ComputeFlashStrength(World, Location, Eye, ViewRotation.Vector(), this, Seconds);
+			if (Strength > 0.f && Viewer->IsAliveAuthoritative())
+			{
+				Viewer->ApplyFlash(Strength, Seconds);
+			}
+		}
+	}
 }
 
 ACSGrenade* ACSGrenade::FindBySerial(const UObject* WorldContextObject, int32 InSerial, bool bIncludeExploded)

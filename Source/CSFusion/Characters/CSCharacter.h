@@ -144,17 +144,35 @@ public:
 	/** Picks up whatever the player is looking at, if anything. */
 	void RequestPickupFocused();
 
-	/**
-	 * Slot key pressed. INDEX_NONE selects the starter pistol. A weapon slot
-	 * equips; a medkit/armor slot uses the item.
-	 */
+	/** Slot key pressed (0..4 for keys 1..5, see CSLoadout). Empty slots are ignored. */
 	void RequestSlot(int32 Slot);
 
-	/** Drops the equipped inventory weapon into the world. */
+	/** Drops the gun in hand (primary or pistol; the knife and grenades stay). */
 	void RequestDropEquipped();
 
-	/** Owning client: drop the whole stack in an inventory slot (inventory screen). */
-	void RequestDropSlot(int32 Slot);
+	/** v2.0 knife: owning client swings (light slash or heavy stab). */
+	void RequestMelee(bool bHeavy);
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestMelee(FVector Origin, FVector Direction, bool bHeavy);
+	void RpcRequestMelee_Receive(FVector Origin, FVector Direction, bool bHeavy);
+
+	/** Cosmetic: the swing, and what it hit, on every peer. */
+	SEND_FUSIONRPC(TargetAllClients)
+	void RpcMeleeSwing(bool bHeavy, FVector Impact, int32 HitKind);
+	void RpcMeleeSwing_Receive(bool bHeavy, FVector Impact, int32 HitKind);
+
+	/** v2.0 ammo machines: the one under the crosshair and within reach (local). */
+	class ACSAmmoMachine* GetFocusedMachine() const { return FocusedMachine.Get(); }
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcRequestAmmo(int32 MachineIndex);
+	void RpcRequestAmmo_Receive(int32 MachineIndex);
+
+	/** v2.0 flashbang: local blindness, Strength 0..1 fading over Seconds. */
+	void ApplyFlash(float Strength, float Seconds);
+	/** How white the screen is right now (0..1), for the HUD. */
+	float GetFlashAmount() const;
 
 	const UCSInputConfig* GetInputConfig() const { return InputConfig; }
 
@@ -244,7 +262,6 @@ protected:
 	void Input_Interact(const FInputActionValue& Value);
 	void Input_EquipSlot(const FInputActionValue& Value);
 	void Input_Drop(const FInputActionValue& Value);
-	void Input_ToggleInventory(const FInputActionValue& Value);
 	void Input_PauseMenu(const FInputActionValue& Value);
 	void Input_ScoreboardStart(const FInputActionValue& Value);
 	void Input_ScoreboardStop(const FInputActionValue& Value);
@@ -347,6 +364,9 @@ protected:
 	double NextIdentityBroadcast = 0.0;
 	/** First-person throw clock (< 0 idle). */
 	float ViewThrowTime = -1.f;
+	/** v2.0 knife swing in the local view (< 0 = none). */
+	float ViewMeleeTime = -1.f;
+	bool bViewMeleeHeavy = false;
 
 	/** v1.1: death ragdoll on the body mesh (every peer, cosmetic). */
 	void SetRagdoll(bool bEnable);
@@ -444,6 +464,13 @@ private:
 
 	/** Local only; recomputed every frame for the owning client. */
 	TWeakObjectPtr<class ACSWorldPickup> FocusedPickup;
+	TWeakObjectPtr<class ACSAmmoMachine> FocusedMachine;
+
+	// v2.0 flashbang (local view): peak strength, when it started and how long it lasts.
+	float FlashStrength = 0.f;
+	double FlashStart = 0.0;
+	float FlashSeconds = 0.f;
+	TWeakObjectPtr<class UAudioComponent> FlashRing;
 
 	/** Mapping context built in C++ by UCSInputConfig, cached per pawn. */
 	UPROPERTY(Transient)
@@ -492,6 +519,13 @@ public:
 	void BotReload();
 	void BotPickup(class ACSWorldPickup* Pickup);
 	void BotSelectSlot(int32 Slot);
+	/** v2.0: a bot swings its knife (authority, no RPC). */
+	void BotMelee(const FVector& Origin, const FVector& Direction, bool bHeavy);
+	/** v2.0: a bot tops up its reserves at an ammo machine (authority, no RPC). */
+	void BotBuyAmmo(class ACSAmmoMachine* Machine);
+
+	/** Authority: validates a knife swing and applies what it hits (player RPC and bots). */
+	void ResolveMeleeOnAuthority(const FVector& Origin, const FVector& Direction, bool bHeavy);
 
 	class UCSAnimInstance* GetBodyAnim() const;
 	class UCSAnimInstance* GetArmsAnim() const;

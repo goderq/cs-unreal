@@ -14,6 +14,7 @@
 #include "Core/CSLog.h"
 #include "EngineUtils.h"
 #include "Inventory/CSPlayerInventory.h"
+#include "Items/CSItemSettings.h"
 #include "Pickups/CSWorldPickup.h"
 #include "TimerManager.h"
 
@@ -79,6 +80,20 @@ void ACSPlayerController::CSTestCheat()
 			{
 				CheatFarPickup = *It;
 				break;
+			}
+		}
+		// v2.0: nothing lies on the maps any more; the (offline) authority puts
+		// a gun down 20 m away itself.
+		if (!CheatFarPickup.IsValid() && UCSAuthority::IsGameAuthority(this))
+		{
+			if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
+			{
+				FCSInventorySlot Gun;
+				Gun.ItemIndex = UCSItemSettings::Get()->FindItemIndex(TEXT("m4"));
+				Gun.Count = 1;
+				Gun.AmmoInMag = 30;
+				const FVector Far = Self1->GetActorLocation() + Self1->GetActorForwardVector() * 2000.f;
+				CheatFarPickup = Director->SpawnDroppedItem(Gun, Far, Far);
 			}
 		}
 		if (CheatFarPickup.IsValid())

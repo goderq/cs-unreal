@@ -21,9 +21,8 @@ TArray<FCSRebindableBinding> UCSInputConfig::GetRebindableBindings() const
 		{ TEXT("Sprint"),          LOCTEXT("Sprint", "Sprint"),               Key_Sprint },
 		{ TEXT("Crouch"),          LOCTEXT("Crouch", "Crouch"),               Key_Crouch },
 		{ TEXT("Reload"),          LOCTEXT("Reload", "Reload"),               Key_Reload },
-		{ TEXT("Interact"),        LOCTEXT("Interact", "Pick up / interact"), Key_Interact },
+		{ TEXT("Interact"),        LOCTEXT("Interact", "Pick up / ammo machine"), Key_Interact },
 		{ TEXT("Drop"),            LOCTEXT("Drop", "Drop weapon"),            Key_Drop },
-		{ TEXT("ToggleInventory"), LOCTEXT("Inventory", "Inventory"),         Key_ToggleInventory },
 		{ TEXT("Scoreboard"),      LOCTEXT("Scoreboard", "Scoreboard (hold)"), Key_Scoreboard },
 		{ TEXT("BuyMenu"),         LOCTEXT("BuyMenu", "Shop"),                Key_BuyMenu },
 	};
@@ -89,7 +88,6 @@ UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer,
 	Map(IA_Aim,             Key_Aim,                                           {});
 	Map(IA_Reload,          Resolve(TEXT("Reload"), Key_Reload),               {});
 	Map(IA_Interact,        Resolve(TEXT("Interact"), Key_Interact),           {});
-	Map(IA_ToggleInventory, Resolve(TEXT("ToggleInventory"), Key_ToggleInventory), {});
 	Map(IA_PauseMenu,       Key_PauseMenu,                                     {});
 	Map(IA_Scoreboard,      Resolve(TEXT("Scoreboard"), Key_Scoreboard),       {});
 	Map(IA_Drop,            Resolve(TEXT("Drop"), Key_Drop),                   {});
