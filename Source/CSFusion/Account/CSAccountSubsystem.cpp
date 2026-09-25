@@ -13,7 +13,6 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "OnlineSubsystem.h"
-#include "OnlineSubsystemTypes.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -21,6 +20,9 @@
 namespace
 {
 	const FName EOSSubsystemName(TEXT("EOS"));
+
+	/** The backend token is renewed when this share of its lifetime has passed. */
+	constexpr double RenewAtFraction = 0.75;
 
 	IOnlineIdentityPtr GetEpicIdentity()
 	{
@@ -35,17 +37,39 @@ namespace
 		return FJsonSerializer::Deserialize(Reader, Object) ? Object : nullptr;
 	}
 
-	FString ErrorFromBody(const FString& Body, const FString& Fallback)
+	FString ErrorFromJson(const TSharedPtr<FJsonObject>& Json, const FString& Fallback)
 	{
-		if (const TSharedPtr<FJsonObject> Json = ParseJson(Body))
+		FString Message;
+		if (Json.IsValid() && (Json->TryGetStringField(TEXT("error"), Message) || Json->TryGetStringField(TEXT("message"), Message)))
 		{
-			FString Message;
-			if (Json->TryGetStringField(TEXT("error"), Message) || Json->TryGetStringField(TEXT("message"), Message))
-			{
-				return Message;
-			}
+			return Message;
 		}
 		return Fallback;
+	}
+
+	FString ToJson(const TSharedRef<FJsonObject>& Object)
+	{
+		FString Out;
+		const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
+		FJsonSerializer::Serialize(Object, Writer);
+		return Out;
+	}
+
+	void ReadStats(const TSharedPtr<FJsonObject>& Json, FCSAccountStats& Out)
+	{
+		if (!Json.IsValid())
+		{
+			return;
+		}
+		Json->TryGetNumberField(TEXT("matches"), Out.Matches);
+		Json->TryGetNumberField(TEXT("wins"), Out.Wins);
+		Json->TryGetNumberField(TEXT("kills"), Out.Kills);
+		Json->TryGetNumberField(TEXT("deaths"), Out.Deaths);
+		Json->TryGetNumberField(TEXT("headshots"), Out.Headshots);
+		Json->TryGetNumberField(TEXT("playtime_seconds"), Out.PlaytimeSeconds);
+		Json->TryGetNumberField(TEXT("practice_matches"), Out.PracticeMatches);
+		Json->TryGetNumberField(TEXT("practice_kills"), Out.PracticeKills);
+		Json->TryGetNumberField(TEXT("practice_deaths"), Out.PracticeDeaths);
 	}
 }
 
@@ -60,35 +84,48 @@ void UCSAccountSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
+	TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UCSAccountSubsystem::TickSession), 15.f);
+
 	const FCSBackendConfig& Config = FCSBackendConfig::Get();
 	if (!Config.HasEOS() || !Config.HasSupabase())
 	{
 		State = ECSAccountState::NotConfigured;
 		LastError = TEXT("Config/Backend.ini is missing or incomplete (see docs/ACCOUNTS.md).");
-		UE_LOG(LogCS, Warning, TEXT("Accounts: %s"), *LastError);
+		UE_LOG(LogCSAuth, Warning, TEXT("Accounts: %s"), *LastError);
 		return;
 	}
 
 	// Sign in as the game starts rather than waiting for the login screen: a
 	// build launched straight into a map (a test, or -mode= on the command
-	// line) would otherwise play the whole match signed out, and the match
-	// would never be recorded. The screen just watches the state.
+	// line) would otherwise play the whole match signed out. The attempt is
+	// silent: the saved Epic session, no window.
 	if (IsSignInRequired())
 	{
-		SignIn();
+		TrySilentSignIn();
 	}
 }
 
 void UCSAccountSubsystem::Deinitialize()
 {
-	if (LoginHandle.IsValid())
+	FTSTicker::RemoveTicker(TickerHandle);
+	if (const IOnlineIdentityPtr Identity = GetEpicIdentity())
 	{
-		if (const IOnlineIdentityPtr Identity = GetEpicIdentity())
+		if (LoginHandle.IsValid())
 		{
 			Identity->ClearOnLoginCompleteDelegate_Handle(0, LoginHandle);
 		}
-		LoginHandle.Reset();
+		if (LogoutHandle.IsValid())
+		{
+			Identity->ClearOnLogoutCompleteDelegate_Handle(0, LogoutHandle);
+		}
+		if (LoginStatusHandle.IsValid())
+		{
+			Identity->ClearOnLoginStatusChangedDelegate_Handle(0, LoginStatusHandle);
+		}
 	}
+	LoginHandle.Reset();
+	LogoutHandle.Reset();
+	LoginStatusHandle.Reset();
 	Super::Deinitialize();
 }
 
@@ -124,52 +161,80 @@ void UCSAccountSubsystem::SetState(ECSAccountState NewState)
 void UCSAccountSubsystem::Fail(const FString& Error)
 {
 	LastError = Error;
-	UE_LOG(LogCS, Warning, TEXT("Accounts: sign-in failed - %s"), *Error);
+	UE_LOG(LogCSAuth, Warning, TEXT("Accounts: sign-in failed - %s"), *Error);
 	SetState(ECSAccountState::Failed);
 }
 
-void UCSAccountSubsystem::SignIn()
+void UCSAccountSubsystem::ClearSession()
 {
-	if (State == ECSAccountState::SigningIn || State == ECSAccountState::Ready)
+	AccessToken.Reset();
+	ProfileId.Reset();
+	Nickname.Reset();
+	Role.Reset();
+	Stats = FCSAccountStats();
+	TokenExpiresAt = 0.0;
+	TokenRenewAt = 0.0;
+}
+
+// ---------------------------------------------------------------------------
+// Epic sign-in
+// ---------------------------------------------------------------------------
+
+void UCSAccountSubsystem::TrySilentSignIn()
+{
+	if (State == ECSAccountState::SigningIn || State == ECSAccountState::CheckingSession || State == ECSAccountState::Ready)
 	{
 		return;
 	}
 	const FCSBackendConfig& Config = FCSBackendConfig::Get();
 	if (!Config.HasEOS() || !Config.HasSupabase())
 	{
-		State = ECSAccountState::NotConfigured;
-		OnAccountChanged.Broadcast();
+		SetState(ECSAccountState::NotConfigured);
 		return;
 	}
 	LastError.Reset();
-	SetState(ECSAccountState::SigningIn);
-	BeginEpicLogin();
+	bSilentAttempt = true;
+	SetState(ECSAccountState::CheckingSession);
+	BeginEpicLogin(TEXT("persistentauth"));
 }
 
-void UCSAccountSubsystem::SignOut()
+void UCSAccountSubsystem::SignIn()
 {
-	if (const IOnlineIdentityPtr Identity = GetEpicIdentity())
+	if (State == ECSAccountState::SigningIn || State == ECSAccountState::CheckingSession || State == ECSAccountState::Ready)
 	{
-		Identity->Logout(0);
+		return;
 	}
-	AccessToken.Reset();
-	ProfileId.Reset();
-	Nickname.Reset();
-	bIsAdmin = false;
-	Stats = FCSAccountStats();
-	SetState(ECSAccountState::SignedOut);
+	const FCSBackendConfig& Config = FCSBackendConfig::Get();
+	if (!Config.HasEOS() || !Config.HasSupabase())
+	{
+		SetState(ECSAccountState::NotConfigured);
+		return;
+	}
+	LastError.Reset();
+	bSilentAttempt = false;
+	SetState(ECSAccountState::SigningIn);
+	// "accountportal" is the Epic-hosted login: the overlay if it is available,
+	// otherwise the browser. The game never sees the password.
+	BeginEpicLogin(TEXT("accountportal"));
 }
 
-void UCSAccountSubsystem::BeginEpicLogin()
+void UCSAccountSubsystem::BeginEpicLogin(const TCHAR* CredentialType)
 {
 	const IOnlineIdentityPtr Identity = GetEpicIdentity();
 	if (!Identity.IsValid())
 	{
+		bSilentAttempt = false;
 		Fail(TEXT("Epic Online Services is unavailable (plugin or configuration missing)."));
 		return;
 	}
 
-	// Already signed in this session (a second visit to the menu).
+	if (!LoginStatusHandle.IsValid())
+	{
+		LoginStatusHandle = Identity->AddOnLoginStatusChangedDelegate_Handle(0,
+			FOnLoginStatusChangedDelegate::CreateUObject(this, &UCSAccountSubsystem::HandleLoginStatusChanged));
+	}
+
+	// Already signed in to Epic this session (the menu was visited before).
 	if (Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
 	{
 		HandleEpicLogin(0, true, *Identity->GetUniquePlayerId(0), FString());
@@ -183,12 +248,8 @@ void UCSAccountSubsystem::BeginEpicLogin()
 	LoginHandle = Identity->AddOnLoginCompleteDelegate_Handle(0,
 		FOnLoginCompleteDelegate::CreateUObject(this, &UCSAccountSubsystem::HandleEpicLogin));
 
-	// "accountportal" is the Epic-hosted login: the overlay if it is available,
-	// otherwise the browser. The SDK reuses a saved session when there is one,
-	// so returning players are not asked again.
-	FOnlineAccountCredentials Credentials(TEXT("accountportal"), FString(), FString());
-	UE_LOG(LogCS, Log, TEXT("Accounts: starting the Epic login."));
-	Identity->Login(0, Credentials);
+	UE_LOG(LogCSAuth, Log, TEXT("Accounts: Epic sign-in via %s."), CredentialType);
+	Identity->Login(0, FOnlineAccountCredentials(CredentialType, FString(), FString()));
 }
 
 void UCSAccountSubsystem::HandleEpicLogin(int32 LocalUserNum, bool bWasSuccessful, const FUniqueNetId& UserId, const FString& Error)
@@ -199,9 +260,29 @@ void UCSAccountSubsystem::HandleEpicLogin(int32 LocalUserNum, bool bWasSuccessfu
 		Identity->ClearOnLoginCompleteDelegate_Handle(0, LoginHandle);
 		LoginHandle.Reset();
 	}
+
+	const bool bWasSilent = bSilentAttempt;
+	bSilentAttempt = false;
+	const bool bRenewal = bRenewing;
+
 	if (!bWasSuccessful)
 	{
-		Fail(Error.IsEmpty() ? TEXT("the Epic login was cancelled") : Error);
+		if (bRenewal)
+		{
+			UE_LOG(LogCSAuth, Warning, TEXT("Accounts: the saved Epic session could not renew the login (%s)."), *Error);
+			FinishRenewal(false);
+			return;
+		}
+		if (bWasSilent)
+		{
+			// Not an error: there simply is no saved session (first launch, or
+			// the player signed out). The screen shows the sign-in button.
+			UE_LOG(LogCSAuth, Log, TEXT("Accounts: no saved Epic session (%s) - waiting for the player to sign in."), *Error);
+			LastError.Reset();
+			SetState(ECSAccountState::SignedOut);
+			return;
+		}
+		Fail(Error.IsEmpty() ? TEXT("the Epic sign-in was cancelled") : Error);
 		return;
 	}
 
@@ -209,11 +290,32 @@ void UCSAccountSubsystem::HandleEpicLogin(int32 LocalUserNum, bool bWasSuccessfu
 	const FString Token = ReadEpicToken();
 	if (Token.IsEmpty())
 	{
+		if (bRenewal)
+		{
+			FinishRenewal(false);
+			return;
+		}
 		Fail(TEXT("Epic signed in but returned no token."));
 		return;
 	}
-	UE_LOG(LogCS, Log, TEXT("Accounts: Epic login OK (%s); asking the backend."), *EpicDisplayName);
-	ExchangeTokenForSession(Token);
+	UE_LOG(LogCSAuth, Log, TEXT("Accounts: Epic sign-in OK (%s)."),
+		bWasSilent ? TEXT("saved session, no window") : TEXT("account portal"));
+
+	if (bRenewal)
+	{
+		ExchangeTokenForSession(Token, /*bRenewal*/ true);
+		return;
+	}
+	SetState(ECSAccountState::SigningIn);
+	ExchangeTokenForSession(Token, /*bRenewal*/ false);
+}
+
+void UCSAccountSubsystem::HandleLoginStatusChanged(int32 LocalUserNum, ELoginStatus::Type OldStatus, ELoginStatus::Type NewStatus, const FUniqueNetId& UserId)
+{
+	// The backend token stays valid until it expires; the next renewal tries
+	// the saved Epic session, and only if that fails is the player asked again.
+	UE_LOG(LogCSAuth, Log, TEXT("Accounts: Epic login status %s -> %s."),
+		ELoginStatus::ToString(OldStatus), ELoginStatus::ToString(NewStatus));
 }
 
 FString UCSAccountSubsystem::ReadEpicToken() const
@@ -223,12 +325,12 @@ FString UCSAccountSubsystem::ReadEpicToken() const
 	{
 		return FString();
 	}
+	// The EOS SDK keeps this token fresh; each call copies the current one.
 	FString Token = Identity->GetAuthToken(0);
 	if (!Token.IsEmpty())
 	{
 		return Token;
 	}
-	// Some versions expose it only as an account attribute.
 	if (const TSharedPtr<FUserOnlineAccount> Account = Identity->GetUserAccount(*Identity->GetUniquePlayerId(0)))
 	{
 		for (const TCHAR* Key : { TEXT("authToken"), TEXT("auth_token"), TEXT("access_token"), TEXT("id_token") })
@@ -241,6 +343,10 @@ FString UCSAccountSubsystem::ReadEpicToken() const
 	}
 	return FString();
 }
+
+// ---------------------------------------------------------------------------
+// Backend session
+// ---------------------------------------------------------------------------
 
 TSharedRef<IHttpRequest, ESPMode::ThreadSafe> UCSAccountSubsystem::MakeRequest(const FString& Url, const FString& Verb, bool bAuthenticated) const
 {
@@ -256,98 +362,292 @@ TSharedRef<IHttpRequest, ESPMode::ThreadSafe> UCSAccountSubsystem::MakeRequest(c
 	return Request;
 }
 
-void UCSAccountSubsystem::ExchangeTokenForSession(const FString& EpicToken)
+void UCSAccountSubsystem::ExchangeTokenForSession(const FString& EpicToken, bool bRenewal)
 {
 	const FCSBackendConfig& Config = FCSBackendConfig::Get();
-
-	FString Body;
-	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
-	Writer->WriteObjectStart();
-	Writer->WriteValue(TEXT("epic_token"), EpicToken);
-	Writer->WriteValue(TEXT("display_name"), EpicDisplayName);
-	Writer->WriteObjectEnd();
-	Writer->Close();
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("epic_token"), EpicToken);
 
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(Config.FunctionUrl(TEXT("eos-login")), TEXT("POST"), false);
-	Request->SetContentAsString(Body);
+	Request->SetContentAsString(ToJson(Body));
 	Request->OnProcessRequestComplete().BindWeakLambda(this,
-		[this](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
+		[this, bRenewal](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
 		{
-			if (!bConnected || !Response.IsValid())
+			const int32 Code = (bConnected && Response.IsValid()) ? Response->GetResponseCode() : 0;
+			const TSharedPtr<FJsonObject> Json = Response.IsValid() ? ParseJson(Response->GetContentAsString()) : nullptr;
+
+			if (Code != 200)
 			{
-				Fail(TEXT("the account server did not answer."));
+				FString Message = Code == 0
+					? FString(TEXT("no connection to the account server"))
+					: ErrorFromJson(Json, FString::Printf(TEXT("the account server answered %d"), Code));
+				FString BannedUntil;
+				if (Code == 403 && Json.IsValid() && Json->TryGetStringField(TEXT("banned_until"), BannedUntil))
+				{
+					Message = FString::Printf(TEXT("This account is banned until %s."), *BannedUntil.Left(16).Replace(TEXT("T"), TEXT(" ")));
+				}
+				if (bRenewal)
+				{
+					// A refused renewal (banned, account gone) ends the session now;
+					// a network hiccup keeps it until the token really expires.
+					if (Code == 401 || Code == 403)
+					{
+						UE_LOG(LogCSAuth, Warning, TEXT("Accounts: session renewal refused (%d) - signing out."), Code);
+						ClearSession();
+						LastError = Message;
+						SetState(Code == 403 ? ECSAccountState::Failed : ECSAccountState::SignedOut);
+					}
+					FinishRenewal(false);
+					return;
+				}
+				ClearSession();
+				Fail(Message);
 				return;
 			}
-			const FString Content = Response->GetContentAsString();
-			if (Response->GetResponseCode() != 200)
+
+			ApplySession(Json);
+			if (ProfileId.IsEmpty() || AccessToken.IsEmpty())
 			{
-				Fail(ErrorFromBody(Content, FString::Printf(TEXT("the account server answered %d"), Response->GetResponseCode())));
-				return;
-			}
-			const TSharedPtr<FJsonObject> Json = ParseJson(Content);
-			const TSharedPtr<FJsonObject>* Profile = nullptr;
-			if (!Json.IsValid() || !Json->TryGetObjectField(TEXT("profile"), Profile))
-			{
+				ClearSession();
+				if (bRenewal)
+				{
+					FinishRenewal(false);
+					return;
+				}
 				Fail(TEXT("the account server sent an answer the game did not understand."));
 				return;
 			}
-			Json->TryGetStringField(TEXT("token"), AccessToken);
-			(*Profile)->TryGetStringField(TEXT("id"), ProfileId);
-			(*Profile)->TryGetStringField(TEXT("nickname"), Nickname);
-			bIsAdmin = false;
-			(*Profile)->TryGetBoolField(TEXT("is_admin"), bIsAdmin);
 
-			const TSharedPtr<FJsonObject>* StatsJson = nullptr;
-			if (Json->TryGetObjectField(TEXT("stats"), StatsJson))
+			if (bRenewal)
 			{
-				(*StatsJson)->TryGetNumberField(TEXT("matches"), Stats.Matches);
-				(*StatsJson)->TryGetNumberField(TEXT("wins"), Stats.Wins);
-				(*StatsJson)->TryGetNumberField(TEXT("kills"), Stats.Kills);
-				(*StatsJson)->TryGetNumberField(TEXT("deaths"), Stats.Deaths);
-				(*StatsJson)->TryGetNumberField(TEXT("headshots"), Stats.Headshots);
-				(*StatsJson)->TryGetNumberField(TEXT("playtime_seconds"), Stats.PlaytimeSeconds);
-			}
-			int32 ExpiresIn = 0;
-			Json->TryGetNumberField(TEXT("expires_in"), ExpiresIn);
-			TokenExpiresAt = FPlatformTime::Seconds() + FMath::Max(60, ExpiresIn);
-
-			if (ProfileId.IsEmpty() || AccessToken.IsEmpty())
-			{
-				Fail(TEXT("the account server sent no profile."));
+				UE_LOG(LogCSAuth, Log, TEXT("Accounts: session renewed."));
+				FinishRenewal(true);
+				OnAccountChanged.Broadcast();
 				return;
 			}
-			UE_LOG(LogCS, Log, TEXT("Accounts: signed in as '%s' (%d kills, %d matches)."), *Nickname, Stats.Kills, Stats.Matches);
+			UE_LOG(LogCSAuth, Log, TEXT("Accounts: signed in as '%s' (%s, %d kills, %d matches)."),
+				*Nickname, *Role, Stats.Kills, Stats.Matches);
 			SetState(ECSAccountState::Ready);
 		});
 	Request->ProcessRequest();
 }
 
-void UCSAccountSubsystem::AdminCall(const FString& Action, const TSharedRef<FJsonObject>& Params, TFunction<void(bool, int32, const TSharedPtr<FJsonObject>&)> OnDone)
+void UCSAccountSubsystem::ApplySession(const TSharedPtr<FJsonObject>& Json)
 {
-	if (!IsReady() || !bIsAdmin)
+	const TSharedPtr<FJsonObject>* Profile = nullptr;
+	if (!Json.IsValid() || !Json->TryGetObjectField(TEXT("profile"), Profile))
+	{
+		return;
+	}
+	Json->TryGetStringField(TEXT("token"), AccessToken);
+	(*Profile)->TryGetStringField(TEXT("id"), ProfileId);
+	(*Profile)->TryGetStringField(TEXT("nickname"), Nickname);
+	Role = TEXT("player");
+	(*Profile)->TryGetStringField(TEXT("role"), Role);
+
+	const TSharedPtr<FJsonObject>* StatsJson = nullptr;
+	if (Json->TryGetObjectField(TEXT("stats"), StatsJson))
+	{
+		Stats = FCSAccountStats();
+		ReadStats(*StatsJson, Stats);
+	}
+
+	int32 ExpiresIn = 0;
+	Json->TryGetNumberField(TEXT("expires_in"), ExpiresIn);
+	ExpiresIn = FMath::Max(120, ExpiresIn);
+	const double Now = FPlatformTime::Seconds();
+	TokenExpiresAt = Now + ExpiresIn;
+	TokenRenewAt = Now + ExpiresIn * RenewAtFraction;
+}
+
+void UCSAccountSubsystem::RenewSession(TFunction<void(bool bOk)> OnDone)
+{
+	if (OnDone)
+	{
+		RenewWaiters.Add(MoveTemp(OnDone));
+	}
+	if (bRenewing)
+	{
+		return;
+	}
+	if (State != ECSAccountState::Ready)
+	{
+		FinishRenewal(false);
+		return;
+	}
+	bRenewing = true;
+
+	const IOnlineIdentityPtr Identity = GetEpicIdentity();
+	if (Identity.IsValid() && Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
+	{
+		const FString Token = ReadEpicToken();
+		if (!Token.IsEmpty())
+		{
+			ExchangeTokenForSession(Token, /*bRenewal*/ true);
+			return;
+		}
+	}
+	// The Epic session itself is gone: try the saved one, still silently.
+	bSilentAttempt = true;
+	BeginEpicLogin(TEXT("persistentauth"));
+}
+
+void UCSAccountSubsystem::FinishRenewal(bool bOk)
+{
+	bRenewing = false;
+	if (!bOk)
+	{
+		// Try again in a minute; TickSession signs out once the token is really gone.
+		TokenRenewAt = FPlatformTime::Seconds() + 60.0;
+	}
+	TArray<TFunction<void(bool)>> Waiters = MoveTemp(RenewWaiters);
+	RenewWaiters.Reset();
+	for (TFunction<void(bool)>& Waiter : Waiters)
+	{
+		Waiter(bOk);
+	}
+}
+
+bool UCSAccountSubsystem::TickSession(float DeltaTime)
+{
+	if (State != ECSAccountState::Ready)
+	{
+		return true;
+	}
+	const double Now = FPlatformTime::Seconds();
+	if (Now >= TokenExpiresAt)
+	{
+		UE_LOG(LogCSAuth, Warning, TEXT("Accounts: the session expired and could not be renewed."));
+		ClearSession();
+		LastError = TEXT("Your session has expired. Sign in again.");
+		SetState(ECSAccountState::SignedOut);
+	}
+	else if (Now >= TokenRenewAt && !bRenewing)
+	{
+		RenewSession(nullptr);
+	}
+	return true;
+}
+
+void UCSAccountSubsystem::PostAuthenticated(const FString& Url, const FString& Body, FResponseHandler OnDone, bool bIsRetry)
+{
+	if (AccessToken.IsEmpty())
+	{
+		OnDone(401, nullptr);
+		return;
+	}
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(Url, TEXT("POST"), true);
+	Request->SetContentAsString(Body);
+	Request->OnProcessRequestComplete().BindWeakLambda(this,
+		[this, Url, Body, OnDone, bIsRetry](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
+		{
+			const int32 Code = (bConnected && Response.IsValid()) ? Response->GetResponseCode() : 0;
+			const TSharedPtr<FJsonObject> Json = Response.IsValid() ? ParseJson(Response->GetContentAsString()) : nullptr;
+			if (Code == 401 && !bIsRetry && State == ECSAccountState::Ready)
+			{
+				// The token ran out mid-request: renew once and try again.
+				RenewSession([this, Url, Body, OnDone](bool bOk)
+				{
+					if (bOk)
+					{
+						PostAuthenticated(Url, Body, OnDone, /*bIsRetry*/ true);
+					}
+					else
+					{
+						OnDone(401, nullptr);
+					}
+				});
+				return;
+			}
+			OnDone(Code, Json);
+		});
+	Request->ProcessRequest();
+}
+
+// ---------------------------------------------------------------------------
+// Sign out, switch account, offline
+// ---------------------------------------------------------------------------
+
+void UCSAccountSubsystem::SignOut()
+{
+	ClearSession();
+	LastError.Reset();
+	UE_LOG(LogCSAuth, Log, TEXT("Accounts: signing out."));
+
+	const IOnlineIdentityPtr Identity = GetEpicIdentity();
+	if (Identity.IsValid() && Identity->GetLoginStatus(0) != ELoginStatus::NotLoggedIn)
+	{
+		if (LogoutHandle.IsValid())
+		{
+			Identity->ClearOnLogoutCompleteDelegate_Handle(0, LogoutHandle);
+		}
+		LogoutHandle = Identity->AddOnLogoutCompleteDelegate_Handle(0,
+			FOnLogoutCompleteDelegate::CreateUObject(this, &UCSAccountSubsystem::HandleEpicLogout));
+		SetState(ECSAccountState::SignedOut);
+		// EOS Logout also deletes the saved session, so the next launch asks
+		// for an account instead of signing the old one back in.
+		Identity->Logout(0);
+		return;
+	}
+
+	SetState(ECSAccountState::SignedOut);
+	if (bSignInAfterLogout)
+	{
+		bSignInAfterLogout = false;
+		SignIn();
+	}
+}
+
+void UCSAccountSubsystem::HandleEpicLogout(int32 LocalUserNum, bool bWasSuccessful)
+{
+	if (const IOnlineIdentityPtr Identity = GetEpicIdentity(); Identity.IsValid() && LogoutHandle.IsValid())
+	{
+		Identity->ClearOnLogoutCompleteDelegate_Handle(0, LogoutHandle);
+	}
+	LogoutHandle.Reset();
+	UE_LOG(LogCSAuth, Log, TEXT("Accounts: Epic sign-out %s."), bWasSuccessful ? TEXT("done") : TEXT("failed"));
+	if (bSignInAfterLogout)
+	{
+		bSignInAfterLogout = false;
+		SignIn();
+	}
+}
+
+void UCSAccountSubsystem::SwitchAccount()
+{
+	bSignInAfterLogout = true;
+	SignOut();
+}
+
+void UCSAccountSubsystem::PlayOffline()
+{
+	ClearSession();
+	LastError.Reset();
+	UE_LOG(LogCSAuth, Log, TEXT("Accounts: playing offline (practice only, nothing is recorded)."));
+	SetState(ECSAccountState::Offline);
+}
+
+// ---------------------------------------------------------------------------
+// Backend calls
+// ---------------------------------------------------------------------------
+
+void UCSAccountSubsystem::AdminCall(const FString& Action, const TSharedRef<FJsonObject>& Params,
+	TFunction<void(bool, int32, const TSharedPtr<FJsonObject>&)> OnDone)
+{
+	if (!IsStaff())
 	{
 		OnDone(false, 403, nullptr);
 		return;
 	}
-	// The admin function checks is_admin again against the database; this
-	// flag only decides whether the panel is shown.
+	// The admin function checks the role again against the database; the
+	// role here only decides whether the panel is shown.
 	Params->SetStringField(TEXT("action"), Action);
-	FString Body;
-	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
-	FJsonSerializer::Serialize(Params, Writer);
-
-	const FCSBackendConfig& Config = FCSBackendConfig::Get();
-	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(Config.FunctionUrl(TEXT("admin")), TEXT("POST"), true);
-	Request->SetContentAsString(Body);
-	Request->OnProcessRequestComplete().BindWeakLambda(this,
-		[OnDone, Action](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
+	PostAuthenticated(FCSBackendConfig::Get().FunctionUrl(TEXT("admin")), ToJson(Params),
+		[OnDone, Action](int32 Code, const TSharedPtr<FJsonObject>& Json)
 		{
-			const int32 Code = (bConnected && Response.IsValid()) ? Response->GetResponseCode() : 0;
-			const TSharedPtr<FJsonObject> Json = Response.IsValid() ? ParseJson(Response->GetContentAsString()) : nullptr;
-			UE_LOG(LogCS, Log, TEXT("Admin: %s -> %d"), *Action, Code);
+			UE_LOG(LogCSAdmin, Log, TEXT("Admin: %s -> %d"), *Action, Code);
 			OnDone(Code == 200, Code, Json);
 		});
-	Request->ProcessRequest();
 }
 
 void UCSAccountSubsystem::FetchLeaderboard(TFunction<void(bool, const TArray<TSharedPtr<FJsonObject>>&)> OnDone)
@@ -359,7 +659,7 @@ void UCSAccountSubsystem::FetchLeaderboard(TFunction<void(bool, const TArray<TSh
 		return;
 	}
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request =
-		MakeRequest(Config.RestUrl(TEXT("leaderboard?select=*&limit=20")), TEXT("GET"), true);
+		MakeRequest(Config.RestUrl(TEXT("leaderboard?select=*&limit=20")), TEXT("GET"), IsReady());
 	Request->OnProcessRequestComplete().BindWeakLambda(this,
 		[OnDone](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
 		{
@@ -386,60 +686,104 @@ void UCSAccountSubsystem::FetchLeaderboard(TFunction<void(bool, const TArray<TSh
 	Request->ProcessRequest();
 }
 
-void UCSAccountSubsystem::ReportMatch(const FString& Mode, const FString& Map, const FString& Room,
-	const FDateTime& StartedAtUtc, int32 WinnerTeam, int32 Rounds, const TArray<FCSMatchReportPlayer>& Players)
+void UCSAccountSubsystem::MatchStart(const FString& Mode, const FString& Map, const FString& Room, bool bOffline,
+	TFunction<void(bool, const FString&, const FString&)> OnDone)
 {
-	if (!IsReady() || Players.Num() == 0)
+	if (!IsReady())
+	{
+		OnDone(false, FString(), FString());
+		return;
+	}
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("action"), TEXT("start"));
+	Body->SetStringField(TEXT("mode"), Mode);
+	Body->SetStringField(TEXT("map"), Map);
+	Body->SetStringField(TEXT("room"), Room);
+	Body->SetBoolField(TEXT("offline"), bOffline);
+	PostAuthenticated(FCSBackendConfig::Get().FunctionUrl(TEXT("match")), ToJson(Body),
+		[OnDone](int32 Code, const TSharedPtr<FJsonObject>& Json)
+		{
+			const TSharedPtr<FJsonObject>* Result = nullptr;
+			FString MatchId;
+			FString Ticket;
+			if (Code == 200 && Json.IsValid() && Json->TryGetObjectField(TEXT("result"), Result))
+			{
+				(*Result)->TryGetStringField(TEXT("match_id"), MatchId);
+				(*Result)->TryGetStringField(TEXT("ticket"), Ticket);
+			}
+			if (MatchId.IsEmpty())
+			{
+				UE_LOG(LogCS, Warning, TEXT("Accounts: the match was not registered (%d: %s)."), Code, *ErrorFromJson(Json, TEXT("no answer")));
+				OnDone(false, FString(), FString());
+				return;
+			}
+			UE_LOG(LogCS, Log, TEXT("Accounts: match %s registered."), *MatchId);
+			OnDone(true, MatchId, Ticket);
+		});
+}
+
+void UCSAccountSubsystem::MatchTicket(const FString& MatchId, TFunction<void(bool, const FString&)> OnDone)
+{
+	if (!IsReady() || MatchId.IsEmpty())
+	{
+		OnDone(false, FString());
+		return;
+	}
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("action"), TEXT("ticket"));
+	Body->SetStringField(TEXT("match_id"), MatchId);
+	PostAuthenticated(FCSBackendConfig::Get().FunctionUrl(TEXT("match")), ToJson(Body),
+		[OnDone](int32 Code, const TSharedPtr<FJsonObject>& Json)
+		{
+			FString Ticket;
+			if (Code != 200 || !Json.IsValid() || !Json->TryGetStringField(TEXT("result"), Ticket) || Ticket.IsEmpty())
+			{
+				UE_LOG(LogCS, Warning, TEXT("Accounts: no match ticket (%d: %s)."), Code, *ErrorFromJson(Json, TEXT("no answer")));
+				OnDone(false, FString());
+				return;
+			}
+			OnDone(true, Ticket);
+		});
+}
+
+void UCSAccountSubsystem::DebugCallFunction(const FString& Function, const TSharedRef<FJsonObject>& Body, FResponseHandler OnDone)
+{
+#if UE_BUILD_SHIPPING
+	OnDone(0, nullptr);
+#else
+	PostAuthenticated(FCSBackendConfig::Get().FunctionUrl(*Function), ToJson(Body), MoveTemp(OnDone));
+#endif
+}
+
+void UCSAccountSubsystem::MatchReport(const FString& MatchId, const TSharedRef<FJsonObject>& Report)
+{
+	if (!IsReady() || MatchId.IsEmpty())
 	{
 		return;
 	}
-	const FCSBackendConfig& Config = FCSBackendConfig::Get();
-
-	FString Body;
-	const TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Body);
-	Writer->WriteObjectStart();
-	Writer->WriteValue(TEXT("mode"), Mode);
-	Writer->WriteValue(TEXT("map"), Map);
-	Writer->WriteValue(TEXT("room"), Room);
-	Writer->WriteValue(TEXT("started_at"), StartedAtUtc.ToIso8601());
-	Writer->WriteValue(TEXT("ended_at"), FDateTime::UtcNow().ToIso8601());
-	Writer->WriteValue(TEXT("winner_team"), WinnerTeam);
-	Writer->WriteValue(TEXT("rounds"), Rounds);
-	Writer->WriteArrayStart(TEXT("players"));
-	for (const FCSMatchReportPlayer& Player : Players)
-	{
-		Writer->WriteObjectStart();
-		Writer->WriteValue(TEXT("profile_id"), Player.ProfileId);
-		Writer->WriteValue(TEXT("team"), Player.Team);
-		Writer->WriteValue(TEXT("kills"), Player.Kills);
-		Writer->WriteValue(TEXT("deaths"), Player.Deaths);
-		Writer->WriteValue(TEXT("headshots"), Player.Headshots);
-		Writer->WriteValue(TEXT("damage"), Player.Damage);
-		Writer->WriteValue(TEXT("money"), Player.Money);
-		Writer->WriteValue(TEXT("won"), Player.bWon);
-		Writer->WriteObjectEnd();
-	}
-	Writer->WriteArrayEnd();
-	Writer->WriteObjectEnd();
-	Writer->Close();
-
-	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = MakeRequest(Config.FunctionUrl(TEXT("report-match")), TEXT("POST"), true);
-	Request->SetContentAsString(Body);
-	Request->OnProcessRequestComplete().BindWeakLambda(this,
-		[this, Count = Players.Num()](FHttpRequestPtr, FHttpResponsePtr Response, bool bConnected)
+	Report->SetStringField(TEXT("action"), TEXT("report"));
+	Report->SetStringField(TEXT("match_id"), MatchId);
+	PostAuthenticated(FCSBackendConfig::Get().FunctionUrl(TEXT("match")), ToJson(Report),
+		[this](int32 Code, const TSharedPtr<FJsonObject>& Json)
 		{
-			const int32 Code = (bConnected && Response.IsValid()) ? Response->GetResponseCode() : 0;
-			if (Code != 200)
+			const TSharedPtr<FJsonObject>* Result = nullptr;
+			if (Code != 200 || !Json.IsValid() || !Json->TryGetObjectField(TEXT("result"), Result))
 			{
-				UE_LOG(LogCS, Warning, TEXT("Accounts: the match was not recorded (%d: %s)."), Code,
-					Response.IsValid() ? *ErrorFromBody(Response->GetContentAsString(), TEXT("no answer")) : TEXT("no answer"));
+				UE_LOG(LogCS, Warning, TEXT("Accounts: the match was not recorded (%d: %s)."), Code, *ErrorFromJson(Json, TEXT("no answer")));
 				return;
 			}
-			UE_LOG(LogCS, Log, TEXT("Accounts: match recorded for %d player(s)."), Count);
+			bool bRanked = false;
+			bool bSuspicious = false;
+			int32 Counted = 0;
+			(*Result)->TryGetBoolField(TEXT("ranked"), bRanked);
+			(*Result)->TryGetBoolField(TEXT("suspicious"), bSuspicious);
+			(*Result)->TryGetNumberField(TEXT("counted"), Counted);
+			UE_LOG(LogCS, Log, TEXT("Accounts: match recorded for %d player(s) - %s%s."), Counted,
+				bRanked ? TEXT("ranked") : TEXT("practice"), bSuspicious ? TEXT(", held for review") : TEXT(""));
+
 			// Our own totals moved; pull them again for the menu.
-			const FCSBackendConfig& Config = FCSBackendConfig::Get();
-			TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Refresh =
-				MakeRequest(Config.RestUrl(FString::Printf(TEXT("player_stats?profile_id=eq.%s&select=*"), *ProfileId)), TEXT("GET"), true);
+			TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Refresh = MakeRequest(FCSBackendConfig::Get().RestUrl(
+				FString::Printf(TEXT("player_stats?profile_id=eq.%s&select=*"), *ProfileId)), TEXT("GET"), true);
 			Refresh->OnProcessRequestComplete().BindWeakLambda(this,
 				[this](FHttpRequestPtr, FHttpResponsePtr StatsResponse, bool bOk)
 				{
@@ -451,19 +795,11 @@ void UCSAccountSubsystem::ReportMatch(const FString& Mode, const FString& Map, c
 					const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(StatsResponse->GetContentAsString());
 					if (FJsonSerializer::Deserialize(Reader, Values) && Values.Num() > 0)
 					{
-						if (const TSharedPtr<FJsonObject> Row = Values[0]->AsObject())
-						{
-							Row->TryGetNumberField(TEXT("matches"), Stats.Matches);
-							Row->TryGetNumberField(TEXT("wins"), Stats.Wins);
-							Row->TryGetNumberField(TEXT("kills"), Stats.Kills);
-							Row->TryGetNumberField(TEXT("deaths"), Stats.Deaths);
-							Row->TryGetNumberField(TEXT("headshots"), Stats.Headshots);
-							Row->TryGetNumberField(TEXT("playtime_seconds"), Stats.PlaytimeSeconds);
-							OnAccountChanged.Broadcast();
-						}
+						Stats = FCSAccountStats();
+						ReadStats(Values[0]->AsObject(), Stats);
+						OnAccountChanged.Broadcast();
 					}
 				});
 			Refresh->ProcessRequest();
 		});
-	Request->ProcessRequest();
 }

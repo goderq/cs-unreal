@@ -66,6 +66,11 @@ private:
 	UCSSessionSubsystem* GetSession() const;
 	FCSSessionRequest MakeRequest() const;
 
+	/** v2.0: the player chose offline practice on the sign-in screen. */
+	bool IsOffline() const;
+	/** True (with a message on screen) when an online action is refused because we are offline. */
+	bool RefuseOnlineWhenOffline();
+
 	TSharedRef<SWidget> MakeNav();
 	TSharedRef<SWidget> MakeHomePage();
 	TSharedRef<SWidget> MakePlayPage();

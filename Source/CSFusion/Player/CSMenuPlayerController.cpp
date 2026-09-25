@@ -6,6 +6,7 @@
 #include "Audio/CSAudioSettings.h"
 #include "Components/AudioComponent.h"
 #include "Core/CSLog.h"
+#include "Dom/JsonObject.h"
 #include "Settings/CSSettingsSubsystem.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -43,10 +44,15 @@ void ACSMenuPlayerController::BeginPlay()
 	}
 	MenuMusic = CSAudio::PlayMusic(this, UCSAudioSettings::Get()->MenuMusic);
 
-	// v1.2: an Epic account is required to play. Self-tests and offline
-	// debugging pass -noaccount and go straight to the menu.
+	// v1.2: an Epic account is required to play online. Self-tests and
+	// offline debugging pass -noaccount and go straight to the menu; v2.0
+	// lets the player choose offline practice on the sign-in screen.
 	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
-	const bool bNeedsSignIn = Account && Account->IsSignInRequired() && !Account->IsReady();
+	if (Account)
+	{
+		AccountChangedHandle = Account->OnAccountChanged.AddUObject(this, &ACSMenuPlayerController::HandleAccountChanged);
+	}
+	const bool bNeedsSignIn = Account && Account->IsSignInRequired() && !Account->IsReady() && !Account->IsOffline();
 	if (bNeedsSignIn)
 	{
 		ShowLoginScreen();
@@ -56,8 +62,29 @@ void ACSMenuPlayerController::BeginPlay()
 	ShowMainMenu();
 }
 
+void ACSMenuPlayerController::HandleAccountChanged()
+{
+	const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	if (!Account || !Account->IsSignInRequired() || !Menu.IsValid())
+	{
+		return;
+	}
+	const ECSAccountState State = Account->GetState();
+	if (State == ECSAccountState::SignedOut || State == ECSAccountState::Failed || State == ECSAccountState::SigningIn)
+	{
+		UE_LOG(LogCS, Log, TEXT("Account state %s - back to the sign-in screen."), *UEnum::GetValueAsString(State));
+		GEngine->GameViewport->RemoveViewportWidgetContent(Menu.ToSharedRef());
+		Menu.Reset();
+		ShowLoginScreen();
+	}
+}
+
 void ACSMenuPlayerController::ShowLoginScreen()
 {
+	if (LoginScreen.IsValid())
+	{
+		return;
+	}
 	SAssignNew(LoginScreen, SCSLoginScreen)
 		.WorldContext(this)
 		.OnSignedIn(FSimpleDelegate::CreateUObject(this, &ACSMenuPlayerController::ShowMainMenu));
@@ -144,6 +171,10 @@ void ACSMenuPlayerController::ShowMainMenu()
 
 void ACSMenuPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this))
+	{
+		Account->OnAccountChanged.Remove(AccountChangedHandle);
+	}
 	if (GEngine && GEngine->GameViewport)
 	{
 		if (Menu.IsValid())
@@ -188,6 +219,87 @@ void ACSMenuPlayerController::Screenshot(const FString& Name)
 	UE_LOG(LogCS, Log, TEXT("MENU TEST: screenshot -> %s"), *Path);
 }
 
+void ACSMenuPlayerController::RunBackendProbe()
+{
+	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	if (!Account || !Account->IsReady())
+	{
+		UE_LOG(LogCS, Log, TEXT("BACKEND PROBE RESULT: not signed in (state %s) -> PROBE SKIPPED"),
+			Account ? *UEnum::GetValueAsString(Account->GetState()) : TEXT("?"));
+		return;
+	}
+	const bool bStaff = Account->IsStaff();
+	const FString Me = Account->GetProfileId();
+	const FString Nobody = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
+	UE_LOG(LogCS, Log, TEXT("BACKEND PROBE: signed in as role '%s' - every step skips the client's own checks."), *Account->GetRole());
+
+	struct FStep
+	{
+		FString Name;
+		FString Function;
+		TSharedRef<FJsonObject> Body;
+		TArray<int32> Expected;
+	};
+	auto Body = [](std::initializer_list<TPair<const TCHAR*, FString>> Fields)
+	{
+		const TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+		for (const TPair<const TCHAR*, FString>& Field : Fields)
+		{
+			Json->SetStringField(Field.Key, Field.Value);
+		}
+		return Json;
+	};
+	TSharedRef<TArray<FStep>> Steps = MakeShared<TArray<FStep>>();
+	// A player is refused everything in the admin service; staff can look,
+	// but can never act on themselves.
+	Steps->Add({ TEXT("admin whoami"), TEXT("admin"), Body({ { TEXT("action"), TEXT("whoami") } }), bStaff ? TArray<int32>{ 200 } : TArray<int32>{ 403 } });
+	Steps->Add({ TEXT("admin players"), TEXT("admin"), Body({ { TEXT("action"), TEXT("players") } }), bStaff ? TArray<int32>{ 200 } : TArray<int32>{ 403 } });
+	Steps->Add({ TEXT("admin ban myself"), TEXT("admin"), Body({ { TEXT("action"), TEXT("ban") }, { TEXT("profile_id"), Me }, { TEXT("reason"), TEXT("probe") } }), { 403 } });
+	Steps->Add({ TEXT("admin make myself superadmin"), TEXT("admin"), Body({ { TEXT("action"), TEXT("set_role") }, { TEXT("profile_id"), Me }, { TEXT("role"), TEXT("superadmin") }, { TEXT("reason"), TEXT("probe") } }), { 400, 403 } });
+	Steps->Add({ TEXT("admin rename myself"), TEXT("admin"), Body({ { TEXT("action"), TEXT("set_nickname") }, { TEXT("profile_id"), Me }, { TEXT("nickname"), TEXT("ProbeName") }, { TEXT("reason"), TEXT("probe") } }), { 403 } });
+	// Match records: reports and tickets for a match that does not exist, and a bogus mode.
+	Steps->Add({ TEXT("report an unknown match"), TEXT("match"), Body({ { TEXT("action"), TEXT("report") }, { TEXT("match_id"), Nobody } }), { 404 } });
+	Steps->Add({ TEXT("ticket for an unknown match"), TEXT("match"), Body({ { TEXT("action"), TEXT("ticket") }, { TEXT("match_id"), Nobody } }), { 404 } });
+	Steps->Add({ TEXT("start a match with a bogus mode"), TEXT("match"), Body({ { TEXT("action"), TEXT("start") }, { TEXT("mode"), TEXT("GODMODE") }, { TEXT("map"), TEXT("Depot") } }), { 400 } });
+
+	TSharedRef<int32> Index = MakeShared<int32>(0);
+	TSharedRef<int32> Failed = MakeShared<int32>(0);
+	TSharedRef<TFunction<void()>> Next = MakeShared<TFunction<void()>>();
+	TWeakObjectPtr<ACSMenuPlayerController> WeakThis(this);
+	*Next = [WeakThis, Steps, Index, Failed, Next]()
+	{
+		ACSMenuPlayerController* Self = WeakThis.Get();
+		UCSAccountSubsystem* Acc = Self ? UCSAccountSubsystem::Get(Self) : nullptr;
+		if (!Acc)
+		{
+			return;
+		}
+		if (*Index >= Steps->Num())
+		{
+			UE_LOG(LogCS, Log, TEXT("BACKEND PROBE RESULT: %d step(s), %d refused as expected -> %s"),
+				Steps->Num(), Steps->Num() - *Failed, *Failed == 0 ? TEXT("BACKEND PROBE OK") : TEXT("BACKEND PROBE BROKEN"));
+			return;
+		}
+		const FStep& Step = (*Steps)[*Index];
+		Acc->DebugCallFunction(Step.Function, Step.Body, [Steps, Index, Failed, Next](int32 Code, const TSharedPtr<FJsonObject>& Json)
+		{
+			const FStep& Done = (*Steps)[*Index];
+			const bool bOk = Done.Expected.Contains(Code);
+			FString Error;
+			if (Json.IsValid())
+			{
+				Json->TryGetStringField(TEXT("error"), Error);
+			}
+			UE_LOG(LogCS, Log, TEXT("BACKEND PROBE RESULT: %s -> %d '%s' -> %s"), *Done.Name, Code, *Error,
+				bOk ? TEXT("REFUSED OK") : TEXT("NOT STOPPED"));
+			*Failed += bOk ? 0 : 1;
+			++(*Index);
+			(*Next)();
+		});
+	};
+	(*Next)();
+}
+
 void ACSMenuPlayerController::RunMenuTest()
 {
 	UE_LOG(LogCS, Log, TEXT("MENU TEST: start, action '%s'."), *MenuTestAction);
@@ -206,6 +318,15 @@ void ACSMenuPlayerController::MenuTestStep()
 
 	const UGameInstance* GI = GetGameInstance();
 	const UCSSessionSubsystem* Session = GI ? GI->GetSubsystem<UCSSessionSubsystem>() : nullptr;
+
+	// v2.0 security probe against the real backend, as a modified client would
+	// do it: every client-side gate is skipped, the server must refuse.
+	if (MenuTestAction == TEXT("backendprobe"))
+	{
+		GetWorldTimerManager().ClearTimer(MenuTestTimer);
+		RunBackendProbe();
+		return;
+	}
 
 	// Actions that start a match.
 	if (MenuTestAction == TEXT("quick"))

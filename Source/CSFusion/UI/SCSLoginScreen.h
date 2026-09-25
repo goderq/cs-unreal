@@ -2,8 +2,11 @@
 //
 // The first screen of the game: sign in with Epic before the main menu.
 //
-// It only drives UCSAccountSubsystem and shows what that says; the sign-in
-// itself happens in the Epic overlay or the browser.
+// It only drives UCSAccountSubsystem and shows what that says. A returning
+// player never sees a button: the saved Epic session signs them in silently
+// and the menu follows. The [SIGN IN WITH EPIC] button (the Epic overlay or
+// browser) appears only when that did not work; [PLAY OFFLINE] keeps practice
+// available without a connection.
 
 #pragma once
 
@@ -34,7 +37,10 @@ private:
 	FText GetDetailText() const;
 	FText GetButtonText() const;
 	bool IsButtonEnabled() const;
+	bool IsSignInVisible() const;
+	bool IsOfflineVisible() const;
 	FReply OnSignInClicked();
+	FReply OnOfflineClicked();
 	FReply OnQuitClicked();
 
 	TWeakObjectPtr<UObject> WorldContext;

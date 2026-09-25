@@ -211,15 +211,26 @@ public:
 	void AddExplosionShake(float Strength) { ExplosionShake = FMath::Max(ExplosionShake, Strength); }
 
 	/**
-	 * v1.2 accounts: the owning client tells everyone who it is - the nickname
-	 * for the HUD, and (for the authority) the profile id the match report uses.
-	 * Only cosmetic on other peers; nothing here decides gameplay.
+	 * v1.2 accounts: the owning client tells everyone its nickname, for the
+	 * HUD. Cosmetic only. v2.0: the profile id is no longer sent - who played
+	 * is proven to the backend by participation tickets (RpcMatchTicket).
 	 */
 	void BroadcastIdentity();
 
 	SEND_FUSIONRPC(TargetAllClients)
-	void RpcIdentify(FString& Nickname, FString& ProfileId);
-	void RpcIdentify_Receive(FString& Nickname, FString& ProfileId);
+	void RpcIdentify(FString& Nickname);
+	void RpcIdentify_Receive(FString& Nickname);
+
+	/**
+	 * v2.0 match records: the owning client hands its own participation ticket
+	 * for the backend match to the Master Client, and to it only. Re-sent now
+	 * and then so a new Master Client after a migration has it too.
+	 */
+	void UpdateMatchTicket();
+
+	SEND_FUSIONRPC(TargetMasterClient)
+	void RpcMatchTicket(FString& MatchId, FString& PlayerTicket);
+	void RpcMatchTicket_Receive(FString& MatchId, FString& PlayerTicket);
 
 	/** Name shown for this player, or an empty string when they have not said. */
 	const FString& GetDisplayNickname() const { return DisplayNickname; }
@@ -362,6 +373,11 @@ protected:
 	FTimerHandle ThrowReleaseTimer;
 	FString DisplayNickname;
 	double NextIdentityBroadcast = 0.0;
+	/** v2.0 match records (owning client): the match the ticket is for, and the ticket. */
+	FString TicketMatchId;
+	FString Ticket;
+	bool bTicketRequested = false;
+	double NextTicketSend = 0.0;
 	/** First-person throw clock (< 0 idle). */
 	float ViewThrowTime = -1.f;
 	/** v2.0 knife swing in the local view (< 0 = none). */

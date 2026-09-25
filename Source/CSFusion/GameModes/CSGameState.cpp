@@ -39,6 +39,13 @@ void ACSGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	DOREPLIFETIME(ACSGameState, WinnerPlayerId);
 	DOREPLIFETIME(ACSGameState, LossStreakAlpha);
 	DOREPLIFETIME(ACSGameState, LossStreakBravo);
+	DOREPLIFETIME(ACSGameState, BackendMatchId);
+}
+
+void ACSGameState::SetBackendMatchId(const FString& MatchId)
+{
+	CS_AUTHORITY_ONLY(this);
+	BackendMatchId = MatchId.Left(64);
 }
 
 void ACSGameState::SetMatchPhase(ECSMatchPhase NewPhase)

@@ -244,9 +244,17 @@ public:
 	void AddMoney(int32 PlayerId, int32 Delta);
 	void CancelProtection(int32 PlayerId, const TCHAR* Why);
 
-	/** v1.2 accounts: the authority remembers who is signed in, for the match report. */
-	void NoteIdentity(int32 PlayerId, const FString& ProfileId);
-	FString GetProfileIdFor(int32 PlayerId) const;
+	/**
+	 * v2.0 match records: a player's participation ticket for the backend
+	 * match (functions/match). The player asked the backend for it with their
+	 * own login; the authority only carries it into the report. Since v2.0 the
+	 * authority no longer takes a profile id from anybody's say-so.
+	 */
+	void NoteTicket(int32 PlayerId, const FString& Ticket);
+	FString GetTicketFor(int32 PlayerId) const;
+	void ClearTickets() { Tickets.Reset(); }
+	/** Bots took part in the running match (it is then practice, not ranked). */
+	bool HadBotsThisMatch() const { return bMatchHadBots; }
 	/** Validates everything (shop open, money) and delivers the item. */
 	ECSBuyResult TryBuy(int32 PlayerId, int32 ShopIndex);
 	/** v2.0 ammo machine: tops up the reserves of both guns for AmmoMachinePrice. */
@@ -471,6 +479,8 @@ private:
 	TMap<int32, double> LastAmmoBuyTime;
 	/** Authority: bots blinded by a flashbang, until this network time. */
 	TMap<int32, double> BlindedUntil;
-	/** Authority only: Photon player id -> Supabase profile id (empty for bots and guests). */
-	TMap<int32, FString> ProfileIds;
+	/** Authority only: Photon player id -> backend match ticket (none for bots and guests). */
+	TMap<int32, FString> Tickets;
+	/** Authority only: a bot record existed while the current match ran. */
+	bool bMatchHadBots = false;
 };

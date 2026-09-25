@@ -56,7 +56,7 @@ void SCSProfilePanel::Construct(const FArguments& InArgs)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			CSUI::MakeHeader(LOCTEXT("Title", "PROFILE"),
-				LOCTEXT("Sub", "Your account, your lifetime numbers and the best players. Stats are counted when a match ends; bots and players without an account are left out."))
+				LOCTEXT("Sub", "Your account, your lifetime numbers and the best players. Online matches between signed-in players count for the leaderboard; offline practice and matches with bots are counted apart."))
 		]
 		+ SVerticalBox::Slot().AutoHeight()[ MakeIdentityCard() ]
 
@@ -107,17 +107,63 @@ TSharedRef<SWidget> SCSProfilePanel::MakeIdentityCard()
 			SNew(SVerticalBox)
 			+ SVerticalBox::Slot().AutoHeight()
 			[
-				SNew(STextBlock).Text(LOCTEXT("SignedIn", "SIGNED IN WITH EPIC"))
-				.Font(CSUI::Font(11, true)).ColorAndOpacity(CSUI::TextDim)
-			]
-			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 14.f)
-			[
-				SNew(STextBlock).Font(CSUI::Font(30, true)).ColorAndOpacity(CSUI::Text)
-				.Text_Lambda([this]()
-				{
-					const UCSAccountSubsystem* Account = GetAccount();
-					return FText::FromString(Account && Account->IsReady() ? Account->GetNickname() : TEXT("-"));
-				})
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1.f)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock).Font(CSUI::Font(11, true)).ColorAndOpacity(CSUI::TextDim)
+						.Text_Lambda([this]()
+						{
+							// The role is shown to staff only; players just see who they are.
+							const UCSAccountSubsystem* Account = GetAccount();
+							return Account && Account->IsStaff()
+								? FText::Format(LOCTEXT("SignedInRole", "SIGNED IN WITH EPIC  -  {0}"), FText::FromString(Account->GetRole().ToUpper()))
+								: LOCTEXT("SignedIn", "SIGNED IN WITH EPIC");
+						})
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 14.f)
+					[
+						SNew(STextBlock).Font(CSUI::Font(30, true)).ColorAndOpacity(CSUI::Text)
+						.Text_Lambda([this]()
+						{
+							const UCSAccountSubsystem* Account = GetAccount();
+							return FText::FromString(Account && Account->IsReady() ? Account->GetNickname() : TEXT("-"));
+						})
+					]
+				]
+				// v2.0: sign out (also forgets the saved Epic session) or use another account.
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SBox).WidthOverride(190.f).HeightOverride(40.f)
+					[
+						CSUI::MakeButton(LOCTEXT("Switch", "SWITCH ACCOUNT"),
+							FOnClicked::CreateLambda([this]()
+							{
+								if (UCSAccountSubsystem* Account = GetAccount())
+								{
+									Account->SwitchAccount();
+								}
+								return FReply::Handled();
+							}), CSUI::EButtonKind::Normal, true, 14)
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(8.f, 0.f, 0.f, 0.f)
+				[
+					SNew(SBox).WidthOverride(150.f).HeightOverride(40.f)
+					[
+						CSUI::MakeButton(LOCTEXT("SignOut", "SIGN OUT"),
+							FOnClicked::CreateLambda([this]()
+							{
+								if (UCSAccountSubsystem* Account = GetAccount())
+								{
+									Account->SignOut();
+								}
+								return FReply::Handled();
+							}), CSUI::EButtonKind::Danger, true, 14)
+					]
+				]
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
@@ -178,6 +224,22 @@ TSharedRef<SWidget> SCSProfilePanel::MakeIdentityCard()
 						return Account ? PlaytimeText(Account->GetStats().PlaytimeSeconds) : FText::GetEmpty();
 					}), CSUI::Text)
 				]
+			]
+			// v2.0: practice (offline, and matches with bots) is counted apart.
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 12.f, 0.f, 0.f)
+			[
+				SNew(STextBlock).Font(CSUI::Font(13)).ColorAndOpacity(CSUI::TextDim)
+				.Text_Lambda([this]()
+				{
+					const UCSAccountSubsystem* Account = GetAccount();
+					if (!Account)
+					{
+						return FText::GetEmpty();
+					}
+					const FCSAccountStats& S = Account->GetStats();
+					return FText::Format(LOCTEXT("Practice", "Practice (offline and with bots, not in the leaderboard): {0} matches, {1} kills, {2} deaths"),
+						FText::AsNumber(S.PracticeMatches), FText::AsNumber(S.PracticeKills), FText::AsNumber(S.PracticeDeaths));
+				})
 			]
 		];
 }

@@ -1319,6 +1319,7 @@ void ACSMatchDirector::ResetForNewMatch()
 	CS_AUTHORITY_ONLY(this);
 
 	const FCSModeRules& Rules = ModeRules(this);
+	bMatchHadBots = false;
 
 	// Teams: anyone registered before the mode was known gets one now, and a
 	// lopsided split (players left during the last match) is evened out.
@@ -1470,6 +1471,16 @@ void ACSMatchDirector::TickAuthority()
 	for (const int32 PlayerId : Vanished)
 	{
 		RemovePlayer(PlayerId, ECSDeathReason::Disconnected);
+	}
+
+	// v2.0: a match with bots at any moment is practice, not ranked.
+	if (!bMatchHadBots)
+	{
+		const ACSGameState* GS = ModeState(this);
+		if (GS && GS->GetMatchPhase() == ECSMatchPhase::InProgress)
+		{
+			bMatchHadBots = Records.ContainsByPredicate([](const FCSPlayerCombatRecord& R) { return CSBots::IsBotId(R.PlayerId); });
+		}
 	}
 
 	const bool bRespawnMode = ModeRules(this).bRespawn;
@@ -1901,21 +1912,24 @@ void ACSMatchDirector::RpcGrenadeExploded_Receive(int32 Serial, int32 Type, FVec
 }
 
 // ---------------------------------------------------------------------------
-// v1.2 accounts
+// v2.0 match records
 // ---------------------------------------------------------------------------
 
-void ACSMatchDirector::NoteIdentity(int32 PlayerId, const FString& ProfileId)
+void ACSMatchDirector::NoteTicket(int32 PlayerId, const FString& Ticket)
 {
 	CS_AUTHORITY_ONLY(this);
-	if (PlayerId == 0 || ProfileId.IsEmpty())
+	// A ticket is a UUID; anything else is not worth carrying to the backend,
+	// which checks it anyway.
+	FGuid Parsed;
+	if (PlayerId == 0 || CSBots::IsBotId(PlayerId) || !FGuid::Parse(Ticket, Parsed))
 	{
 		return;
 	}
-	ProfileIds.Add(PlayerId, ProfileId);
+	Tickets.Add(PlayerId, Ticket);
 }
 
-FString ACSMatchDirector::GetProfileIdFor(int32 PlayerId) const
+FString ACSMatchDirector::GetTicketFor(int32 PlayerId) const
 {
-	const FString* Found = ProfileIds.Find(PlayerId);
+	const FString* Found = Tickets.Find(PlayerId);
 	return Found ? *Found : FString();
 }

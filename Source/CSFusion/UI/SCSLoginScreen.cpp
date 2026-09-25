@@ -88,14 +88,26 @@ void SCSLoginScreen::Construct(const FArguments& InArgs)
 						]
 					]
 
+					// The sign-in button only while the saved Epic session did not work.
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
 					[
 						SNew(SBox).WidthOverride(420.f).HeightOverride(56.f)
+						.Visibility_Lambda([this]() { return IsSignInVisible() ? EVisibility::Visible : EVisibility::Collapsed; })
 						[
 							CSUI::MakeButton(TAttribute<FText>(this, &SCSLoginScreen::GetButtonText),
 								FOnClicked::CreateSP(this, &SCSLoginScreen::OnSignInClicked),
 								CSUI::EButtonKind::Primary,
 								TAttribute<bool>(this, &SCSLoginScreen::IsButtonEnabled), 20)
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.f, 10.f, 0.f, 0.f)
+					[
+						SNew(SBox).WidthOverride(420.f).HeightOverride(44.f)
+						.Visibility_Lambda([this]() { return IsOfflineVisible() ? EVisibility::Visible : EVisibility::Collapsed; })
+						[
+							CSUI::MakeButton(LOCTEXT("Offline", "PLAY OFFLINE (PRACTICE, NO STATS)"),
+								FOnClicked::CreateSP(this, &SCSLoginScreen::OnOfflineClicked),
+								CSUI::EButtonKind::Normal, true, 15)
 						]
 					]
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0.f, 10.f, 0.f, 0.f)
@@ -121,14 +133,10 @@ void SCSLoginScreen::Construct(const FArguments& InArgs)
 		]
 	];
 
-	// Returning players go straight through: the Epic SDK reuses its session.
-	if (UCSAccountSubsystem* Account = GetAccount())
-	{
-		if (Account->GetState() == ECSAccountState::SignedOut)
-		{
-			Account->SignIn();
-		}
-	}
+	// The silent attempt with the saved Epic session starts with the game
+	// (UCSAccountSubsystem::Initialize), not here: after "sign out" this screen
+	// must not sign the old account straight back in. The Epic window opens
+	// only when the player presses the button - never on its own.
 }
 
 SCSLoginScreen::~SCSLoginScreen() = default;
@@ -143,10 +151,12 @@ FText SCSLoginScreen::GetStatusText() const
 	const UCSAccountSubsystem* Account = GetAccount();
 	switch (Account ? Account->GetState() : ECSAccountState::SignedOut)
 	{
+	case ECSAccountState::CheckingSession:	return LOCTEXT("StatusChecking", "CHECKING YOUR EPIC SESSION...");
 	case ECSAccountState::SigningIn:		return LOCTEXT("StatusSigningIn", "SIGNING IN...");
 	case ECSAccountState::Ready:			return FText::Format(LOCTEXT("StatusReady", "WELCOME, {0}"), FText::FromString(Account->GetNickname().ToUpper()));
 	case ECSAccountState::Failed:			return LOCTEXT("StatusFailed", "SIGN-IN FAILED");
 	case ECSAccountState::NotConfigured:	return LOCTEXT("StatusNoConfig", "ACCOUNTS ARE NOT SET UP");
+	case ECSAccountState::Offline:			return LOCTEXT("StatusOffline", "PLAYING OFFLINE");
 	default:								return LOCTEXT("StatusIdle", "NOT SIGNED IN");
 	}
 }
@@ -163,9 +173,17 @@ FText SCSLoginScreen::GetDetailText() const
 	{
 		return FText::Format(LOCTEXT("DetailFailed", "{0}"), FText::FromString(Account->GetLastError()));
 	}
+	if (State == ECSAccountState::CheckingSession)
+	{
+		return LOCTEXT("DetailChecking", "Signing you in with your saved Epic session. No password is needed.");
+	}
 	if (State == ECSAccountState::SigningIn)
 	{
 		return LOCTEXT("DetailSigningIn", "Finish the login in the Epic window. If nothing opened, check that the Epic overlay is allowed, or use the browser window that appeared.");
+	}
+	if (State == ECSAccountState::SignedOut && !Account->GetLastError().IsEmpty())
+	{
+		return FText::FromString(Account->GetLastError());
 	}
 	if (State == ECSAccountState::Ready)
 	{
@@ -192,7 +210,22 @@ bool SCSLoginScreen::IsButtonEnabled() const
 {
 	const UCSAccountSubsystem* Account = GetAccount();
 	const ECSAccountState State = Account ? Account->GetState() : ECSAccountState::SignedOut;
-	return State != ECSAccountState::SigningIn && State != ECSAccountState::NotConfigured;
+	return State != ECSAccountState::SigningIn && State != ECSAccountState::CheckingSession && State != ECSAccountState::NotConfigured;
+}
+
+bool SCSLoginScreen::IsSignInVisible() const
+{
+	const UCSAccountSubsystem* Account = GetAccount();
+	const ECSAccountState State = Account ? Account->GetState() : ECSAccountState::SignedOut;
+	// Hidden while the saved session is being tried: it usually just works.
+	return State != ECSAccountState::CheckingSession && State != ECSAccountState::NotConfigured;
+}
+
+bool SCSLoginScreen::IsOfflineVisible() const
+{
+	const UCSAccountSubsystem* Account = GetAccount();
+	const ECSAccountState State = Account ? Account->GetState() : ECSAccountState::SignedOut;
+	return State == ECSAccountState::SignedOut || State == ECSAccountState::Failed || State == ECSAccountState::NotConfigured;
 }
 
 FReply SCSLoginScreen::OnSignInClicked()
@@ -203,10 +236,19 @@ FReply SCSLoginScreen::OnSignInClicked()
 		{
 			OnSignedIn.ExecuteIfBound();
 		}
-		else
+		else if (IsButtonEnabled())
 		{
 			Account->SignIn();
 		}
+	}
+	return FReply::Handled();
+}
+
+FReply SCSLoginScreen::OnOfflineClicked()
+{
+	if (UCSAccountSubsystem* Account = GetAccount())
+	{
+		Account->PlayOffline();
 	}
 	return FReply::Handled();
 }
@@ -226,6 +268,12 @@ void SCSLoginScreen::Tick(const FGeometry& AllottedGeometry, const double InCurr
 	// Hand over to the menu a moment after the account is ready, so the
 	// welcome line is actually readable.
 	const UCSAccountSubsystem* Account = GetAccount();
+	if (!bNotified && Account && Account->IsOffline())
+	{
+		bNotified = true;
+		OnSignedIn.ExecuteIfBound();
+		return;
+	}
 	if (!bNotified && Account && Account->IsReady())
 	{
 		if (ReadyAt <= 0.0)

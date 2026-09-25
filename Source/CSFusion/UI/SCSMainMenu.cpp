@@ -282,6 +282,39 @@ TSharedRef<SWidget> SCSMainMenu::MakeNav()
 				]
 			]
 		]
+		// v2.0: offline practice - what that means, and the way back online.
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 26.f)
+		[
+			SNew(SBox)
+			.Visibility_Lambda([this]() { return IsOffline() ? EVisibility::Visible : EVisibility::Collapsed; })
+			[
+				SNew(SButton).IsFocusable(false)
+				.ButtonStyle(&CSUI::ButtonStyle(CSUI::EButtonKind::Normal))
+				.ContentPadding(FMargin(16.f, 12.f))
+				.ToolTipText(LOCTEXT("OfflineTip", "Sign in with Epic to play online and keep your stats"))
+				.OnClicked_Lambda([this]()
+				{
+					if (UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(WorldContext.Get()))
+					{
+						Account->SignIn();
+					}
+					return FReply::Handled();
+				})
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock).Font(CSUI::Font(11, true)).ColorAndOpacity(CSUI::Warning)
+						.Text(LOCTEXT("OfflineLabel", "OFFLINE - PRACTICE ONLY, NOTHING IS RECORDED"))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f, 0.f, 0.f)
+					[
+						SNew(STextBlock).Font(CSUI::Font(18, true)).ColorAndOpacity(CSUI::Text)
+						.Text(LOCTEXT("OfflineSignIn", "SIGN IN WITH EPIC"))
+					]
+				]
+			]
+		]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("Play", "PLAY"), EPage::Play) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("QuickNav", "Quick Match"), EPage::Play, true) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("CreateNav", "Create Session"), EPage::Create, true) ]
@@ -296,7 +329,9 @@ TSharedRef<SWidget> SCSMainMenu::MakeNav()
 			.Visibility_Lambda([this]()
 			{
 				const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(WorldContext.Get());
-				return (Account && Account->IsAdmin()) ? EVisibility::Visible : EVisibility::Collapsed;
+				// Moderators and above. Hiding the page is cosmetic: the backend
+				// checks the role of every admin request itself.
+				return (Account && Account->IsStaff()) ? EVisibility::Visible : EVisibility::Collapsed;
 			})
 			[
 				Nav(LOCTEXT("Admin", "ADMIN"), EPage::Admin)
@@ -731,7 +766,7 @@ void SCSMainMenu::ShowPage(EPage Page)
 	CurrentPage = Page;
 	Switcher->SetActiveWidgetIndex(static_cast<int32>(Page));
 
-	if (Page == EPage::Browser && Session)
+	if (Page == EPage::Browser && Session && !RefuseOnlineWhenOffline())
 	{
 		Session->StartBrowsing(GetSelectedRegion());
 	}
@@ -757,9 +792,29 @@ void SCSMainMenu::ShowPage(EPage Page)
 	}
 }
 
+bool SCSMainMenu::IsOffline() const
+{
+	const UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(WorldContext.Get());
+	return Account && Account->IsOffline();
+}
+
+bool SCSMainMenu::RefuseOnlineWhenOffline()
+{
+	if (!IsOffline())
+	{
+		return false;
+	}
+	LocalMessage = LOCTEXT("OfflineRefused", "Offline mode: online matches need an Epic sign-in (top left). Practice vs bots works offline.").ToString();
+	return true;
+}
+
 void SCSMainMenu::QuickMatch()
 {
 	LocalMessage.Reset();
+	if (RefuseOnlineWhenOffline())
+	{
+		return;
+	}
 	if (UCSSessionSubsystem* Session = GetSession())
 	{
 		UE_LOG(LogCSNet, Log, TEXT("Menu: Quick Match (region '%s')."), *GetSelectedRegion());
@@ -774,6 +829,10 @@ void SCSMainMenu::CreateSession(const FString& RoomName, int32 MaxPlayers)
 	if (Name.IsEmpty())
 	{
 		LocalMessage = LOCTEXT("NeedName", "Enter a session name.").ToString();
+		return;
+	}
+	if (RefuseOnlineWhenOffline())
+	{
 		return;
 	}
 	if (UCSSessionSubsystem* Session = GetSession())
@@ -793,6 +852,10 @@ void SCSMainMenu::JoinSession(const FString& RoomName)
 	if (Name.IsEmpty())
 	{
 		LocalMessage = LOCTEXT("NeedJoinName", "Enter the session name to join.").ToString();
+		return;
+	}
+	if (RefuseOnlineWhenOffline())
+	{
 		return;
 	}
 	if (UCSSessionSubsystem* Session = GetSession())

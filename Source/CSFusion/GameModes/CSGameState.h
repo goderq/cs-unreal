@@ -95,6 +95,15 @@ public:
 	void SetLossStreak(ECSTeam Team, int32 Streak);
 	void ResetTeamScores();
 
+	// --- v2.0 match record (functions/match) -----------------------------------
+	// The id the backend gave this match when it began. Replicated so every
+	// signed-in player can ask for their own participation ticket, and so a new
+	// Master Client after a migration can still report the match.
+
+	const FString& GetBackendMatchId() const { return BackendMatchId; }
+	/** Authority only. */
+	void SetBackendMatchId(const FString& MatchId);
+
 protected:
 	/**
 	 * Fusion discovers replicated properties by scanning for Replicated /
@@ -147,6 +156,10 @@ protected:
 
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
 	int32 LossStreakBravo = 0;
+
+	/** v2.0: backend match id (a UUID); empty when the match is not recorded. */
+	UPROPERTY(Replicated, BlueprintReadOnly, Category = "CS|Mode")
+	FString BackendMatchId;
 
 	UFUNCTION()
 	void OnRep_MatchPhase();

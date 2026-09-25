@@ -104,11 +104,16 @@ protected:
 	bool IsRoundDecided() const;
 	void FinishMatch(ECSTeam WinnerTeam, int32 WinnerPlayerId);
 
-	/** v1.2 accounts: hand the finished match to the backend (authority, once). */
-	void ReportMatchToBackend(ECSTeam WinnerTeam, int32 WinnerPlayerId);
+	/**
+	 * v2.0 match records (functions/match): register the match with the
+	 * backend as it begins - the server stamps the start - and put its id in
+	 * the replicated GameState, so players can fetch their tickets and a new
+	 * Master Client can still report it.
+	 */
+	void StartBackendMatch();
 
-	/** When the current match went InProgress; zero once reported. */
-	FDateTime MatchStartedUtc;
+	/** Hand the finished match to the backend: stats per participation ticket (authority, once). */
+	void ReportMatchToBackend(ECSTeam WinnerTeam, int32 WinnerPlayerId);
 
 	ACSGameState* GetCSGameState() const;
 

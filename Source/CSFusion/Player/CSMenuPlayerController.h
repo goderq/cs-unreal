@@ -37,11 +37,17 @@ protected:
 	void RunMenuTest();
 	void MenuTestStep();
 	void Screenshot(const FString& Name);
+	/** -cstestmenu=backendprobe: the real backend must refuse what this account may not do. */
+	void RunBackendProbe();
 
 	/** v1.2: the sign-in screen shown before the menu. */
 	TSharedPtr<SCSLoginScreen> LoginScreen;
 	void ShowLoginScreen();
 	void ShowMainMenu();
+
+	/** v2.0: signing out (or a session that could not be renewed) goes back to the sign-in screen. */
+	void HandleAccountChanged();
+	FDelegateHandle AccountChangedHandle;
 
 	TSharedPtr<SCSMainMenu> Menu;
 

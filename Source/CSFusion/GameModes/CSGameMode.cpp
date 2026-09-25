@@ -9,6 +9,8 @@
 #include "Core/CSLog.h"
 #include "Core/CSModeSettings.h"
 #include "Account/CSAccountSubsystem.h"
+#include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "Multiplayer/CSSessionSubsystem.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerStart.h"
@@ -252,7 +254,7 @@ void ACSGameMode::UpdateMatchFlow()
 			GS->SetLossStreak(ECSTeam::Bravo, 0);
 			GS->SetMatchPhase(ECSMatchPhase::InProgress);
 			Director->ResetForNewMatch();
-			MatchStartedUtc = FDateTime::UtcNow();
+			StartBackendMatch();
 
 			if (Rules.bRounds)
 			{
@@ -505,56 +507,113 @@ void ACSGameMode::ConfigureModeIfNeeded()
 	GS->ConfigureMode(Mode);
 }
 
+void ACSGameMode::StartBackendMatch()
+{
+	CS_AUTHORITY_ONLY(this);
+
+	ACSGameState* GS = GetCSGameState();
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!GS || !Director)
+	{
+		return;
+	}
+	GS->SetBackendMatchId(FString());
+	Director->ClearTickets();
+
+	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	if (!Account || !Account->IsReady())
+	{
+		return; // a guest host: this match is not recorded
+	}
+
+	const UCSSessionSubsystem* Session = GetGameInstance()->GetSubsystem<UCSSessionSubsystem>();
+	const bool bOffline = !UCSAuthority::IsSessionActive(this);
+	const FString Room = (!bOffline && Session) ? Session->GetRoomName() : FString();
+	FString MapName = GetWorld()->GetMapName();
+	MapName.RemoveFromStart(GetWorld()->StreamingLevelsPrefix);
+	MapName.RemoveFromStart(TEXT("Lvl_"));
+	const int32 LocalId = UCSAuthority::GetLocalPlayerId(this);
+
+	TWeakObjectPtr<ACSGameMode> WeakThis(this);
+	Account->MatchStart(UCSModeSettings::ModeTag(GS->GetGameMode()), MapName, Room, bOffline,
+		[WeakThis, LocalId](bool bOk, const FString& MatchId, const FString& Ticket)
+		{
+			ACSGameMode* Self = WeakThis.Get();
+			if (!Self || !bOk || !UCSAuthority::IsGameAuthority(Self))
+			{
+				return;
+			}
+			ACSGameState* State = Self->GetCSGameState();
+			ACSMatchDirector* D = ACSMatchDirector::Get(Self);
+			// The answer came too late (the match already ended): nothing to record.
+			if (!State || !D || State->GetMatchPhase() != ECSMatchPhase::InProgress)
+			{
+				return;
+			}
+			State->SetBackendMatchId(MatchId);
+			D->NoteTicket(LocalId, Ticket);
+		});
+}
+
 void ACSGameMode::ReportMatchToBackend(ECSTeam WinnerTeam, int32 WinnerPlayerId)
 {
 	// Authority only, and only once per match: the Master Client is the peer
-	// that knows every record. Players without an account (and bots) are left
-	// out; the backend checks the reporter played and clamps the numbers.
+	// that knows every record. Each signed-in player is identified by the
+	// ticket they got from the backend themselves; guests have none and are
+	// left out, bots are never listed. The backend checks the rest.
 	CS_AUTHORITY_ONLY(this);
 
 	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
 	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
-	const ACSGameState* GS = GetCSGameState();
-	if (!Account || !Account->IsReady() || !Director || !GS || MatchStartedUtc == FDateTime())
+	ACSGameState* GS = GetCSGameState();
+	if (!Account || !Account->IsReady() || !Director || !GS || GS->GetBackendMatchId().IsEmpty())
 	{
 		return;
 	}
 
-	TArray<FCSMatchReportPlayer> Players;
+	const bool bTeams = GS->GetRules().bTeams;
+	TArray<TSharedPtr<FJsonValue>> Players;
+	int32 Humans = 0;
 	for (const FCSPlayerCombatRecord& Record : Director->GetAllRecords())
 	{
-		const FString ProfileId = Director->GetProfileIdFor(Record.PlayerId);
-		if (ProfileId.IsEmpty())
+		if (CSBots::IsBotId(Record.PlayerId))
 		{
-			continue; // a bot, or a player who is not signed in
+			continue;
 		}
-		FCSMatchReportPlayer& Player = Players.AddDefaulted_GetRef();
-		Player.ProfileId = ProfileId;
-		Player.Team = static_cast<int32>(Record.Team);
-		Player.Kills = Record.Kills;
-		Player.Deaths = Record.Deaths;
-		Player.Headshots = Record.Headshots;
-		Player.Damage = Record.DamageDealt;
-		Player.Money = Record.Money;
-		Player.bWon = GS->GetRules().bTeams
+		++Humans;
+		const FString Ticket = Director->GetTicketFor(Record.PlayerId);
+		if (Ticket.IsEmpty())
+		{
+			continue; // a player without an account
+		}
+		const TSharedRef<FJsonObject> Player = MakeShared<FJsonObject>();
+		Player->SetStringField(TEXT("ticket"), Ticket);
+		Player->SetNumberField(TEXT("team"), bTeams ? static_cast<int32>(Record.Team) : 0);
+		Player->SetNumberField(TEXT("kills"), Record.Kills);
+		Player->SetNumberField(TEXT("deaths"), Record.Deaths);
+		Player->SetNumberField(TEXT("headshots"), Record.Headshots);
+		Player->SetNumberField(TEXT("damage"), Record.DamageDealt);
+		Player->SetNumberField(TEXT("money"), Record.Money);
+		Player->SetBoolField(TEXT("won"), bTeams
 			? (WinnerTeam != ECSTeam::None && Record.GetTeam() == WinnerTeam)
-			: (WinnerPlayerId == Record.PlayerId);
+			: (WinnerPlayerId != 0 && WinnerPlayerId == Record.PlayerId));
+		Players.Add(MakeShared<FJsonValueObject>(Player));
 	}
 	if (Players.Num() == 0)
 	{
 		return;
 	}
 
-	const UCSSessionSubsystem* Session = GetGameInstance()->GetSubsystem<UCSSessionSubsystem>();
-	FString MapName = GetWorld()->GetMapName();
-	MapName.RemoveFromStart(GetWorld()->StreamingLevelsPrefix);
-	MapName.RemoveFromStart(TEXT("Lvl_"));
+	const TSharedRef<FJsonObject> Report = MakeShared<FJsonObject>();
+	Report->SetNumberField(TEXT("winner_team"), bTeams ? static_cast<int32>(WinnerTeam) : 0);
+	Report->SetNumberField(TEXT("rounds"), GS->GetRules().bRounds ? GS->GetRoundNumber() : 0);
+	Report->SetBoolField(TEXT("bots"), Director->HadBotsThisMatch());
+	Report->SetNumberField(TEXT("humans"), Humans);
+	Report->SetArrayField(TEXT("players"), Players);
+	Account->MatchReport(GS->GetBackendMatchId(), Report);
 
-	const FString Room = Session ? Session->GetRoomName() : FString();
-	Account->ReportMatch(UCSModeSettings::ModeTag(GS->GetGameMode()), MapName,
-		Room.IsEmpty() ? FString::Printf(TEXT("offline-%s"), *MatchStartedUtc.ToString()) : Room,
-		MatchStartedUtc, static_cast<int32>(WinnerTeam), GS->GetRoundNumber(), Players);
-
-	UE_LOG(LogCS, Log, TEXT("Match report sent for %d signed-in player(s)."), Players.Num());
-	MatchStartedUtc = FDateTime();
+	UE_LOG(LogCS, Log, TEXT("Match report sent: %d player(s) with tickets, %d human(s), bots %s."),
+		Players.Num(), Humans, Director->HadBotsThisMatch() ? TEXT("yes") : TEXT("no"));
+	// Reported once; a new match gets a new id.
+	GS->SetBackendMatchId(FString());
 }

@@ -23,6 +23,7 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/PlayerController.h"
 #include "GameModes/CSGameMode.h"
+#include "GameModes/CSGameState.h"
 #include "Input/CSInputConfig.h"
 #include "Inventory/CSPlayerInventory.h"
 #include "Items/CSItemDefinition.h"
@@ -356,6 +357,7 @@ void ACSCharacter::Tick(float DeltaSeconds)
 
 	SyncWithDirector();
 	BroadcastIdentity();
+	UpdateMatchTicket();
 
 	BindCombatEvents();
 	UpdateWeaponPresentation();
@@ -1679,28 +1681,108 @@ void ACSCharacter::BroadcastIdentity()
 	NextIdentityBroadcast = Now + 10.0;
 
 	FString Nickname = Account->GetNickname();
-	FString ProfileId = Account->GetProfileId();
 	if (UCSAuthority::IsSessionActive(this))
 	{
-		RpcIdentify(Nickname, ProfileId);
+		RpcIdentify(Nickname);
 	}
 	else
 	{
-		RpcIdentify_Receive(Nickname, ProfileId);
+		RpcIdentify_Receive(Nickname);
 	}
 }
 
-void ACSCharacter::RpcIdentify_Receive(FString& Nickname, FString& ProfileId)
+void ACSCharacter::RpcIdentify_Receive(FString& Nickname)
 {
-	// Runs on every peer. The name is cosmetic; the profile id is only kept by
-	// the authority, and only to report the match afterwards.
-	DisplayNickname = Nickname.Left(24);
+	// Runs on every peer. Cosmetic: the name in the HUD. Control characters
+	// are dropped so a name cannot break the kill feed or the scoreboard.
+	FString Clean = Nickname.Left(24);
+	Clean.ReplaceCharInline(TEXT('\n'), TEXT(' '));
+	Clean.ReplaceCharInline(TEXT('\r'), TEXT(' '));
+	Clean.ReplaceCharInline(TEXT('\t'), TEXT(' '));
+	DisplayNickname = Clean.TrimStartAndEnd();
+}
 
-	if (UCSAuthority::IsGameAuthority(this))
+// ---------------------------------------------------------------------------
+// v2.0 match records: participation tickets
+// ---------------------------------------------------------------------------
+
+void ACSCharacter::UpdateMatchTicket()
+{
+	if (!IsLocallyControlled() || bIsBot)
 	{
-		if (ACSMatchDirector* Director = ACSMatchDirector::Get(this))
-		{
-			Director->NoteIdentity(GetOwningPlayerId(), ProfileId);
-		}
+		return;
 	}
+	UCSAccountSubsystem* Account = UCSAccountSubsystem::Get(this);
+	const ACSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ACSGameState>() : nullptr;
+	if (!Account || !Account->IsReady() || !GS)
+	{
+		return;
+	}
+	const FString& MatchId = GS->GetBackendMatchId();
+	if (MatchId.IsEmpty())
+	{
+		return;
+	}
+
+	// A new match: ask the backend for this player's own ticket, once.
+	if (MatchId != TicketMatchId)
+	{
+		TicketMatchId = MatchId;
+		Ticket.Reset();
+		bTicketRequested = false;
+	}
+	if (Ticket.IsEmpty())
+	{
+		if (!bTicketRequested)
+		{
+			bTicketRequested = true;
+			TWeakObjectPtr<ACSCharacter> WeakThis(this);
+			Account->MatchTicket(MatchId, [WeakThis, MatchId](bool bOk, const FString& NewTicket)
+			{
+				if (ACSCharacter* Self = WeakThis.Get(); Self && bOk && Self->TicketMatchId == MatchId)
+				{
+					Self->Ticket = NewTicket;
+					Self->NextTicketSend = 0.0;
+				}
+			});
+		}
+		return;
+	}
+
+	// Hand it to the Master Client now, and again every half minute: a new
+	// master after a migration starts without it.
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now < NextTicketSend)
+	{
+		return;
+	}
+	NextTicketSend = Now + 30.0;
+	FString SendMatchId = TicketMatchId;
+	FString SendTicket = Ticket;
+	if (UCSAuthority::IsSessionActive(this))
+	{
+		RpcMatchTicket(SendMatchId, SendTicket);
+	}
+	else
+	{
+		RpcMatchTicket_Receive(SendMatchId, SendTicket);
+	}
+}
+
+void ACSCharacter::RpcMatchTicket_Receive(FString& MatchId, FString& PlayerTicket)
+{
+	// Master Client. The backend verifies the ticket when the match is
+	// reported; here it only has to belong to the running match.
+	CS_AUTHORITY_ONLY(this);
+	if (RefuseBotRpc())
+	{
+		return;
+	}
+	const ACSGameState* GS = GetWorld() ? GetWorld()->GetGameState<ACSGameState>() : nullptr;
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	if (!GS || !Director || MatchId.IsEmpty() || MatchId != GS->GetBackendMatchId())
+	{
+		return;
+	}
+	Director->NoteTicket(GetOwningPlayerId(), PlayerTicket.Left(64));
 }
