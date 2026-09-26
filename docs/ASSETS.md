@@ -52,6 +52,37 @@ UnrealEditor-Cmd.exe CSFusion.uproject -run=pythonscript -script=Scripts/render_
 (`Saved/WeaponProfiles/*.png`). По ним сняты точки хвата, цевья, прицела и
 дула в `Config/DefaultGame.ini` → `[/Script/CSFusion.CSWeaponPresentationSettings]`.
 
+### Модели оружия v2.0: Fab (фаза 4, одобрены владельцем 26.09.2026)
+
+Лицензия Fab Standard разрешает использовать эти модели в игре, но не
+выкладывать их в публичный репозиторий. Поэтому исходники и готовые ассеты
+лежат в папках, которые игнорирует git:
+- `Content/FPS_Weapon_Bundle/`;
+- `Content/Weapons/Fab/`;
+- `SourceArt/_fab/`.
+
+В git попадают только скрипты и точки хвата в `Config/DefaultGame.ini` →
+`ReplacementModels`. В копии проекта без этих файлов игра берёт модели
+Quaternius выше.
+
+| Слот | Модель | Автор | Лицензия | Откуда |
+|---|---|---|---|---|
+| AK-47, M4, SMG, нож | KA47, AR4, SMG11 (без приклада), M9 из [FPS Weapon Bundle](https://www.fab.com/listings/8aeb9c48-b404-4dcd-9e56-1d0ecedba7f5) | Deadghost Interactive | Fab Standard, Epic Permanent Collection (бесплатно) | владелец добавил пак в проект UE 5.8 и скопировал `Content/FPS_Weapon_Bundle` |
+| Пистолет | [Semi Auto Pistol G-17](https://www.fab.com/listings/ea9c0258-2a32-4d82-bb51-8f18301798ec) | DJHaski | Fab Standard, бесплатный личный тариф | FBX от владельца, `SourceArt/_fab/semi-auto-pistol-g-17` |
+| Дробовик | [Pump-Action Shotgun (M870)](https://www.fab.com/listings/bc8a6bc9-5e63-4c68-b303-5b54cc697cd1) | Wilbruh | Fab Standard, бесплатный личный тариф | FBX от владельца, `SourceArt/_fab/pump_action_shotgun` |
+| Снайперская | [Modular AWP Sniper Rifle](https://www.fab.com/listings/cd5da902-6505-40b9-b0b5-0463ef3c1e85) | HexmireLive | CC BY 4.0 (нужно указать автора); тайловые текстуры ambientCG (CC0) | FBX от владельца, `SourceArt/_fab/AWP_Sniper_Rifle` |
+
+Как собрать:
+1. `Scripts/import_fab_weapons.py`:
+   - разворачивает меши под соглашение проекта (ствол вдоль +X, верх +Z);
+   - импортирует FBX;
+   - делает материалы на мастере `M_FabWeapon`.
+2. Точки хвата снимаются так:
+   - `Scripts/render_weapon_profiles.py` с переменной `CS_PROFILE_PATHS` —
+     профиль модели сбоку;
+   - `Scripts/measure_weapon_sections.py` — точные срезы по слотам
+     материалов. Правило: опорная ладонь стоит на нижней поверхности цевья.
+
 ### Карты: Poly Haven (v1.1)
 
 | Что | Путь в проекте | Откуда | В git |

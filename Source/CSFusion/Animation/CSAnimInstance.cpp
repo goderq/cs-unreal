@@ -116,6 +116,16 @@ void UCSAnimInstance::ResolveClips()
 	WalkClipSpeed = FMath::Max(1.f, Set.WalkClipSpeed);
 	JogClipSpeed = FMath::Max(WalkClipSpeed + 1.f, Set.JogClipSpeed);
 
+	// v2.0 phase 4: the free left arm of one-handed stances.
+	UnarmedIdleClip = LoadClip(Settings->Unarmed.Idle);
+	UnarmedWalkClips.Reset();
+	UnarmedJogClips.Reset();
+	for (int32 i = 0; i < 8; ++i)
+	{
+		UnarmedWalkClips.Add(Settings->Unarmed.Walk.IsValidIndex(i) ? LoadClip(Settings->Unarmed.Walk[i]) : nullptr);
+		UnarmedJogClips.Add(Settings->Unarmed.Jog.IsValidIndex(i) ? LoadClip(Settings->Unarmed.Jog[i]) : nullptr);
+	}
+
 	HitFrontClip = LoadClip(Settings->HitReactFront);
 	HitBackClip = LoadClip(Settings->HitReactBack);
 	DeathClips.Reset();
@@ -406,6 +416,13 @@ void FCSAnimInstanceProxy::PreUpdate(UAnimInstance* InAnimInstance, float DeltaS
 	S.Death = I->ActiveDeathClip;
 	S.JumpStart = I->JumpStartClip;
 	S.LandRecovery = I->LandClip;
+	S.bLeftArmFree = !I->bFirstPerson && (I->Stance == ECSWeaponStance::Knife || I->Stance == ECSWeaponStance::Grenade) && I->UnarmedIdleClip;
+	S.UnarmedIdle = I->UnarmedIdleClip;
+	for (int32 i = 0; i < 8; ++i)
+	{
+		S.UnarmedWalk[i] = I->UnarmedWalkClips.IsValidIndex(i) ? I->UnarmedWalkClips[i].Get() : nullptr;
+		S.UnarmedJog[i] = I->UnarmedJogClips.IsValidIndex(i) ? I->UnarmedJogClips[i].Get() : nullptr;
+	}
 	S.JumpStartTime = I->JumpStartTime;
 	S.LandTime = I->LandTime;
 	S.LandWeight = I->LandWeight;
@@ -451,6 +468,7 @@ void FCSAnimInstanceProxy::PreUpdate(UAnimInstance* InAnimInstance, float DeltaS
 	S.GripSocketLocal = I->GripSocketLocal;
 	S.GripFrameCS = I->GripFrameCS;
 	S.SupportCS = I->SupportCS;
+	S.SupportTurn = I->SupportTurn;
 	S.LeftGripOffset = I->LeftGripOffset;
 }
 
@@ -475,24 +493,16 @@ bool FCSAnimInstanceProxy::Evaluate(FPoseContext& Output)
 
 	// 1. Locomotion
 	FPoseContext Loco(Output);
-	SamplePose(S.Idle, S.IdleTime, true, Loco);
-	if (S.WalkAlpha > 0.f)
+	SampleLocomotion(S.Idle, S.Walk, S.Jog, Loco);
+
+	// 1b. Knife and grenades (third person): the stance clips hold a gun in both
+	// hands, so the left arm comes from the unarmed clips at the same step.
+	if (S.bLeftArmFree)
 	{
-		FPoseContext Walk(Output);
-		SampleDirectional(S.Walk, Walk);
-		if (S.JogAlpha > 0.f)
-		{
-			FPoseContext Jog(Output);
-			SampleDirectional(S.Jog, Jog);
-			FPoseContext Moving(Output);
-			Blend(Walk, Jog, 1.f - S.JogAlpha, Moving);
-			Walk.Pose.CopyBonesFrom(Moving.Pose);
-			Walk.Curve.CopyFrom(Moving.Curve);
-		}
-		FPoseContext Mixed(Output);
-		Blend(Loco, Walk, 1.f - S.WalkAlpha, Mixed);
-		Loco.Pose.CopyBonesFrom(Mixed.Pose);
-		Loco.Curve.CopyFrom(Mixed.Curve);
+		FPoseContext Free(Output);
+		SampleLocomotion(S.UnarmedIdle, S.UnarmedWalk, S.UnarmedJog, Free);
+		CopyLeftArm(Free, Loco, 1.f);
+		ApplyLeftGuard(Loco);
 	}
 
 	// 2. Falling
@@ -656,6 +666,9 @@ void FCSAnimInstanceProxy::SolveTwoHandIK(FPoseContext& Output) const
 	// model, then moved onto the model's support point.
 	FTransform HandLTarget = CSPose.GetComponentSpaceTransform(Chain[1][2]).GetRelativeTransform(SocketAnim)
 		* Snapshot.GripFrameCS;
+	// Per-model turn of the hold (FCSWeaponModel::SupportRotation), e.g. fingers
+	// round the side of a boxy SMG instead of up into the sight.
+	HandLTarget.SetRotation(Snapshot.SupportTurn * HandLTarget.GetRotation());
 	// The palm (HandGrip_L), not the wrist, onto the support point.
 	HandLTarget.SetLocation(Snapshot.SupportCS - HandLTarget.GetRotation().RotateVector(Snapshot.LeftGripOffset));
 
@@ -926,5 +939,121 @@ void FCSAnimInstanceProxy::ApplyMelee(FPoseContext& Output) const
 	Changed.Add(FBoneTransform(Arm, ArmT));
 	CSPose.SafeSetCSBoneTransforms(Changed);
 
+	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
+}
+
+void FCSAnimInstanceProxy::SampleLocomotion(const UAnimSequence* IdleClip, const UAnimSequence* const WalkClips[8],
+	const UAnimSequence* const JogClips[8], FPoseContext& Out) const
+{
+	const FCSAnimSnapshot& S = Snapshot;
+	SamplePose(IdleClip, S.IdleTime, true, Out);
+	if (S.WalkAlpha <= 0.f)
+	{
+		return;
+	}
+	FPoseContext Walk(Out);
+	SampleDirectional(WalkClips, Walk);
+	if (S.JogAlpha > 0.f)
+	{
+		FPoseContext Jog(Out);
+		SampleDirectional(JogClips, Jog);
+		FPoseContext Moving(Out);
+		Blend(Walk, Jog, 1.f - S.JogAlpha, Moving);
+		Walk.Pose.CopyBonesFrom(Moving.Pose);
+		Walk.Curve.CopyFrom(Moving.Curve);
+	}
+	FPoseContext Mixed(Out);
+	Blend(Out, Walk, 1.f - S.WalkAlpha, Mixed);
+	Out.Pose.CopyBonesFrom(Mixed.Pose);
+	Out.Curve.CopyFrom(Mixed.Curve);
+}
+
+void FCSAnimInstanceProxy::CopyLeftArm(const FPoseContext& Source, FPoseContext& Output, float Weight)
+{
+	const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+	const int32 ClavicleIndex = Bones.GetPoseBoneIndexForBoneName(TEXT("clavicle_l"));
+	if (ClavicleIndex == INDEX_NONE)
+	{
+		return;
+	}
+	const FCompactPoseBoneIndex Clavicle = Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(ClavicleIndex));
+	for (const FCompactPoseBoneIndex Bone : Output.Pose.ForEachBoneIndex())
+	{
+		for (FCompactPoseBoneIndex P = Bone; P != INDEX_NONE; P = Bones.GetParentBoneIndex(P))
+		{
+			if (P == Clavicle)
+			{
+				Output.Pose[Bone].BlendWith(Source.Pose[Bone], Weight);
+				break;
+			}
+		}
+	}
+}
+
+void FCSAnimInstanceProxy::ApplyLeftGuard(FPoseContext& Output)
+{
+	const FBoneContainer& Bones = Output.Pose.GetBoneContainer();
+	auto Index = [&Bones](const TCHAR* Name) -> FCompactPoseBoneIndex
+	{
+		const int32 PoseIndex = Bones.GetPoseBoneIndexForBoneName(FName(Name));
+		return PoseIndex == INDEX_NONE ? FCompactPoseBoneIndex(INDEX_NONE)
+			: Bones.MakeCompactPoseIndex(FMeshPoseBoneIndex(PoseIndex));
+	};
+	const FCompactPoseBoneIndex Upper = Index(TEXT("upperarm_l"));
+	const FCompactPoseBoneIndex Lower = Index(TEXT("lowerarm_l"));
+	const FCompactPoseBoneIndex Hand = Index(TEXT("hand_l"));
+	// UE5 Manny has spine_01..05; spine_05 is the upper chest (spine_03 is the belly).
+	FCompactPoseBoneIndex Chest = Index(TEXT("spine_05"));
+	if (Chest == INDEX_NONE)
+	{
+		Chest = Index(TEXT("spine_03"));
+	}
+	const FCompactPoseBoneIndex ClavL = Index(TEXT("clavicle_l"));
+	const FCompactPoseBoneIndex ClavR = Index(TEXT("clavicle_r"));
+	const FCompactPoseBoneIndex HandR = Index(TEXT("hand_r"));
+	if (Upper == INDEX_NONE || Lower == INDEX_NONE || Hand == INDEX_NONE || Chest == INDEX_NONE
+		|| ClavL == INDEX_NONE || ClavR == INDEX_NONE || HandR == INDEX_NONE)
+	{
+		return;
+	}
+
+	FCSPose<FCompactPose> CSPose;
+	CSPose.InitPose(Output.Pose);
+	FTransform RootT = CSPose.GetComponentSpaceTransform(Upper);
+	FTransform JointT = CSPose.GetComponentSpaceTransform(Lower);
+	FTransform EndT = CSPose.GetComponentSpaceTransform(Hand);
+	const FVector ChestPos = CSPose.GetComponentSpaceTransform(Chest).GetLocation();
+
+	// The body's own axes from the pose, whatever the mesh's component frame:
+	// left across the shoulders, forward square to them (on the side the right
+	// hand reaches to).
+	const FVector Up(0.f, 0.f, 1.f);
+	const FVector Left = FVector::VectorPlaneProject(
+		CSPose.GetComponentSpaceTransform(ClavL).GetLocation() - CSPose.GetComponentSpaceTransform(ClavR).GetLocation(), Up).GetSafeNormal();
+	FVector Forward = FVector::CrossProduct(Up, Left).GetSafeNormal();
+	if (FVector::DotProduct(Forward, CSPose.GetComponentSpaceTransform(HandR).GetLocation() - ChestPos) < 0.f)
+	{
+		Forward = -Forward;
+	}
+	if (Left.IsNearlyZero() || Forward.IsNearlyZero())
+	{
+		return;
+	}
+
+	// Fist up in front of the chest, a little to the left; elbow down and in.
+	const FVector Target = ChestPos + Forward * 30.f + Left * 12.f - Up * 6.f;
+	const FVector Pole = JointT.GetLocation() + (Left * 0.5f - Up * 1.f).GetSafeNormal() * 40.f;
+	const FQuat LowerBefore = JointT.GetRotation();
+	const FQuat HandBefore = EndT.GetRotation();
+	AnimationCore::SolveTwoBoneIK(RootT, JointT, EndT, Pole, Target, /*bAllowStretching*/ false, 1.0, 1.0);
+	// The solver moves the hand but keeps its old (hanging) rotation; turn it
+	// with the forearm so the wrist stays straight - a fist, not a limp hand.
+	EndT.SetRotation(JointT.GetRotation() * LowerBefore.Inverse() * HandBefore);
+
+	TArray<FBoneTransform> Solved;
+	Solved.Add(FBoneTransform(Upper, RootT));
+	Solved.Add(FBoneTransform(Lower, JointT));
+	Solved.Add(FBoneTransform(Hand, EndT));
+	CSPose.SafeSetCSBoneTransforms(Solved);
 	FCSPose<FCompactPose>::ConvertComponentPosesToLocalPoses(MoveTemp(CSPose), Output.Pose);
 }

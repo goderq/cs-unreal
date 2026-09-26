@@ -50,6 +50,14 @@ UCSAnimationSettings::UCSAnimationSettings()
 	Pistol.WalkClipSpeed = 170.f;
 	Pistol.JogClipSpeed = 400.f;
 
+	// v2.0 phase 4: the free left arm of one-handed stances.
+	Unarmed.Idle = Anim(TEXT("Unarmed/MM_Idle"));
+	for (const TCHAR* Dir : { TEXT("Fwd"), TEXT("Fwd_Right"), TEXT("Right"), TEXT("Bwd_Right"), TEXT("Bwd"), TEXT("Bwd_Left"), TEXT("Left"), TEXT("Fwd_Left") })
+	{
+		Unarmed.Walk.Add(Anim(FString::Printf(TEXT("Unarmed/Walk/MF_Unarmed_Walk_%s"), Dir)));
+		Unarmed.Jog.Add(Anim(FString::Printf(TEXT("Unarmed/Jog/MF_Unarmed_Jog_%s"), Dir)));
+	}
+
 	HitReactFront = Anim(TEXT("Rifle/HitReact/MM_HitReact_Front_Lgt_01"));
 	HitReactBack = Anim(TEXT("Rifle/HitReact/MM_HitReact_Back_Med_01"));
 

@@ -344,7 +344,11 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 			? FirstPersonCamera->GetComponentTransform().TransformPosition(RestCamera)
 			: ModelWorld.TransformPosition(Model->Support);
 		const FVector SupportCS = MeshWorld.InverseTransformPosition(SupportWorld);
-		Arms->SetFirstPersonHands(bAlive, Socket->GetSocketLocalTransform(), GripCS, SupportCS);
+		// The model's extra left-hand turn, from its own frame into component space.
+		const FQuat ModelCS = ModelWorld.GetRelativeTransform(MeshWorld).GetRotation();
+		const FQuat SupportTurnCS = Model->bOneHanded ? FQuat::Identity
+			: ModelCS * FQuat(Model->SupportRotation) * ModelCS.Inverse();
+		Arms->SetFirstPersonHands(bAlive, Socket->GetSocketLocalTransform(), GripCS, SupportCS, SupportTurnCS);
 	}
 }
 

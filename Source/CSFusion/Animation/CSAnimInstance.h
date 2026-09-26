@@ -50,6 +50,11 @@ struct FCSAnimSnapshot
 	const UAnimSequence* Death = nullptr;
 	const UAnimSequence* JumpStart = nullptr;
 	const UAnimSequence* LandRecovery = nullptr;
+	/** v2.0 phase 4: knife and grenades, third person: the left arm hangs free (unarmed clips). */
+	bool bLeftArmFree = false;
+	const UAnimSequence* UnarmedIdle = nullptr;
+	const UAnimSequence* UnarmedWalk[8] = {};
+	const UAnimSequence* UnarmedJog[8] = {};
 
 	float IdleTime = 0.f;
 	float LocoPhase = 0.f;			// 0..1, shared by every walk/jog clip
@@ -89,6 +94,7 @@ struct FCSAnimSnapshot
 	FTransform GripSocketLocal = FTransform::Identity;	// HandGrip_R relative to hand_r
 	FTransform GripFrameCS = FTransform::Identity;		// where HandGrip_R must be, component space
 	FVector SupportCS = FVector::ZeroVector;			// left hand target, component space
+	FQuat SupportTurn = FQuat::Identity;				// extra left-hand turn, component space
 	FVector LeftGripOffset = FVector::ZeroVector;		// HandGrip_L in hand_l space: the palm, not the wrist, goes to the target
 };
 
@@ -102,6 +108,12 @@ struct FCSAnimInstanceProxy : public FAnimInstanceProxy
 
 private:
 	void SampleDirectional(const UAnimSequence* const Clips[8], FPoseContext& Out) const;
+	/** Locomotion from a clip set (idle, walk, jog) at the current phase and direction. */
+	void SampleLocomotion(const UAnimSequence* IdleClip, const UAnimSequence* const WalkClips[8], const UAnimSequence* const JogClips[8], FPoseContext& Out) const;
+	/** Blends clavicle_l and everything under it towards Source (local space); 1 = Source. */
+	static void CopyLeftArm(const FPoseContext& Source, FPoseContext& Output, float Weight);
+	/** Knife and grenades: left hand up in a guard in front of the chest (two-bone IK). */
+	static void ApplyLeftGuard(FPoseContext& Output);
 	void SolveLeftHandIK(FPoseContext& Output) const;
 	void SolveTwoHandIK(FPoseContext& Output) const;
 	/** v1.1 procedural crouch: pelvis down, feet kept planted by leg IK, spine leaning in. */
@@ -156,12 +168,14 @@ public:
 	 * GripFrameCS, the left hand on SupportCS (component space). The clip still
 	 * drives shoulders and elbows, and the grip look of each hand.
 	 */
-	void SetFirstPersonHands(bool bEnable, const FTransform& SocketLocal, const FTransform& GripCS, const FVector& SupportPointCS)
+	void SetFirstPersonHands(bool bEnable, const FTransform& SocketLocal, const FTransform& GripCS, const FVector& SupportPointCS,
+		const FQuat& SupportTurnCS = FQuat::Identity)
 	{
 		bTwoHandIK = bEnable;
 		GripSocketLocal = SocketLocal;
 		GripFrameCS = GripCS;
 		SupportCS = SupportPointCS;
+		SupportTurn = SupportTurnCS;
 	}
 
 	/** Direction: 0 front, 1 back, 2 left, 3 right. */
@@ -189,6 +203,9 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> IdleClip;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAnimSequence>> WalkClips;
 	UPROPERTY(Transient) TArray<TObjectPtr<UAnimSequence>> JogClips;
+	UPROPERTY(Transient) TObjectPtr<UAnimSequence> UnarmedIdleClip;
+	UPROPERTY(Transient) TArray<TObjectPtr<UAnimSequence>> UnarmedWalkClips;
+	UPROPERTY(Transient) TArray<TObjectPtr<UAnimSequence>> UnarmedJogClips;
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> FallClip;
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> JumpStartClip;
 	UPROPERTY(Transient) TObjectPtr<UAnimSequence> LandClip;
@@ -243,5 +260,6 @@ private:
 	FTransform GripSocketLocal = FTransform::Identity;
 	FTransform GripFrameCS = FTransform::Identity;
 	FVector SupportCS = FVector::ZeroVector;
+	FQuat SupportTurn = FQuat::Identity;
 	FVector LeftGripOffset = FVector::ZeroVector;
 };

@@ -50,10 +50,14 @@ void ACSPlayerController::CSTestWeapons()
 	// (authority, offline) - the primary is swapped for the next one.
 	const UCSItemSettings* Items = GetDefault<UCSItemSettings>();
 	WeaponTestSlots.Reset();
+	// -testweapon=SMG checks only the weapons whose data asset name contains it.
+	FString Only;
+	FParse::Value(FCommandLine::Get(), TEXT("testweapon="), Only);
 	for (int32 i = 0; Items->IsValidIndex(i); ++i)
 	{
 		const UCSItemDefinition* Item = Items->GetItem(i);
-		if (Item && ACSPlayerInventory::SlotForItem(Item) != INDEX_NONE)
+		const bool bWanted = Only.IsEmpty() || (Item && Item->Weapon.GetAssetName().Contains(Only));
+		if (Item && bWanted && ACSPlayerInventory::SlotForItem(Item) != INDEX_NONE)
 		{
 			WeaponTestSlots.Add(i); // item index, not a slot
 		}
@@ -161,6 +165,27 @@ void ACSPlayerController::WeaponTestNext()
 				GetWorldTimerManager().SetTimer(TestWeaponsTimer, [this, Name, Cam]()
 				{
 					TestScreenshot(FString::Printf(TEXT("wpn_%s_tp"), *Name));
+					// Close-up of both hands on the weapon from the left (support-hand
+					// side): shows a hand sinking into the stock or floating off it.
+					// The camera moves a frame after the side shot so that shot keeps its view.
+					FTimerHandle MoveCam;
+					GetWorldTimerManager().SetTimer(MoveCam, [this, Cam]()
+					{
+						ACSCharacter* S5 = Cast<ACSCharacter>(GetPawn());
+						if (!S5 || !Cam)
+						{
+							return;
+						}
+						const FVector Mid = (S5->GetMesh()->GetBoneLocation(TEXT("hand_l")) + S5->GetMesh()->GetBoneLocation(TEXT("hand_r"))) * 0.5f;
+						const FVector Eye = Mid - S5->GetActorRightVector() * 75.f + S5->GetActorForwardVector() * 25.f + FVector(0.f, 0.f, 12.f);
+						Cam->SetActorLocationAndRotation(Eye, (Mid - Eye).Rotation());
+						Cam->GetCameraComponent()->SetFieldOfView(50.f);
+					}, 0.1f, false);
+					FTimerHandle CloseShot;
+					GetWorldTimerManager().SetTimer(CloseShot, [this, Name]()
+					{
+						TestScreenshot(FString::Printf(TEXT("wpn_%s_hands"), *Name));
+					}, 0.3f, false);
 					GetWorldTimerManager().SetTimer(TestWeaponsTimer, [this, Cam]()
 					{
 						if (ACSCharacter* S4 = Cast<ACSCharacter>(GetPawn()))
@@ -173,7 +198,7 @@ void ACSPlayerController::WeaponTestNext()
 							Cam->Destroy();
 						}
 						WeaponTestNext();
-					}, 0.3f, false);
+					}, 0.5f, false);
 				}, 0.5f, false);
 			}, 0.5f, false);
 		}, 0.9f, false);

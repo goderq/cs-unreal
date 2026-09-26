@@ -94,6 +94,14 @@ public:
 	UPROPERTY(EditAnywhere, Config, Category = "Stances")
 	FCSStanceAnimSet Rifle;
 
+	/**
+	 * v2.0 phase 4: unarmed idle and locomotion (only Idle, Walk, Jog are used).
+	 * One-handed stances (knife, grenades) run on the pistol set, whose clips
+	 * hold a gun in both hands; their left arm takes this pose instead.
+	 */
+	UPROPERTY(EditAnywhere, Config, Category = "Stances")
+	FCSStanceAnimSet Unarmed;
+
 	/** Local-space additive hit reactions. */
 	UPROPERTY(EditAnywhere, Config, Category = "Reactions")
 	TSoftObjectPtr<UAnimSequence> HitReactFront;

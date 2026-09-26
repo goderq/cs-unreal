@@ -50,6 +50,15 @@ struct CSFUSION_API FCSWeaponModel
 	UPROPERTY(Config, EditAnywhere, Category = "Model")
 	FVector Support = FVector::ZeroVector;
 
+	/**
+	 * v2.0 phase 4: extra turn of the left hand about the support point, in the
+	 * model frame (first person). The hand otherwise keeps the clip's rifle-forend
+	 * hold, fingers up the side - right for a handguard, wrong for a boxy SMG whose
+	 * fingers would then rise into the sight picture.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Model")
+	FRotator SupportRotation = FRotator::ZeroRotator;
+
 	/** The point that sits on the line of sight when aiming (rear sight, scope eyepiece). */
 	UPROPERTY(Config, EditAnywhere, Category = "Model")
 	FVector Sight = FVector::ZeroVector;
@@ -106,6 +115,19 @@ public:
 	TMap<FName, FCSWeaponModel> Models;
 
 	/**
+	 * v2.0 phase 4: better models from Fab packs that a Fab Standard License
+	 * keeps out of this public repository (Scripts/import_fab_weapons.py,
+	 * docs/ASSETS.md). Used instead of Models only when switched on and the
+	 * mesh is actually in this copy of the project; otherwise Models stays.
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Models")
+	TMap<FName, FCSWeaponModel> ReplacementModels;
+
+	/** Off until the owner has approved the replacements; -replacementmodels turns them on for a preview. */
+	UPROPERTY(Config, EditAnywhere, Category = "Models")
+	bool bUseReplacementModels = false;
+
+	/**
 	 * First person: the arms mesh is moved this far from its eyes-at-camera
 	 * placement (cm, camera space: X forward, Z up), so shoulders and chest sit
 	 * below and behind the view while the hands reach the weapon by IK.
@@ -117,4 +139,7 @@ public:
 
 	/** Model for a weapon data asset, or null (then the asset's own skeletal mesh is used). */
 	static const FCSWeaponModel* Find(const UObject* WeaponDefinition);
+
+	/** True when the model's mesh package exists in this copy of the project. */
+	static bool HasMesh(const FCSWeaponModel& Model);
 };

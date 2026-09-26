@@ -54,3 +54,9 @@ Plugins/NIS/
 
 # Python bytecode from the content scripts
 __pycache__/
+
+# Fab Standard License content (AUDIT K4): usable in the game, not
+# redistributable in this public repository. Each owner adds it locally.
+Content/FPS_Weapon_Bundle/
+Content/Weapons/Fab/
+SourceArt/_fab/

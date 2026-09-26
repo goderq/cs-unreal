@@ -20,7 +20,7 @@ EAL = unreal.EditorAssetLibrary
 PROJECT_DIR = unreal.Paths.convert_relative_path_to_full(unreal.Paths.project_dir())
 OUT = os.path.join(PROJECT_DIR, "Saved", "WeaponProfiles")
 SRC = "/Game/Weapons/Quaternius"
-PX_PER_UNIT = 2.0
+PX_PER_UNIT = float(os.environ.get("CS_PROFILE_SCALE", "2.0"))
 MARGIN = 20
 
 PALETTE = [(200, 120, 60), (60, 60, 60), (120, 120, 130), (170, 170, 180), (90, 60, 40),
@@ -124,7 +124,10 @@ def render(mesh, name, report):
 def main():
     os.makedirs(OUT, exist_ok=True)
     report = []
-    for path in EAL.list_assets(SRC, recursive=True, include_folder=False):
+    # CS_PROFILE_PATHS="/Game/A/SM_X;/Game/B/SM_Y" renders just those meshes
+    # (v2.0 phase 4: the replacement models); otherwise the whole Quaternius set.
+    explicit = [p for p in os.environ.get("CS_PROFILE_PATHS", "").split(";") if p]
+    for path in explicit or EAL.list_assets(SRC, recursive=True, include_folder=False):
         asset = EAL.load_asset(path)
         if isinstance(asset, unreal.StaticMesh):
             name = asset.get_name()
