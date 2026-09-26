@@ -7,6 +7,16 @@
 #   powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1 -Packaged      # Build\Development\Windows
 #   powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1 -Network       # + two-client anti-cheat
 #   powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1 -Only cheat,perf
+#   powershell -ExecutionPolicy Bypass -File Scripts\run_tests.ps1 -Packaged -Only perf -Resolution 1920x1080 -Trace
+#
+# v2.0 phase 7: -Resolution sets the window (default 960x540); -Trace records
+# an Unreal Insights trace per suite (Saved\Traces\<suite>.utrace, CPU with
+# named events, GPU, frames) for Scripts\analyze_trace.ps1. The perf suites
+# start from a fresh GameUserSettings.ini (%TEMP%, deleted before each run),
+# so they measure the game's default graphics (High, TSR native) and not
+# whatever this PC last saved. -PerfCmds "cvar value, ..." changes things on top
+# of that right before the sample (-ExecCmds runs before the game's settings are
+# applied, which override any cvar of a scalability group).
 #
 # Every self-test writes lines like "CHEAT TEST RESULT: ... -> REJECTED OK".
 # A line is a failure when its verdict contains BROKEN / NOT STOPPED /
@@ -18,12 +28,20 @@ param(
     [switch]$Network,
     [string[]]$Only = @(),
     [string]$EngineDir = "C:\Program Files\Epic Games\UE_5.8\Engine",
-    [double]$PerfBudgetMs = 33.3
+    [double]$PerfBudgetMs = 33.3,
+    [string]$Resolution = "960x540",
+    [switch]$Trace,
+    # Console commands for every client, e.g. "r.VolumetricCloud 0" (A/B measurements).
+    [string]$ExecCmds = "",
+    # Run by the perf test right before its sample, after the game's own settings.
+    [string]$PerfCmds = ""
 )
 
 $ErrorActionPreference = "Stop"
 # "-Only a,b" arrives as one string when the script is started with -File.
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+$ResX, $ResY = $Resolution -split 'x'
+$script:FreshSettings = $false
 $Root = Split-Path -Parent $PSScriptRoot
 $Project = Join-Path $Root "CSFusion.uproject"
 $Editor = Join-Path $EngineDir "Binaries\Win64\UnrealEditor.exe"
@@ -33,7 +51,7 @@ $EditorCmd = Join-Path $EngineDir "Binaries\Win64\UnrealEditor-Cmd.exe"
 $GameExe = Join-Path $Root "Build\Development\Windows\CSFusion\Binaries\Win64\CSFusion.exe"
 $LogDir = if ($Packaged) { Join-Path $Root "Build\Development\Windows\CSFusion\Saved\Logs" } else { Join-Path $Root "Saved\Logs" }
 $Map = "/Game/Maps/Lvl_Depot"
-$FailPattern = "BROKEN|NOT STOPPED|STILL BLOCKED|MISSING|NOT DETECTED|no frames"
+$FailPattern = "BROKEN|NOT STOPPED|STILL BLOCKED|MISSING|NOT DETECTED|no frames|OVER BUDGET"
 
 # Name, extra flags, regex of the LAST result line, timeout seconds.
 $Suites = @(
@@ -63,7 +81,9 @@ $Suites = @(
     # MENU = start on the main menu (the project's default map).
     @{ Name = "menu";       Flags = "-cstestmenu";             Done = "TOUR OK|TOUR BROKEN";           Timeout = 150; Map = "MENU" },
     @{ Name = "graphics";   Flags = "-cstestgraphics";          Done = "GRAPHICS TEST: done";           Timeout = 240; Map = "/Game/Maps/Lvl_Depot" },
-    @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT";              Timeout = 120 }
+    @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT: latency";     Timeout = 120 },
+    @{ Name = "perfoldtown"; Flags = "-bots=8 -cstestperf";    Done = "PERF TEST RESULT: latency";     Timeout = 120; Map = "/Game/Maps/Lvl_OldTown" },
+    @{ Name = "perfwarehouse"; Flags = "-bots=8 -cstestperf";  Done = "PERF TEST RESULT: latency";     Timeout = 120; Map = "/Game/Maps/Lvl_Warehouse" }
 )
 
 $Results = New-Object System.Collections.Generic.List[object]
@@ -81,11 +101,27 @@ function Start-Client([string]$ClientArgs, [string]$LogName, [string]$StartMap =
     # no spawn protection. The v1.1 mode suites (-cstestmodes*) run the real rules.
     # Self-tests cannot sign in to Epic, so they always run without an account.
     $ClientArgs = "-noaccount $ClientArgs"
+    if ($ExecCmds) { $ClientArgs = "-ExecCmds=`"$ExecCmds`" $ClientArgs" }
+    if ($PerfCmds) { $ClientArgs = "-cstestperfcmds=`"$PerfCmds`" $ClientArgs" }
     if ($ClientArgs -notmatch "cstestmodes|cstestposes|cstestcomp") { $ClientArgs = "-nospawnprotection $ClientArgs" }
-    if ($Packaged) {
-        return Start-Process -FilePath $GameExe -ArgumentList "$StartMap -windowed -ResX=960 -ResY=540 -noautodetect $ClientArgs $logArg" -PassThru
+    if ($Trace) {
+        $traceDir = Join-Path $Root "Saved\Traces"
+        New-Item -ItemType Directory -Force $traceDir | Out-Null
+        $traceFile = Join-Path $traceDir ([IO.Path]::ChangeExtension($LogName, ".utrace"))
+        if (Test-Path $traceFile) { Remove-Item $traceFile -Force }
+        $ClientArgs = "-trace=cpu,gpu,frame,bookmark,region -statnamedevents -tracefile=`"$traceFile`" $ClientArgs"
     }
-    return Start-Process -FilePath $Editor -ArgumentList "`"$Project`" $StartMap -game -windowed -ResX=960 -ResY=540 -noautodetect $ClientArgs $logArg" -PassThru
+    if ($script:FreshSettings) {
+        # No spaces in the path: the engine reads -GameUserSettingsINI= up to the first one.
+        $settings = Join-Path $env:TEMP ([IO.Path]::ChangeExtension($LogName, ".settings.ini"))
+        if (Test-Path $settings) { Remove-Item $settings -Force }
+        $ClientArgs = "-GameUserSettingsINI=$settings $ClientArgs"
+    }
+    $window = "-windowed -ResX=$ResX -ResY=$ResY -noautodetect"
+    if ($Packaged) {
+        return Start-Process -FilePath $GameExe -ArgumentList "$StartMap $window $ClientArgs $logArg" -PassThru
+    }
+    return Start-Process -FilePath $Editor -ArgumentList "`"$Project`" $StartMap -game $window $ClientArgs $logArg" -PassThru
 }
 
 function Stop-Client($Proc) {
@@ -151,14 +187,19 @@ foreach ($s in $Suites) {
     if (Test-Path $logPath) { Remove-Item $logPath -Force }
 
     $suiteMap = $(if ($s.Map -eq "MENU") { "" } elseif ($s.Map) { $s.Map } else { $Map })
+    $script:FreshSettings = $s.Name -like "perf*"
     $proc = Start-Client "-noautoconnect $($s.Flags)" $logName $suiteMap
+    $script:FreshSettings = $false
     $done = Wait-ForLine $logPath $s.Done $s.Timeout
+    # The trace is written in blocks: killing the game right away left it empty.
+    # The perf suites also save a screenshot of the measured view after the result.
+    if ($Trace) { Start-Sleep -Seconds 5 } elseif ($s.Name -like "perf*") { Start-Sleep -Seconds 2 }
     Stop-Client $proc
 
     $lines = Get-ResultLines $logPath
     foreach ($line in $lines) {
         $ok = $line -notmatch $FailPattern
-        if ($s.Name -eq "perf" -and $line -match "p95 ([\d\.]+) ms") {
+        if ($s.Name -like "perf*" -and $line -match "p95 ([\d\.]+) ms") {
             $p95 = [double]$Matches[1]
             $ok = $ok -and ($p95 -le $PerfBudgetMs)
             $line = "$line  [budget p95 <= $PerfBudgetMs ms]"
