@@ -384,8 +384,24 @@ void UCSSessionSubsystem::LeaveToMainMenu()
 	{
 		bReturningToMenu = true;
 		ReturnToMenuDeadline = FPlatformTime::Seconds() + GReturnToMenuTimeout;
-		Fusion->DisconnectFromPhoton(GetGameInstance());
-		StartPolling();
+		// v2.0 phase 8: never from inside Fusion's own callbacks. The anti-cheat
+		// removal (an RPC handler) tore the connection down while Fusion was
+		// still delivering that RPC's channel: an access violation in
+		// FusionCore::Notify::Connection::DeliverChannel on the removed client.
+		// The core ticker runs outside Fusion's world tick.
+		TWeakObjectPtr<UCSSessionSubsystem> WeakThis(this);
+		FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([WeakThis](float)
+		{
+			if (UCSSessionSubsystem* Self = WeakThis.Get())
+			{
+				if (UFusionOnlineSubsystem* Deferred = Self->GetFusion())
+				{
+					Deferred->DisconnectFromPhoton(Self->GetGameInstance());
+				}
+				Self->StartPolling();
+			}
+			return false;
+		}));
 		return;
 	}
 #endif
