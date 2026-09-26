@@ -9,8 +9,12 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "GameFramework/GameUserSettings.h"
+#include "Graphics/CSGraphics.h"
+#include "Settings/CSGameUserSettings.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 void UCSSettingsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -19,8 +23,15 @@ void UCSSettingsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	LoadPreferences();
 	ApplyAudio();
 
-	// The engine applies GameUserSettings.ini on its own at startup; nothing
-	// to do for graphics here.
+	// The engine applies GameUserSettings.ini on its own at startup
+	// (UCSGameUserSettings adds the upscaler and ray tracing). The first time
+	// on a PC the settings are picked for its hardware instead of the defaults;
+	// automated tests keep the defaults so their numbers stay comparable.
+	UCSGameUserSettings* Gfx = UCSGameUserSettings::Get();
+	if (Gfx && !Gfx->bAutoDetected && !FParse::Param(FCommandLine::Get(), TEXT("noautodetect")) && !GIsAutomationTesting)
+	{
+		AutoDetectGraphics();
+	}
 	UE_LOG(LogCS, Log, TEXT("Settings loaded: sensitivity %.2f, FOV %.0f, master volume %.2f, %d key override(s)."),
 		Preferences.MouseSensitivity, Preferences.FieldOfView, Preferences.MasterVolume, Preferences.KeyOverrides.Num());
 }
@@ -117,6 +128,12 @@ void UCSSettingsSubsystem::ApplyAudio() const
 FCSGraphicsSettings UCSSettingsSubsystem::DefaultGraphics()
 {
 	FCSGraphicsSettings Defaults;
+	// DLSS where it works (Quality), otherwise TSR at native resolution.
+	if (CSGraphics::GetCaps().bDLSS)
+	{
+		Defaults.Upscaler = static_cast<int32>(ECSUpscaler::DLSS);
+		Defaults.RenderScale = static_cast<int32>(ECSRenderScale::Quality);
+	}
 	Defaults.Resolution = UGameUserSettings::GetDefaultResolution();
 	if (Defaults.Resolution.X <= 0 || Defaults.Resolution.Y <= 0)
 	{
@@ -128,44 +145,116 @@ FCSGraphicsSettings UCSSettingsSubsystem::DefaultGraphics()
 	return Defaults;
 }
 
+namespace
+{
+	// ECSGraphicsGroup order.
+	int32 GroupLevel(const Scalability::FQualityLevels& Q, int32 Group)
+	{
+		const int32 Levels[] = { Q.ViewDistanceQuality, Q.AntiAliasingQuality, Q.ShadowQuality, Q.GlobalIlluminationQuality,
+			Q.ReflectionQuality, Q.PostProcessQuality, Q.TextureQuality, Q.EffectsQuality, Q.ShadingQuality };
+		return Levels[Group];
+	}
+}
+
 FCSGraphicsSettings UCSSettingsSubsystem::GetGraphics() const
 {
 	FCSGraphicsSettings Out;
-	if (const UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr)
+	if (const UCSGameUserSettings* Settings = UCSGameUserSettings::Get())
 	{
 		Out.Resolution = Settings->GetScreenResolution();
 		Out.WindowMode = Settings->GetFullscreenMode();
 		Out.FrameRateLimit = Settings->GetFrameRateLimit();
-		Out.Quality = FMath::Clamp(Settings->GetOverallScalabilityLevel(), 0, 3);
-		if (Settings->GetOverallScalabilityLevel() < 0)
-		{
-			// -1 = custom mix; show it as the highest individual level.
-			Out.Quality = 3;
-		}
 		Out.bVSync = Settings->IsVSyncEnabled();
+		for (int32 g = 0; g < static_cast<int32>(ECSGraphicsGroup::Count); ++g)
+		{
+			Out.Groups[g] = GroupLevel(Settings->ScalabilityQuality, g);
+		}
+		Out.Preset = Settings->GraphicsPreset;
+		Out.Upscaler = Settings->Upscaler;
+		Out.RenderScale = Settings->RenderScale;
+		Out.bRayTracing = Settings->bRayTracing;
 	}
+	SanitizeGraphics(Out);
 	return Out;
 }
 
-void UCSSettingsSubsystem::ApplyGraphics(const FCSGraphicsSettings& Graphics)
+void UCSSettingsSubsystem::ApplyGraphics(const FCSGraphicsSettings& InGraphics)
 {
-	UGameUserSettings* Settings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+	UCSGameUserSettings* Settings = UCSGameUserSettings::Get();
 	if (!Settings)
 	{
 		return;
 	}
+	FCSGraphicsSettings Graphics = InGraphics;
+	SanitizeGraphics(Graphics);
 
 	Settings->SetScreenResolution(Graphics.Resolution);
 	Settings->SetFullscreenMode(Graphics.WindowMode);
 	Settings->SetFrameRateLimit(Graphics.FrameRateLimit);
-	Settings->SetOverallScalabilityLevel(FMath::Clamp(Graphics.Quality, 0, 3));
 	Settings->SetVSyncEnabled(Graphics.bVSync);
+	const int32* G = Graphics.Groups;
+	Settings->SetViewDistanceQuality(G[static_cast<int32>(ECSGraphicsGroup::ViewDistance)]);
+	Settings->SetAntiAliasingQuality(G[static_cast<int32>(ECSGraphicsGroup::AntiAliasing)]);
+	Settings->SetShadowQuality(G[static_cast<int32>(ECSGraphicsGroup::Shadows)]);
+	Settings->SetGlobalIlluminationQuality(G[static_cast<int32>(ECSGraphicsGroup::GlobalIllumination)]);
+	Settings->SetReflectionQuality(G[static_cast<int32>(ECSGraphicsGroup::Reflections)]);
+	Settings->SetPostProcessingQuality(G[static_cast<int32>(ECSGraphicsGroup::PostProcess)]);
+	Settings->SetTextureQuality(G[static_cast<int32>(ECSGraphicsGroup::Textures)]);
+	Settings->SetVisualEffectQuality(G[static_cast<int32>(ECSGraphicsGroup::Effects)]);
+	Settings->SetShadingQuality(G[static_cast<int32>(ECSGraphicsGroup::Shading)]);
+	// Not on the screen (no foliage or landscape on the maps): follow the shading level.
+	Settings->SetFoliageQuality(G[static_cast<int32>(ECSGraphicsGroup::Shading)]);
+	Settings->ScalabilityQuality.LandscapeQuality = G[static_cast<int32>(ECSGraphicsGroup::Shading)];
+	Settings->GraphicsPreset = Graphics.Preset;
+	Settings->Upscaler = static_cast<uint8>(Graphics.Upscaler);
+	Settings->RenderScale = static_cast<uint8>(Graphics.RenderScale);
+	Settings->bRayTracing = Graphics.bRayTracing;
 	Settings->ApplySettings(/*bCheckForCommandLineOverrides*/ false);
 	Settings->SaveSettings();
 
-	UE_LOG(LogCS, Log, TEXT("Graphics applied: %dx%d mode %d, limit %.0f, quality %d, vsync %s."),
-		Graphics.Resolution.X, Graphics.Resolution.Y, static_cast<int32>(Graphics.WindowMode),
-		Graphics.FrameRateLimit, Graphics.Quality, Graphics.bVSync ? TEXT("on") : TEXT("off"));
+	UE_LOG(LogCS, Log, TEXT("Graphics applied: %dx%d mode %d, limit %.0f, preset %d, upscaler %d, render scale %d, ray tracing %s, vsync %s."),
+		Graphics.Resolution.X, Graphics.Resolution.Y, static_cast<int32>(Graphics.WindowMode), Graphics.FrameRateLimit,
+		Graphics.Preset, Graphics.Upscaler, Graphics.RenderScale, Graphics.bRayTracing ? TEXT("on") : TEXT("off"),
+		Graphics.bVSync ? TEXT("on") : TEXT("off"));
+}
+
+void UCSSettingsSubsystem::SetPreset(FCSGraphicsSettings& InOut, int32 Preset)
+{
+	InOut.Preset = FMath::Clamp(Preset, 0, FCSGraphicsSettings::CustomPreset);
+	if (InOut.Preset == FCSGraphicsSettings::CustomPreset)
+	{
+		return;
+	}
+	for (int32& Level : InOut.Groups)
+	{
+		Level = InOut.Preset;
+	}
+}
+
+void UCSSettingsSubsystem::SanitizeGraphics(FCSGraphicsSettings& InOut)
+{
+	InOut.Preset = FMath::Clamp(InOut.Preset, 0, FCSGraphicsSettings::CustomPreset);
+	bool bAllSame = true;
+	for (int32& Level : InOut.Groups)
+	{
+		Level = FMath::Clamp(Level, 0, 4);
+		bAllSame &= Level == InOut.Groups[0];
+	}
+	if (InOut.Preset != FCSGraphicsSettings::CustomPreset && (!bAllSame || InOut.Groups[0] != InOut.Preset))
+	{
+		InOut.Preset = bAllSame ? InOut.Groups[0] : FCSGraphicsSettings::CustomPreset;
+	}
+	InOut.Upscaler = FMath::Clamp(InOut.Upscaler, 0, 2);
+	InOut.RenderScale = FMath::Clamp(InOut.RenderScale, 0, 4);
+	InOut.FrameRateLimit = FMath::Max(InOut.FrameRateLimit, 0.f);
+}
+
+void UCSSettingsSubsystem::AutoDetectGraphics()
+{
+	if (UCSGameUserSettings* Settings = UCSGameUserSettings::Get())
+	{
+		Settings->AutoDetect();
+	}
 }
 
 TArray<FIntPoint> UCSSettingsSubsystem::GetSupportedResolutions()

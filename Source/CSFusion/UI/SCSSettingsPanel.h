@@ -42,6 +42,8 @@ private:
 	TSharedRef<SWidget> MakeSlider(float Min, float Max, TFunction<float()> Get, TFunction<void(float)> Set, TFunction<FText(float)> Format);
 	void RebuildKeyRows();
 	void SyncSelectors();
+	TSharedRef<SWidget> MakeGraphicsRows();
+	FReply OnAutoDetect();
 	FReply OnApply();
 	FReply OnReset();
 	FReply OnBack();
@@ -56,7 +58,13 @@ private:
 	TSharedPtr<SCSSelector> ResolutionSelector;
 	TSharedPtr<SCSSelector> WindowModeSelector;
 	TSharedPtr<SCSSelector> FrameLimitSelector;
-	TSharedPtr<SCSSelector> QualitySelector;
+	TSharedPtr<SCSSelector> PresetSelector;
+	TSharedPtr<SCSSelector> GroupSelectors[static_cast<int32>(ECSGraphicsGroup::Count)];
+	TSharedPtr<SCSSelector> UpscalerSelector;
+	TSharedPtr<SCSSelector> RenderScaleSelector;
+	TSharedPtr<SCSSelector> RayTracingSelector;
+	/** Upscaler value (ECSUpscaler) behind each option; DLSS only where it works. */
+	TArray<int32> UpscalerChoices;
 	TSharedPtr<SCSSelector> VSyncSelector;
 	TSharedPtr<SCSSelector> InvertSelector;
 	TSharedPtr<SCSSelector> ShowFpsSelector;

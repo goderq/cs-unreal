@@ -19,13 +19,21 @@
 # The Version is written to ProjectVersion/AppVersion in Config\DefaultGame.ini
 # before building. AppVersion becomes the Photon AppVersion, so builds of
 # different versions never end up in the same room.
+#
+# v2.0 phase 5: NVIDIA DLSS ships inside every build, like in any game (the
+# NVIDIA RTX SDK license allows the plugin's runtime in a released game; only
+# its files stay out of the public repository). If Plugins\DLSS is missing it
+# is installed from the downloaded archive (Scripts\install_dlss.ps1); with no
+# archive either, packaging stops. -NoDLSS builds without it on purpose. After
+# staging, the build is checked for NVIDIA's runtime (nvngx_dlss.dll).
 
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [ValidateSet("Shipping", "Development")][string]$Config = "Shipping",
     [string]$EngineDir = "C:\Program Files\Epic Games\UE_5.8\Engine",
     [switch]$SkipZip,
-    [switch]$NoKeys
+    [switch]$NoKeys,
+    [switch]$NoDLSS
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +53,15 @@ $text = $text -replace '(?m)^AppVersion=.*$', "AppVersion=$Version"
 [System.IO.File]::WriteAllText($ini, $text, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Version stamped: $Version" -ForegroundColor Cyan
 
+# --- NVIDIA DLSS -------------------------------------------------------------------
+if (-not $NoDLSS -and -not (Test-Path (Join-Path $Root "Plugins\DLSS\DLSS.uplugin"))) {
+    Write-Host "Plugins\DLSS missing: installing it from the downloaded archive." -ForegroundColor Cyan
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "install_dlss.ps1")
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $Root "Plugins\DLSS\DLSS.uplugin"))) {
+        throw "NVIDIA DLSS is not installed and could not be installed (see docs/GRAPHICS.md). Use -NoDLSS only for a build meant to go without it."
+    }
+}
+
 # --- Build, cook, stage, archive -------------------------------------------------
 if (Test-Path $Archive) { Remove-Item $Archive -Recurse -Force }
 $uatArgs = @(
@@ -62,6 +79,12 @@ if ($LASTEXITCODE -ne 0) { throw "BuildCookRun failed with exit code $LASTEXITCO
 
 $staged = Join-Path $Archive "Windows"
 if (-not (Test-Path (Join-Path $staged "CSFusion.exe"))) { throw "Staged build missing: $staged\CSFusion.exe" }
+
+if (-not $NoDLSS) {
+    $dlss = Get-ChildItem $staged -Recurse -Filter "nvngx_dlss.dll" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $dlss) { throw "NVIDIA DLSS runtime (nvngx_dlss.dll) missing from the staged build: $staged" }
+    Write-Host "NVIDIA DLSS in the build: $($dlss.FullName.Substring($staged.Length + 1))" -ForegroundColor Green
+}
 
 # Anything the smoke tests wrote into the staged folder must not ship.
 $saved = Join-Path $staged "CSFusion\Saved"

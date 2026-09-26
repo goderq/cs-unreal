@@ -4,6 +4,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Graphics/CSGraphics.h"
 #include "Input/CSInputConfig.h"
 #include "UI/CSUIStyle.h"
 #include "Widgets/Input/SButton.h"
@@ -97,10 +98,7 @@ void SCSSettingsPanel::Construct(const FArguments& InArgs)
 				]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
-					CSUI::MakeRow(LOCTEXT("Quality", "Graphics quality"),
-						SAssignNew(QualitySelector, SCSSelector)
-						.Options({ LOCTEXT("Low", "Low"), LOCTEXT("Medium", "Medium"), LOCTEXT("High", "High"), LOCTEXT("Epic", "Epic") })
-						.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.Quality = i; }))
+					MakeGraphicsRows()
 				]
 				+ SVerticalBox::Slot().AutoHeight()
 				[
@@ -271,7 +269,15 @@ void SCSSettingsPanel::SyncSelectors()
 	int32 LimitIndex = Limits.IndexOfByPredicate([this](float L) { return FMath::IsNearlyEqual(L, WorkingGfx.FrameRateLimit, 0.5f); });
 	FrameLimitSelector->SetSelectedIndex(LimitIndex == INDEX_NONE ? Limits.Num() - 1 : LimitIndex);
 
-	QualitySelector->SetSelectedIndex(WorkingGfx.Quality);
+	PresetSelector->SetSelectedIndex(WorkingGfx.Preset);
+	for (int32 g = 0; g < static_cast<int32>(ECSGraphicsGroup::Count); ++g)
+	{
+		GroupSelectors[g]->SetSelectedIndex(WorkingGfx.Groups[g]);
+	}
+	const int32 UpscalerIndex = UpscalerChoices.IndexOfByKey(static_cast<int32>(CSGraphics::Effective(static_cast<ECSUpscaler>(WorkingGfx.Upscaler))));
+	UpscalerSelector->SetSelectedIndex(UpscalerIndex == INDEX_NONE ? 0 : UpscalerIndex);
+	RenderScaleSelector->SetSelectedIndex(WorkingGfx.RenderScale);
+	RayTracingSelector->SetSelectedIndex(WorkingGfx.bRayTracing && CSGraphics::GetCaps().bRayTracing ? 1 : 0);
 	VSyncSelector->SetSelectedIndex(WorkingGfx.bVSync ? 1 : 0);
 	InvertSelector->SetSelectedIndex(WorkingPrefs.bInvertY ? 1 : 0);
 	ShowFpsSelector->SetSelectedIndex(WorkingPrefs.bShowFps ? 1 : 0);
@@ -392,6 +398,118 @@ FReply SCSSettingsPanel::OnMouseButtonDown(const FGeometry& MyGeometry, const FP
 	// Clicking anywhere else cancels a pending capture.
 	CapturingBinding = NAME_None;
 	return FReply::Unhandled();
+}
+
+TSharedRef<SWidget> SCSSettingsPanel::MakeGraphicsRows()
+{
+	const FCSGraphicsCaps& Caps = CSGraphics::GetCaps();
+	const TArray<FText> Levels = { LOCTEXT("Low", "Low"), LOCTEXT("Medium", "Medium"), LOCTEXT("High", "High"),
+		LOCTEXT("Epic", "Epic"), LOCTEXT("Cinematic", "Cinematic") };
+	TArray<FText> Presets = Levels;
+	Presets.Add(LOCTEXT("Custom", "Custom"));
+
+	// DLSS appears only where it runs (AUDIT K5); TSR and TAA always.
+	UpscalerChoices.Reset();
+	TArray<FText> Upscalers;
+	if (Caps.bDLSS)
+	{
+		UpscalerChoices.Add(static_cast<int32>(ECSUpscaler::DLSS));
+		Upscalers.Add(LOCTEXT("DLSS", "NVIDIA DLSS"));
+	}
+	UpscalerChoices.Add(static_cast<int32>(ECSUpscaler::TSR));
+	Upscalers.Add(LOCTEXT("TSR", "TSR (Unreal)"));
+	UpscalerChoices.Add(static_cast<int32>(ECSUpscaler::TAA));
+	Upscalers.Add(LOCTEXT("TAA", "TAA"));
+
+	TArray<FText> Scales;
+	const FText ScaleNames[] = { LOCTEXT("Native", "Native"), LOCTEXT("ScaleQuality", "Quality"), LOCTEXT("Balanced", "Balanced"),
+		LOCTEXT("Performance", "Performance"), LOCTEXT("UltraPerformance", "Ultra Performance") };
+	for (int32 i = 0; i < 5; ++i)
+	{
+		Scales.Add(FText::Format(LOCTEXT("ScaleFmt", "{0} ({1}%)"), ScaleNames[i],
+			FText::AsNumber(FMath::RoundToInt(CSGraphics::ScreenPercentage(static_cast<ECSRenderScale>(i))))));
+	}
+
+	const FText GroupNames[] = { LOCTEXT("ViewDistance", "View distance"), LOCTEXT("AntiAliasing", "Anti-aliasing"),
+		LOCTEXT("Shadows", "Shadows"), LOCTEXT("GI", "Global illumination"), LOCTEXT("Reflections", "Reflections"),
+		LOCTEXT("PostProcess", "Post-processing"), LOCTEXT("Textures", "Textures"), LOCTEXT("Effects", "Effects"),
+		LOCTEXT("Shading", "Shading") };
+
+	TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
+	Box->AddSlot().AutoHeight()
+	[
+		CSUI::MakeRow(LOCTEXT("Preset", "Graphics preset"),
+			SAssignNew(PresetSelector, SCSSelector).Options(Presets)
+			.OnSelectionChanged_Lambda([this](int32 i)
+			{
+				UCSSettingsSubsystem::SetPreset(WorkingGfx, i);
+				SyncSelectors();
+			}))
+	];
+	for (int32 g = 0; g < static_cast<int32>(ECSGraphicsGroup::Count); ++g)
+	{
+		Box->AddSlot().AutoHeight()
+		[
+			CSUI::MakeRow(GroupNames[g],
+				SAssignNew(GroupSelectors[g], SCSSelector).Options(Levels)
+				.OnSelectionChanged_Lambda([this, g](int32 i)
+				{
+					WorkingGfx.Groups[g] = i;
+					WorkingGfx.Preset = FCSGraphicsSettings::CustomPreset;
+					PresetSelector->SetSelectedIndex(WorkingGfx.Preset);
+				}))
+		];
+	}
+	Box->AddSlot().AutoHeight()
+	[
+		CSUI::MakeRow(LOCTEXT("Upscaler", "Anti-aliasing / upscaler"),
+			SAssignNew(UpscalerSelector, SCSSelector).Options(Upscalers)
+			.OnSelectionChanged_Lambda([this](int32 i) { if (UpscalerChoices.IsValidIndex(i)) { WorkingGfx.Upscaler = UpscalerChoices[i]; } }))
+	];
+	Box->AddSlot().AutoHeight()
+	[
+		CSUI::MakeRow(LOCTEXT("RenderScale", "Render resolution"),
+			SAssignNew(RenderScaleSelector, SCSSelector).Options(Scales)
+			.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.RenderScale = i; }))
+	];
+	Box->AddSlot().AutoHeight()
+	[
+		CSUI::MakeRow(LOCTEXT("RayTracing", "Hardware ray tracing"),
+			SAssignNew(RayTracingSelector, SCSSelector)
+			.Options(Caps.bRayTracing ? TArray<FText>{ LOCTEXT("Off", "Off"), LOCTEXT("On", "On") }
+				: TArray<FText>{ LOCTEXT("RTUnsupported", "Not supported on this PC") })
+			.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.bRayTracing = i == 1; }))
+	];
+	Box->AddSlot().AutoHeight().Padding(0.f, 4.f, 0.f, 8.f)
+	[
+		SNew(SHorizontalBox)
+		+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+		[
+			SNew(STextBlock)
+			.Text(FText::Format(LOCTEXT("GpuInfo", "{0}. DLSS: {1}."),
+				FText::FromString(FString::Printf(TEXT("%s, %lld MB"), *Caps.Adapter, Caps.VideoMemoryMB)), FText::FromString(Caps.DLSSStatus)))
+			.Font(CSUI::Font(12))
+			.ColorAndOpacity(CSUI::TextDim)
+			.AutoWrapText(true)
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(12.f, 0.f, 0.f, 0.f)
+		[
+			CSUI::MakeButton(LOCTEXT("AutoDetect", "AUTO-DETECT"), FOnClicked::CreateSP(this, &SCSSettingsPanel::OnAutoDetect), CSUI::EButtonKind::Normal, true, 14)
+		]
+	];
+	return Box;
+}
+
+FReply SCSSettingsPanel::OnAutoDetect()
+{
+	if (UCSSettingsSubsystem* Settings = GetSettings())
+	{
+		Settings->AutoDetectGraphics();
+		WorkingGfx = Settings->GetGraphics();
+		SyncSelectors();
+		StatusText = LOCTEXT("Detected", "Graphics picked for this PC and applied.");
+	}
+	return FReply::Handled();
 }
 
 FReply SCSSettingsPanel::OnApply()

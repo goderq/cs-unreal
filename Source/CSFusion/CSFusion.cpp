@@ -3,6 +3,8 @@
 #include "CSFusion.h"
 #include "Account/CSBackendConfig.h"
 #include "Core/CSLog.h"
+#include "Graphics/CSGraphics.h"
+#include "Misc/CoreDelegates.h"
 #include "Modules/ModuleManager.h"
 
 #define LOCTEXT_NAMESPACE "FCSFusionModule"
@@ -12,6 +14,9 @@ void FCSFusionModule::StartupModule()
 	// Accounts: pull Config/Backend.ini into the engine config before anything
 	// asks EOS for its settings (docs/ACCOUNTS.md).
 	FCSBackendConfig::LoadAndApply();
+
+	// v2.0 phase 5: DLSS (an optional plugin) answers only after PostEngineInit.
+	FCoreDelegates::OnPostEngineInit.AddStatic(&CSGraphics::HandlePostEngineInit);
 
 #if CS_WITH_FUSION
 	UE_LOG(LogCS, Log, TEXT("CSFusion module started (Photon Fusion 3 backend ENABLED)."));
