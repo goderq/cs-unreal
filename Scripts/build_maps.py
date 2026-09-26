@@ -272,6 +272,8 @@ class Builder:
         comp.set_editor_property("intensity", intensity)
         comp.set_editor_property("attenuation_radius", radius)
         comp.set_editor_property("light_color", unreal.Color(int(color[2] * 255), int(color[1] * 255), int(color[0] * 255), 255))
+        # Phase 5: short screen-space contact shadows where props meet floors.
+        comp.set_editor_property("contact_shadow_length", 0.02)
         actor.set_folder_path(folder)
         return actor
 
@@ -284,6 +286,9 @@ class Builder:
         comp.set_editor_property("mobility", unreal.ComponentMobility.MOVABLE)
         comp.set_editor_property("intensity", sun_intensity)
         comp.set_editor_property("atmosphere_sun_light", True)
+        # Phase 5: contact shadows ground small props and feet, which the
+        # virtual shadow maps alone leave floating at a distance.
+        comp.set_editor_property("contact_shadow_length", 0.03)
         comp.set_editor_property("light_color", unreal.Color(int(sun_color[2] * 255), int(sun_color[1] * 255), int(sun_color[0] * 255), 255))
         sun.set_folder_path("Environment")
 
@@ -823,7 +828,7 @@ def build_oldtown():
     b.machine(1240, 0, 180, 8)
 
     b.environment(sun_pitch=-28, sun_yaw=-55, sun_intensity=8.0, fog_density=0.018, sun_color=(1.0, 0.86, 0.68),
-                  exposure=(0.35, 2.0, 0.0))
+                  exposure=(0.35, 2.0, 0.15))   # +0.15: working Lumen GI (phase 5) darkened the lanes
     b.navmesh(-X, X, -Y, Y, -200, 1200)
     LEVELS.save_current_level()
     log("Lvl_OldTown: %d meshes, starts %s" % (b.count, b.starts))
