@@ -118,6 +118,9 @@ protected:
 	/** Colour a player is drawn in: team colour, or you / others in free for all. */
 	FLinearColor PlayerColor(int32 PlayerId) const;
 
+	/** Red pulsing screen edges at low health (phase 6). */
+	void DrawLowHealth(const FCSPlayerCombatRecord& Record);
+
 	/** Ping, jitter and whether this game hosts the match (C11 option). */
 	void DrawNetStats();
 	double LastPingSample = 0.0;

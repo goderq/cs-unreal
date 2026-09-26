@@ -161,6 +161,10 @@ protected:
 	int32 MapBudgetPrims = 0;
 	int32 MapBudgetWorstDraws = 0;
 	int32 MapBudgetWorstPrims = 0;
+	/** -cstestscoreboard (phase 6): assists and score on the authority, the Tab table drawn. */
+	UFUNCTION(Exec)
+	void CSTestScoreboard();
+	FTimerHandle TestScoreboardTimer;
 	/** -cstestgraphics (phase 5): presets, upscalers (DLSS where it runs), ray tracing, FPS per case. */
 	UFUNCTION(Exec)
 	void CSTestGraphics();

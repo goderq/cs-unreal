@@ -59,6 +59,9 @@ $Suites = @(
     @{ Name = "mapdepot";  Flags = "-cstestmapaudit";         Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "mapoldtown"; Flags = "-cstestmapaudit";        Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_OldTown" },
     @{ Name = "mapwarehouse"; Flags = "-cstestmapaudit";      Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_Warehouse" },
+    @{ Name = "scoreboard"; Flags = "-mode=dm -bots=2 -nospawnprotection -cstestscoreboard"; Done = "SCOREBOARD TEST: done"; Timeout = 120; Map = "/Game/Maps/Lvl_Depot" },
+    # MENU = start on the main menu (the project's default map).
+    @{ Name = "menu";       Flags = "-cstestmenu";             Done = "TOUR OK|TOUR BROKEN";           Timeout = 150; Map = "MENU" },
     @{ Name = "graphics";   Flags = "-cstestgraphics";          Done = "GRAPHICS TEST: done";           Timeout = 240; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT";              Timeout = 120 }
 )
@@ -147,7 +150,7 @@ foreach ($s in $Suites) {
     $logPath = Join-Path $LogDir $logName
     if (Test-Path $logPath) { Remove-Item $logPath -Force }
 
-    $suiteMap = $(if ($s.Map) { $s.Map } else { $Map })
+    $suiteMap = $(if ($s.Map -eq "MENU") { "" } elseif ($s.Map) { $s.Map } else { $Map })
     $proc = Start-Client "-noautoconnect $($s.Flags)" $logName $suiteMap
     $done = Wait-ForLine $logPath $s.Done $s.Timeout
     Stop-Client $proc

@@ -14,6 +14,7 @@
 #include "UI/CSUIStyle.h"
 #include "UI/SCSSettingsPanel.h"
 #include "UI/SCSAdminPanel.h"
+#include "UI/SCSArsenalPanel.h"
 #include "UI/SCSProfilePanel.h"
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
@@ -21,7 +22,6 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -83,28 +83,7 @@ void SCSMainMenu::Construct(const FArguments& InArgs)
 				.BorderBackgroundColor(CSUI::Panel)
 				.Padding(FMargin(40.f, 36.f))
 				[
-					SAssignNew(Switcher, SWidgetSwitcher)
-					+ SWidgetSwitcher::Slot()[ MakeHomePage() ]
-					+ SWidgetSwitcher::Slot()[ MakePlayPage() ]
-					+ SWidgetSwitcher::Slot()[ MakeCreatePage() ]
-					+ SWidgetSwitcher::Slot()[ MakeJoinPage() ]
-					+ SWidgetSwitcher::Slot()[ MakeBrowserPage() ]
-					+ SWidgetSwitcher::Slot()
-					[
-						SAssignNew(SettingsPanel, SCSSettingsPanel)
-						.WorldContext(WorldContext)
-						.OnClose_Lambda([this]() { ShowPage(EPage::Home); })
-					]
-					+ SWidgetSwitcher::Slot()
-					[
-						SAssignNew(ProfilePanel, SCSProfilePanel)
-						.WorldContext(WorldContext)
-					]
-					+ SWidgetSwitcher::Slot()
-					[
-						SAssignNew(AdminPanel, SCSAdminPanel)
-						.WorldContext(WorldContext)
-					]
+					SAssignNew(Switcher, SCSAnimatedSwitcher)
 				]
 			]
 		]
@@ -114,6 +93,18 @@ void SCSMainMenu::Construct(const FArguments& InArgs)
 			MakeBusyOverlay()
 		]
 	];
+
+	// Pages in EPage order.
+	Switcher->AddPage(MakeHomePage());
+	Switcher->AddPage(MakePlayPage());
+	Switcher->AddPage(MakeCreatePage());
+	Switcher->AddPage(MakeJoinPage());
+	Switcher->AddPage(MakeBrowserPage());
+	Switcher->AddPage(SAssignNew(SettingsPanel, SCSSettingsPanel).WorldContext(WorldContext).OnClose_Lambda([this]() { ShowPage(EPage::Home); }));
+	Switcher->AddPage(SAssignNew(ProfilePanel, SCSProfilePanel).WorldContext(WorldContext));
+	Switcher->AddPage(SAssignNew(AdminPanel, SCSAdminPanel).WorldContext(WorldContext));
+	Switcher->AddPage(SNew(SCSArsenalPanel));
+	Switcher->AddPage(SNew(SCSArsenalPanel).bCatalog(true));
 
 	if (UCSSessionSubsystem* Session = GetSession())
 	{
@@ -321,6 +312,8 @@ TSharedRef<SWidget> SCSMainMenu::MakeNav()
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("JoinNav", "Join Session"), EPage::Join, true) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("BrowserNav", "Session Browser"), EPage::Browser, true) ]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 10.f, 0.f, 0.f)[ Nav(LOCTEXT("Profile", "PROFILE"), EPage::Profile) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("Arsenal", "ARSENAL"), EPage::Arsenal) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("Catalog", "CATALOG"), EPage::Catalog) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Nav(LOCTEXT("Settings", "SETTINGS"), EPage::Settings) ]
 		// v2.0: only for profiles with admin rights.
 		+ SVerticalBox::Slot().AutoHeight()
@@ -384,16 +377,16 @@ TSharedRef<SWidget> SCSMainMenu::MakeHomePage()
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			CSUI::MakeHeader(LOCTEXT("Welcome", "WELCOME"),
-				LOCTEXT("WelcomeBody", "Three modes - Deathmatch, Team Deathmatch and 5 vs 5 - on three maps. Earn money for kills and rounds and spend it in the shop. Weapons are bought, not found; whatever a player carried drops when they die."))
+				LOCTEXT("WelcomeBody", "Three modes - Deathmatch, Team Deathmatch and 5 vs 5 - on three maps: Depot, Old Town and Warehouse. Kills pay money; spend it in the shop on a primary weapon and grenades, and top up ammunition at the ammo machines. A dropped primary can be picked up by anyone. Bots fill empty places."))
 		]
-		+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("ControlsLabel", "CONTROLS")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("ControlsLabel", "CONTROLS  (rebind in Settings - Key bindings)")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KMove", "W A S D"), LOCTEXT("AMove", "Move  -  Space jump, Shift sprint, Ctrl crouch")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KFire", "LMB / RMB"), LOCTEXT("AFire", "Fire / aim")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KReload", "R"), LOCTEXT("AReload", "Reload")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KPick", "E / G"), LOCTEXT("APick", "Pick up / drop the weapon in hand")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KSlots", "1 - 7"), LOCTEXT("ASlots", "1 pistol, 2-7 inventory: weapons and grenades are held, medkit / armor used")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KFire", "LMB / RMB"), LOCTEXT("AFire", "Fire / aim (hold or toggle in Settings)")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KReload", "R  /  F"), LOCTEXT("AReload", "Reload  /  inspect the weapon")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KPick", "E  /  G"), LOCTEXT("APick", "Pick up a weapon or use an ammo machine  /  drop the weapon in hand")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KSlots", "1 - 5"), LOCTEXT("ASlots", "Primary, pistol, knife, frag grenade, flashbang")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KShop", "B"), LOCTEXT("AShop", "Shop - while spawn-protected (DM / TDM) or during buy time (5 vs 5)")) ]
-		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KTab", "TAB  /  I"), LOCTEXT("ATab", "Scoreboard (hold)  /  inventory")) ]
+		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KTab", "TAB"), LOCTEXT("ATab", "Scoreboard (hold): kills, assists, deaths, score, ping")) ]
 		+ SVerticalBox::Slot().AutoHeight()[ Line(LOCTEXT("KEsc", "ESC"), LOCTEXT("AEsc", "Menu  -  resume, settings, leave match")) ]
 		+ SVerticalBox::Slot().FillHeight(1.f)[ SNew(SBox) ]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
@@ -505,7 +498,7 @@ TSharedRef<SWidget> SCSMainMenu::MakePlayPage()
 		MapRow->AddSlot().FillWidth(1.f).Padding(i == 0 ? 0.f : 10.f, 0.f, 0.f, 0.f)
 		[
 			MakeChoiceTile(FText::FromString(Maps[i].DisplayName.ToUpper()), LOCTEXT("MapTag", "MAP"), FText::FromString(Maps[i].Description),
-				CSUI::Money, [this, i]() { return SelectedMapIndex == i; }, [this, i]() { SelectedMapIndex = i; }, 120.f)
+				CSUI::Money, [this, i]() { return SelectedMapIndex == i; }, [this, i]() { SelectedMapIndex = i; }, 140.f)
 		];
 	}
 
@@ -764,7 +757,7 @@ void SCSMainMenu::ShowPage(EPage Page)
 	}
 
 	CurrentPage = Page;
-	Switcher->SetActiveWidgetIndex(static_cast<int32>(Page));
+	Switcher->SetActivePage(static_cast<int32>(Page));
 
 	if (Page == EPage::Browser && Session && !RefuseOnlineWhenOffline())
 	{

@@ -321,6 +321,7 @@ void ACSHUD::DrawHUD()
 	}
 
 	DrawDamageIndicators();
+	DrawLowHealth(Record);
 	DrawMoney(Record);
 	DrawVitals(Record);
 	DrawAmmo();
@@ -981,6 +982,32 @@ void ACSHUD::DrawHitMarker()
 		const float DX = FMath::Cos(Angle);
 		const float DY = FMath::Sin(Angle);
 		DrawLine(CX + DX * Inner, CY + DY * Inner, CX + DX * Outer, CY + DY * Outer, Color, T);
+	}
+}
+
+void ACSHUD::DrawLowHealth(const FCSPlayerCombatRecord& Record)
+{
+	// Phase 6: below 35 health the screen edges pulse red, stronger the lower it is.
+	constexpr float Threshold = 35.f;
+	if (!Record.bAlive || Record.Health >= Threshold || Record.Health <= 0.f)
+	{
+		return;
+	}
+	const float Severity = 1.f - Record.Health / Threshold;
+	const double Time = GetWorld() ? GetWorld()->GetRealTimeSeconds() : 0.0;
+	const float Pulse = 0.75f + 0.25f * FMath::Sin(static_cast<float>(Time) * 5.f);
+	const float W = Canvas->ClipX;
+	const float H = Canvas->ClipY;
+	const float Band = FMath::Min(W, H) * 0.035f;
+	for (int32 i = 0; i < 5; ++i)
+	{
+		const float A = (0.22f - i * 0.04f) * Severity * Pulse;
+		const FLinearColor Red(0.75f, 0.02f, 0.02f, FMath::Max(A, 0.f));
+		const float O = i * Band;
+		DrawRect(Red, O, O, W - 2.f * O, Band);                 // top
+		DrawRect(Red, O, H - O - Band, W - 2.f * O, Band);      // bottom
+		DrawRect(Red, O, O + Band, Band, H - 2.f * O - 2.f * Band);          // left
+		DrawRect(Red, W - O - Band, O + Band, Band, H - 2.f * O - 2.f * Band); // right
 	}
 }
 

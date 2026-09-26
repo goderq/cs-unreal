@@ -13,7 +13,6 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -107,6 +106,28 @@ namespace
 	}
 }
 
+namespace
+{
+	/** Column header row: labels with the same fill weights as the rows under them. */
+	TSharedRef<SWidget> HeaderRow(std::initializer_list<TPair<FText, float>> Columns)
+	{
+		TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+		for (const TPair<FText, float>& Column : Columns)
+		{
+			Row->AddSlot().FillWidth(Column.Value)
+			[
+				SNew(STextBlock).Text(Column.Key).Font(CSUI::Font(11, true)).ColorAndOpacity(CSUI::TextDim)
+			];
+		}
+		return SNew(SBox).Padding(FMargin(12.f, 0.f, 12.f, 4.f))[ Row ];
+	}
+
+	TSharedRef<SWidget> Cell(const FString& Text, int32 Size, bool bBold, const FLinearColor& Color)
+	{
+		return SNew(STextBlock).Text(FText::FromString(Text)).Font(CSUI::Font(Size, bBold)).ColorAndOpacity(Color);
+	}
+}
+
 void SCSAdminPanel::Construct(const FArguments& InArgs)
 {
 	WorldContext = InArgs._WorldContext;
@@ -142,10 +163,7 @@ void SCSAdminPanel::Construct(const FArguments& InArgs)
 
 		+ SVerticalBox::Slot().FillHeight(1.f)
 		[
-			SAssignNew(Switcher, SWidgetSwitcher)
-			+ SWidgetSwitcher::Slot()[ MakePlayersTab() ]
-			+ SWidgetSwitcher::Slot()[ MakeMatchesTab() ]
-			+ SWidgetSwitcher::Slot()[ MakeLogTab() ]
+			SAssignNew(Switcher, SCSAnimatedSwitcher)
 		]
 
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 10.f, 0.f, 0.f)
@@ -155,6 +173,9 @@ void SCSAdminPanel::Construct(const FArguments& InArgs)
 			.ColorAndOpacity_Lambda([this]() { return FSlateColor(bStatusError ? CSUI::Danger : CSUI::Money); })
 		]
 	];
+	Switcher->AddPage(MakePlayersTab());
+	Switcher->AddPage(MakeMatchesTab());
+	Switcher->AddPage(MakeLogTab());
 }
 
 UCSAccountSubsystem* SCSAdminPanel::GetAccount() const
@@ -250,6 +271,10 @@ TSharedRef<SWidget> SCSAdminPanel::MakePlayersTab()
 							CSUI::EButtonKind::Primary, TAttribute<bool>::CreateLambda([this]() { return !bBusy; }), 14)
 					]
 				]
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				HeaderRow({ { LOCTEXT("ColPlayer", "PLAYER"), 0.5f }, { LOCTEXT("ColKD", "KILLS / DEATHS"), 0.2f }, { LOCTEXT("ColSeen", "LAST SEEN"), 0.3f } })
 			]
 			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
@@ -566,6 +591,11 @@ TSharedRef<SWidget> SCSAdminPanel::MakeMatchesTab()
 				+ SHorizontalBox::Slot().AutoWidth()[ Filter(LOCTEXT("FilterVoid", "VOID"), TEXT("voided")) ]
 				+ SHorizontalBox::Slot().AutoWidth()[ Filter(LOCTEXT("FilterOpen", "RUNNING"), TEXT("open")) ]
 			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				HeaderRow({ { LOCTEXT("ColStarted", "STARTED"), 0.29f }, { LOCTEXT("ColMatch", "MODE / MAP"), 0.21f },
+					{ LOCTEXT("ColPlayers", "PLAYERS"), 0.11f }, { LOCTEXT("ColHost", "HOST"), 0.22f }, { LOCTEXT("ColStatus", "STATUS"), 0.17f } })
+			]
 			+ SVerticalBox::Slot().FillHeight(1.f)
 			[
 				SNew(SScrollBox) + SScrollBox::Slot()[ SAssignNew(MatchesBox, SVerticalBox) ]
@@ -627,11 +657,10 @@ void SCSAdminPanel::RebuildMatches()
 	for (const FCSAdminMatchRow& Row : Matches)
 	{
 		const FString Id = Row.Id;
-		const FString Flags = FString(Row.bVoided ? TEXT("  VOID") : TEXT(""))
-			+ (Row.bSuspicious ? TEXT("  SUSPICIOUS") : TEXT(""))
-			+ (Row.Status == TEXT("open") ? TEXT("  running") : (Row.bRanked ? TEXT("  ranked") : TEXT("  practice")));
+		const FString MatchStatus = Row.bVoided ? TEXT("VOID") : (Row.bSuspicious ? TEXT("SUSPICIOUS")
+			: (Row.Status == TEXT("open") ? TEXT("running") : (Row.bRanked ? TEXT("ranked") : TEXT("practice"))));
 		// v1.2 matches (and a host whose profile was deleted) have no host.
-		const FString Host = Row.Host.IsEmpty() ? FString() : TEXT("  host ") + Row.Host;
+		const FString Host = Row.Host.IsEmpty() ? TEXT("-") : Row.Host;
 		const FLinearColor Color = Row.bVoided ? CSUI::TextDim : (Row.bSuspicious ? CSUI::Warning : CSUI::Text);
 		MatchesBox->AddSlot().AutoHeight().Padding(0.f, 1.f)
 		[
@@ -647,10 +676,20 @@ void SCSAdminPanel::RebuildMatches()
 				return FReply::Handled();
 			})
 			[
-				SNew(STextBlock).Font(CSUI::Font(14))
-				.Text(FText::FromString(FString::Printf(TEXT("%s  %s %s  %d player(s)%s%s"), *ShortDate(Row.StartedAt),
-					*Row.Mode, *Row.Map, Row.Players, *Host, *Flags)))
-				.ColorAndOpacity_Lambda([this, Id, Color]() { return FSlateColor(SelectedMatch == Id ? CSUI::Accent : Color); })
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(0.29f)
+				[
+					SNew(STextBlock).Text(FText::FromString(ShortDate(Row.StartedAt))).Font(CSUI::Font(14))
+					.ColorAndOpacity_Lambda([this, Id, Color]() { return FSlateColor(SelectedMatch == Id ? CSUI::Accent : Color); })
+				]
+				+ SHorizontalBox::Slot().FillWidth(0.21f)
+				[
+					SNew(STextBlock).Text(FText::FromString(Row.Mode + TEXT("  ") + Row.Map)).Font(CSUI::Font(14, true))
+					.ColorAndOpacity_Lambda([this, Id, Color]() { return FSlateColor(SelectedMatch == Id ? CSUI::Accent : Color); })
+				]
+				+ SHorizontalBox::Slot().FillWidth(0.11f)[ Cell(FString::FromInt(Row.Players), 14, false, Color) ]
+				+ SHorizontalBox::Slot().FillWidth(0.22f)[ Cell(Host, 14, false, Color) ]
+				+ SHorizontalBox::Slot().FillWidth(0.17f)[ Cell(MatchStatus, 13, true, Row.bVoided ? CSUI::TextDim : (Row.bSuspicious ? CSUI::Warning : CSUI::TextDim)) ]
 			]
 		];
 	}
@@ -801,7 +840,7 @@ void SCSAdminPanel::ShowTab(ETab Tab)
 	CurrentTab = Tab;
 	if (Switcher.IsValid())
 	{
-		Switcher->SetActiveWidgetIndex(static_cast<int32>(Tab));
+		Switcher->SetActivePage(static_cast<int32>(Tab));
 	}
 	// The status line speaks about the open tab; its loader fills it in again.
 	ActionStatusUntil = 0.0;

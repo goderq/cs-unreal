@@ -126,7 +126,7 @@ private:
 	TWeakObjectPtr<UObject> WorldContext;
 	ETab CurrentTab = ETab::Players;
 
-	TSharedPtr<SWidgetSwitcher> Switcher;
+	TSharedPtr<class SCSAnimatedSwitcher> Switcher;
 	TSharedPtr<SEditableTextBox> SearchBox;
 	TSharedPtr<SEditableTextBox> ReasonBox;
 	TSharedPtr<SEditableTextBox> NicknameBox;

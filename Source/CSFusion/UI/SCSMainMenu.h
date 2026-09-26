@@ -1,7 +1,9 @@
 // Copyright (c) 2026 CS-Fusion. All Rights Reserved.
 //
 // Main menu: PLAY (Quick Match, Create Session, Join Session, Session
-// Browser), INVENTORY, SETTINGS, QUIT.
+// Browser), PROFILE, ARSENAL, CATALOG, SETTINGS, ADMIN (staff only), QUIT.
+// v2.0 phase 6: pages ease in (SCSAnimatedSwitcher); Arsenal and Catalog are
+// the K2 reference pages (SCSArsenalPanel).
 //
 // Everything network-related goes through UCSSessionSubsystem; this widget
 // only collects input and shows state. While a connect/join is in flight a
@@ -30,7 +32,7 @@ public:
 	SLATE_END_ARGS()
 
 	// The order is the order of the switcher slots in Construct.
-	enum class EPage : int32 { Home, Play, Create, Join, Browser, Settings, Profile, Admin };
+	enum class EPage : int32 { Home, Play, Create, Join, Browser, Settings, Profile, Admin, Arsenal, Catalog };
 
 	void Construct(const FArguments& InArgs);
 	virtual ~SCSMainMenu() override;
@@ -93,7 +95,7 @@ private:
 	TWeakObjectPtr<UObject> WorldContext;
 	EPage CurrentPage = EPage::Home;
 
-	TSharedPtr<SWidgetSwitcher> Switcher;
+	TSharedPtr<class SCSAnimatedSwitcher> Switcher;
 	TSharedPtr<SCSSelector> RegionSelector;
 	TSharedPtr<SCSSelector> BotCountSelector;
 	TSharedPtr<SCSSelector> BotDifficultySelector;

@@ -469,9 +469,9 @@ void ACSMenuPlayerController::MenuTestStep()
 	static const SCSMainMenu::EPage Tour[] = {
 		SCSMainMenu::EPage::Home, SCSMainMenu::EPage::Play, SCSMainMenu::EPage::Create, SCSMainMenu::EPage::Join,
 		SCSMainMenu::EPage::Browser, SCSMainMenu::EPage::Settings,
-		SCSMainMenu::EPage::Profile };
+		SCSMainMenu::EPage::Profile, SCSMainMenu::EPage::Arsenal, SCSMainMenu::EPage::Catalog };
 	static const TCHAR* Names[] = { TEXT("menu_home"), TEXT("menu_play"), TEXT("menu_create"), TEXT("menu_join"),
-		TEXT("menu_browser"), TEXT("menu_settings"), TEXT("menu_profile") };
+		TEXT("menu_browser"), TEXT("menu_settings"), TEXT("menu_profile"), TEXT("menu_arsenal"), TEXT("menu_catalog") };
 
 	const int32 Page = MenuTestStage / 2;
 	if (Page >= UE_ARRAY_COUNT(Tour))
