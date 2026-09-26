@@ -128,6 +128,23 @@ void ACSPlayerInventory::InitializeFor(int32 PlayerId)
 	MarkChanged();
 }
 
+bool ACSPlayerInventory::CanAccept(int32 ItemIndex) const
+{
+	const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(ItemIndex);
+	const int32 Slot = SlotForItem(Item);
+	if (!Item || !Slots.IsValidIndex(Slot))
+	{
+		return false;
+	}
+	const FCSInventorySlot& Target = Slots[Slot];
+	if (CSLoadout::IsDroppable(Slot) || Target.IsEmpty())
+	{
+		return true;
+	}
+	// Same rule as AddItem: grenades stack with their own kind up to MaxStack.
+	return CSLoadout::IsGrenadeSlot(Slot) && Target.ItemIndex == ItemIndex && Target.Count < Item->GetMaxStack();
+}
+
 int32 ACSPlayerInventory::AddItem(int32 ItemIndex, int32 Count, int32 AmmoInMag, int32 Reserve)
 {
 	CS_AUTHORITY_ONLY_RET(this, Count);

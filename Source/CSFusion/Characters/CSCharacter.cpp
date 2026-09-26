@@ -833,12 +833,22 @@ void ACSCharacter::RpcRequestPickup_Receive(AActor* PickupActor)
 
 	// Claim first, so the gun cannot be taken twice; a gun already in that slot
 	// is dropped in its place (a swap), and the new one comes up in the hands.
+	// Room is checked before the claim (C17): a full grenade slot used to
+	// destroy the pickup and give nothing.
 	const int32 ItemIndex = Pickup->GetItemIndex();
 	const int32 Mag = Pickup->GetAmmoInMag();
 	const int32 Spare = Pickup->GetReserve();
-	if (ACSPlayerInventory::SlotForItem(UCSItemSettings::Get()->GetItem(ItemIndex)) == INDEX_NONE || !Pickup->Claim())
+	if (ACSPlayerInventory::SlotForItem(UCSItemSettings::Get()->GetItem(ItemIndex)) == INDEX_NONE)
 	{
 		return Reject(TEXT("not a carried item"));
+	}
+	if (!Inventory->CanAccept(ItemIndex))
+	{
+		return Reject(TEXT("no room for it"));
+	}
+	if (!Pickup->Claim())
+	{
+		return Reject(TEXT("already taken"));
 	}
 	if (!Director->GiveItem(PlayerId, ItemIndex, /*bEquip*/ true, Mag, Spare))
 	{

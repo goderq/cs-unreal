@@ -297,12 +297,13 @@ protected:
 	UFUNCTION(Exec) void CSTestKill();
 	UFUNCTION(Exec) void CSTestWatchLeave();
 	UFUNCTION(Exec) void CSTestDoubleDrop();
+	UFUNCTION(Exec) void CSTestPickupFull();
 	void TestKillStep();
 	void TestKillVerifyLoot();
 	/** Walks to the pickup, presses E, and calls AfterPress one second later. */
 	void TestWalkUpAndPress(class ACSWorldPickup* Pickup, TFunction<void()> AfterPress = nullptr);
 	FTimerHandle TestKillTimer;
-	FTimerHandle Stage4ArmTimers[4];
+	FTimerHandle Stage4ArmTimers[5];
 	FTimerHandle TestStepTimer;
 	TWeakObjectPtr<class ACSCharacter> TestVictim;
 	int32 TestVictimId = 0;

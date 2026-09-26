@@ -517,3 +517,54 @@ void ACSPlayerController::CSTestDoubleDrop()
 	UE_LOG(LogCS, Log, TEXT("DOUBLE DROP TEST RESULT: carried %d, removed 3 times, pickups %d -> %d -> %s"),
 		Carried, Before, After, (After - Before == Carried) ? TEXT("DOUBLE DROP OK") : TEXT("DOUBLE DROP BROKEN"));
 }
+
+// ---------------------------------------------------------------------------
+// -cstestpickupfull (v2.0 phase 8, AUDIT C17)
+// ---------------------------------------------------------------------------
+
+void ACSPlayerController::CSTestPickupFull()
+{
+	CS_SELF_TEST_ONLY();
+	ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	ACSCharacter* Self = Cast<ACSCharacter>(GetPawn());
+	const int32 Me = Self ? Self->GetOwningPlayerId() : 0;
+	ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, Me);
+	const UCSItemSettings* Items = UCSItemSettings::Get();
+	const int32 Grenade = Items->FindItemIndex(TEXT("grenade"));
+	const int32 Slot = ACSPlayerInventory::SlotForItem(Items->GetItem(Grenade));
+	if (!Director || !Self || !Inventory || Slot == INDEX_NONE || !UCSAuthority::IsGameAuthority(this))
+	{
+		UE_LOG(LogCS, Log, TEXT("PICKUP TEST RESULT: needs the authority, a pawn and the grenade item -> PICKUP MISSING"));
+		UE_LOG(LogCS, Log, TEXT("PICKUP TEST: done."));
+		return;
+	}
+
+	// Fill the grenade slot up to its stack limit.
+	for (int32 i = 0; i < 10 && Inventory->CanAccept(Grenade); ++i)
+	{
+		Director->GiveItem(Me, Grenade, /*bEquip*/ false);
+	}
+	FCSInventorySlot Held;
+	Inventory->GetSlot(Slot, Held);
+	const int32 Full = Held.Count;
+
+	FCSInventorySlot Drop;
+	Drop.ItemIndex = Grenade;
+	Drop.Count = 1;
+	const FVector Here = Self->GetActorLocation();
+	ACSWorldPickup* Pickup = Director->SpawnDroppedItem(Drop, Here + Self->GetActorForwardVector() * 80.f, Here);
+	Self->RpcRequestPickup_Receive(Pickup);
+	Inventory->GetSlot(Slot, Held);
+	const bool bKept = IsValid(Pickup) && Pickup->IsAvailable() && Held.Count == Full;
+	UE_LOG(LogCS, Log, TEXT("PICKUP TEST RESULT: grenade slot full (%d), pick up another -> pickup %s, slot %d -> %s"),
+		Full, bKept ? TEXT("still on the floor") : TEXT("gone"), Held.Count, bKept ? TEXT("FULL SLOT KEPT OK") : TEXT("FULL SLOT BROKEN"));
+
+	// Control: with room again the same pickup is taken.
+	Inventory->RemoveFromSlot(Slot, 1);
+	Self->RpcRequestPickup_Receive(Pickup);
+	Inventory->GetSlot(Slot, Held);
+	const bool bTaken = (!IsValid(Pickup) || !Pickup->IsAvailable()) && Held.Count == Full;
+	UE_LOG(LogCS, Log, TEXT("PICKUP TEST RESULT: one grenade thrown away, pick up again -> pickup %s, slot %d -> %s"),
+		bTaken ? TEXT("taken") : TEXT("still there"), Held.Count, bTaken ? TEXT("PICKUP OK") : TEXT("PICKUP BROKEN"));
+	UE_LOG(LogCS, Log, TEXT("PICKUP TEST: done."));
+}

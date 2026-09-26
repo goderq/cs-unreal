@@ -57,6 +57,7 @@ $FailPattern = "BROKEN|NOT STOPPED|STILL BLOCKED|MISSING|NOT DETECTED|no frames|
 $Suites = @(
     @{ Name = "input";      Flags = "-cstestinput";            Done = "FIRE TEST RESULT";              Timeout = 60 },
     @{ Name = "loadout";    Flags = "-cstestloot";             Done = "LOADOUT TEST: done";            Timeout = 90 },
+    @{ Name = "pickup";     Flags = "-cstestpickupfull";       Done = "PICKUP TEST: done";             Timeout = 60 },
     @{ Name = "doubledrop"; Flags = "-cstestdoubledrop";       Done = "DOUBLE DROP TEST RESULT";       Timeout = 60 },
     @{ Name = "ui";         Flags = "-cstestui";               Done = "UI TEST RESULT: combat HUD";    Timeout = 80 },
     @{ Name = "bots";       Flags = "-bots=4 -cstestbots";     Done = "BOT TEST RESULT";               Timeout = 150 },

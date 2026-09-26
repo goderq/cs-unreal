@@ -147,6 +147,14 @@ public:
 	 */
 	int32 AddItem(int32 ItemIndex, int32 Count, int32 AmmoInMag, int32 Reserve);
 
+	/**
+	 * v2.0 phase 8 (C17): whether one of this item would be taken - a gun slot
+	 * always (GiveItem drops the old gun), a grenade slot while the same kind
+	 * has room, any other slot only when empty. Asked before a pickup is
+	 * claimed, so a refused pickup stays on the floor instead of vanishing.
+	 */
+	bool CanAccept(int32 ItemIndex) const;
+
 	/** Takes up to Count from a slot. Returns what was actually removed. */
 	FCSInventorySlot RemoveFromSlot(int32 Slot, int32 Count);
 

@@ -134,6 +134,7 @@ void ACSPlayerController::ArmSelfTest()
 		{ TEXT("cstestgrab"),       9.f,  &ACSPlayerController::CSTestGrab },
 		{ TEXT("cstestwatchleave"), 20.f, &ACSPlayerController::CSTestWatchLeave },
 		{ TEXT("cstestkill"),       22.f, &ACSPlayerController::CSTestKill },
+		{ TEXT("cstestpickupfull"), 8.f,  &ACSPlayerController::CSTestPickupFull },
 	};
 	for (int32 i = 0; i < UE_ARRAY_COUNT(Stage4Tests); ++i)
 	{
