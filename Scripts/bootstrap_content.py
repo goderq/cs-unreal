@@ -325,7 +325,7 @@ def make_starter_pistol():
 
 
 # ---------------------------------------------------------------------------
-# Stage 3: weapons, items, loot placement
+# Stage 3: weapons and items
 # ---------------------------------------------------------------------------
 
 ITEMS_DIR = "/Game/Items"
@@ -388,17 +388,6 @@ ITEMS = [
     ("medkit", "Medkit", "Medkit", T.MEDKIT, True, 3, 1, None, "", 0, 50.0, CUBE, (0.35, 0.3, 0.15), (1.0, 0.15, 0.15)),
 ]
 
-# ItemId, x, y. Floor top is z = 0. Player starts are at x = -2500 / +2500.
-LOOT_LAYOUT = [
-    ("ak47", -2150, -150), ("m4", -2150, 150),
-    ("ammo_rifle", -2150, -450), ("ammo_rifle", -2150, 450),
-    ("armor", -2150, 750), ("medkit", -2150, -750),
-    ("smg", 2150, -150), ("shotgun", 2150, 150),
-    ("ammo_smg", 2150, -450), ("ammo_shells", 2150, 450),
-    ("armor", 2150, 750), ("medkit", 2150, -750),
-    ("sniper", 0, 650), ("ammo_sniper", 0, -650),
-    ("grenade", 650, 0), ("grenade", -650, 0),
-]
 
 
 def make_weapons():
@@ -441,29 +430,6 @@ def make_items(weapons):
         EDITOR_ASSET.save_loaded_asset(asset)
         paths.append("{0}/DA_Item_{1}.DA_Item_{1}".format(ITEMS_DIR, suffix))
     return paths
-
-
-def place_loot():
-    """Adds ACSPickupSpawnPoint markers to the test map if it has none yet."""
-    level_subsystem = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
-    actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
-
-    level_subsystem.load_level(MAP_PATH)
-
-    existing = [a for a in actor_subsystem.get_all_level_actors()
-                if isinstance(a, unreal.CSPickupSpawnPoint)]
-    if existing:
-        log("map already has {0} loot markers".format(len(existing)))
-        return
-
-    for item_id, x, y in LOOT_LAYOUT:
-        marker = actor_subsystem.spawn_actor_from_class(
-            unreal.CSPickupSpawnPoint, unreal.Vector(x, y, 30), unreal.Rotator(0, 0, 0))
-        marker.set_actor_label("Loot_{0}_{1}_{2}".format(item_id, x, y))
-        marker.set_editor_property("item_id", item_id)
-
-    level_subsystem.save_current_level()
-    log("placed {0} loot markers".format(len(LOOT_LAYOUT)))
 
 
 def make_lighting_dynamic():
@@ -519,7 +485,8 @@ def main():
 
     weapons = make_weapons()
     item_paths = make_items(weapons)
-    place_loot()
+    # Loot markers are gone (v2.0: ammo machines only, AUDIT C19); the maps
+    # themselves come from Scripts/build_maps.py.
     make_lighting_dynamic()
     make_menu_map()
     log("ITEM REGISTRY ORDER (must match DefaultGame.ini):")
