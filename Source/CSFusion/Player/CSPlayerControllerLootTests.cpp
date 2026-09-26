@@ -377,7 +377,8 @@ void ACSPlayerController::TestKillVerifyLoot()
 		const bool bFresh = L.Slot == (bTestPrimary ? CSLoadout::Primary : CSLoadout::Pistol) && L.Weapon
 			&& L.RoundsInMag == L.Weapon->MagazineSize && VictimLoadout && VictimLoadout->HasItemInSlot(CSLoadout::Knife);
 		const bool bOk = bBot
-			? (bHave && R.RespawnCounter > TestVictimRespawnsAtDeath && L.Weapon != nullptr)
+			// ...unless it has already been killed again (its loadout is then empty).
+			? (bHave && R.RespawnCounter > TestVictimRespawnsAtDeath && (L.Weapon != nullptr || !R.bAlive))
 			: (bHave && R.bAlive && R.Health >= 100.f && bFresh && Items == (bTestPrimary ? 2 : 1));
 		UE_LOG(LogCS, Log, TEXT("RESPAWN RESULT: alive %s, hp %.0f, fresh pistol + knife %s (%d rds), guns %d -> %s"),
 			(bHave && R.bAlive) ? TEXT("yes") : TEXT("no"), R.Health, bFresh ? TEXT("yes") : TEXT("no"),
