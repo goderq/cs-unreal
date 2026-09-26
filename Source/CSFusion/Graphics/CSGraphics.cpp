@@ -8,6 +8,8 @@
 #include "DataDrivenShaderPlatformInfo.h"
 #include "DynamicRHI.h"
 #include "HAL/IConsoleManager.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Modules/ModuleManager.h"
 #include "RenderUtils.h"
 #include "RHI.h"
@@ -232,7 +234,20 @@ namespace CSGraphics
 			// Apply again now that DLSS can answer (the first apply ran without it).
 			// Not in the editor: its viewports keep the editor's own settings.
 			UCSGameUserSettings* Settings = GIsEditor ? nullptr : UCSGameUserSettings::Get();
-			if (Settings)
+			if (!Settings)
+			{
+				return false;
+			}
+			// The first time on a PC the settings are picked for its hardware
+			// (automated tests keep the defaults so their numbers compare).
+			// Phase 7: here and not at game instance start - there it ran before
+			// DLSS could answer (always TSR) and before the engine had loaded
+			// GameUserSettings.ini, which then put its own levels back.
+			if (!Settings->bAutoDetected && !FParse::Param(FCommandLine::Get(), TEXT("noautodetect")) && !GIsAutomationTesting)
+			{
+				Settings->AutoDetect();
+			}
+			else
 			{
 				Settings->ApplyNonResolutionSettings();
 			}

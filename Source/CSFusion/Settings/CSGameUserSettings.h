@@ -40,6 +40,7 @@ public:
 
 	virtual void ApplyNonResolutionSettings() override;
 	virtual void SetToDefaults() override;
+	virtual void ValidateSettings() override;
 
 	/**
 	 * First run on this PC: the engine's hardware benchmark picks the
@@ -47,4 +48,13 @@ public:
 	 * and ray tracing only with 8 GB of video memory or more.
 	 */
 	void AutoDetect();
+
+private:
+	/**
+	 * SetToDefaults ran (first start, or a GameUserSettings.ini without this
+	 * class's section - v1.x). The engine then reloads the file, which takes
+	 * the scalability levels back from the running engine (Epic on a fresh
+	 * start) - ValidateSettings puts High back.
+	 */
+	bool bDefaultsPending = false;
 };

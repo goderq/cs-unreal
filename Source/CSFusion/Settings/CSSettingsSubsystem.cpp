@@ -13,8 +13,6 @@
 #include "Settings/CSGameUserSettings.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
-#include "Misc/CommandLine.h"
-#include "Misc/Parse.h"
 #include "Framework/Application/SlateApplication.h"
 #include "HAL/IConsoleManager.h"
 #include "Rendering/SlateRenderer.h"
@@ -28,14 +26,8 @@ void UCSSettingsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	ApplyVisual();
 
 	// The engine applies GameUserSettings.ini on its own at startup
-	// (UCSGameUserSettings adds the upscaler and ray tracing). The first time
-	// on a PC the settings are picked for its hardware instead of the defaults;
-	// automated tests keep the defaults so their numbers stay comparable.
-	UCSGameUserSettings* Gfx = UCSGameUserSettings::Get();
-	if (Gfx && !Gfx->bAutoDetected && !FParse::Param(FCommandLine::Get(), TEXT("noautodetect")) && !GIsAutomationTesting)
-	{
-		AutoDetectGraphics();
-	}
+	// (UCSGameUserSettings adds the upscaler and ray tracing). The first-run
+	// hardware pick happens a frame after PostEngineInit (CSGraphics).
 	UE_LOG(LogCS, Log, TEXT("Settings loaded: sensitivity %.2f, FOV %.0f, master volume %.2f, %d key override(s)."),
 		Preferences.MouseSensitivity, Preferences.FieldOfView, Preferences.MasterVolume, Preferences.KeyOverrides.Num());
 }

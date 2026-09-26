@@ -16,7 +16,7 @@ void FCSFusionModule::StartupModule()
 	FCSBackendConfig::LoadAndApply();
 
 	// v2.0 phase 5: DLSS (an optional plugin) answers only after PostEngineInit.
-	FCoreDelegates::OnPostEngineInit.AddStatic(&CSGraphics::HandlePostEngineInit);
+	FCoreDelegates::GetOnPostEngineInit().AddStatic(&CSGraphics::HandlePostEngineInit);
 
 #if CS_WITH_FUSION
 	UE_LOG(LogCS, Log, TEXT("CSFusion module started (Photon Fusion 3 backend ENABLED)."));
