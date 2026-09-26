@@ -164,11 +164,32 @@ ACSCharacter* ACSBotManager::SpawnBot(int32 BotId)
 	}
 
 	// Use the starts after the first few so bots do not spawn on top of the
-	// first human players.
+	// first human players, and never a start somebody already stands on:
+	// humans respawn on any start, and a bot put inside a player's capsule
+	// stayed stuck there for the rest of the match (phase 4, bots on Depot).
 	FTransform Transform = FTransform::Identity;
-	if (const AActor* Start = GameMode->GetPlayerStartByIndex(BotId - CSBots::FirstBotId + 4))
+	const int32 First = BotId - CSBots::FirstBotId + 4;
+	for (int32 Try = 0; Try < FMath::Max(1, GameMode->GetNumPlayerStarts()); ++Try)
 	{
-		Transform = Start->GetActorTransform();
+		const AActor* Start = GameMode->GetPlayerStartByIndex(First + Try);
+		if (!Start)
+		{
+			break;
+		}
+		bool bTaken = false;
+		for (TActorIterator<ACSCharacter> It(GetWorld()); It && !bTaken; ++It)
+		{
+			bTaken = FVector::Dist2D(It->GetActorLocation(), Start->GetActorLocation()) < 150.f
+				&& FMath::Abs(It->GetActorLocation().Z - Start->GetActorLocation().Z) < 200.f;
+		}
+		if (!bTaken || Try == 0)
+		{
+			Transform = Start->GetActorTransform();
+		}
+		if (!bTaken)
+		{
+			break;
+		}
 	}
 
 	ACSCharacter* Bot = GetWorld()->SpawnActorDeferred<ACSCharacter>(PawnClass, Transform, nullptr, nullptr,

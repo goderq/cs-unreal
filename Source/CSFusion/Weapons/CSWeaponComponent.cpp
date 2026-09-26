@@ -394,6 +394,7 @@ FCSShotResolution UCSWeaponComponent::ResolveShotOnAuthority(const FVector& Auth
 			// Geometry, not a player.
 			Result.bHit = true;
 			Result.ImpactPoint = Hit.ImpactPoint;
+			Result.Blocker = Hit.GetActor();
 			return Result;
 		}
 		ECSHitZone Zone = ECSHitZone::Torso;

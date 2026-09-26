@@ -602,9 +602,9 @@ void ACSCharacter::RpcRequestFire_Receive(FVector Origin, FVector Direction, boo
 		{
 			FirstImpact = Shot.ImpactPoint;
 		}
-		UE_LOG(LogCSCombat, Verbose, TEXT("Shot by %d from %s dir %s -> impact %s, victim %d"),
+		UE_LOG(LogCSCombat, Verbose, TEXT("Shot by %d from %s dir %s -> impact %s on %s, victim %d"),
 			ShooterId, *AuthoritativeOrigin.ToCompactString(), *PelletDir.ToCompactString(),
-			*Shot.ImpactPoint.ToCompactString(), Shot.VictimPlayerId);
+			*Shot.ImpactPoint.ToCompactString(), *GetNameSafe(Shot.Blocker.Get()), Shot.VictimPlayerId);
 
 		if (Shot.VictimPlayerId != 0 && Shot.VictimPlayerId != ShooterId)
 		{

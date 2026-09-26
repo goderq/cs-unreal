@@ -53,6 +53,9 @@ struct FCSShotResolution
 
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Weapon")
 	float Damage = 0.f;
+
+	/** What stopped the shot when it was not a player (for the combat log). */
+	TWeakObjectPtr<const AActor> Blocker;
 };
 
 UCLASS(ClassGroup = (CS), meta = (BlueprintSpawnableComponent))
