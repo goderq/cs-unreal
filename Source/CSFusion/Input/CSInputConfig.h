@@ -96,9 +96,15 @@ public:
 	 */
 	UInputAction* GetBuyMenuAction() const;
 
+	/** v2.0 phase 3: weapon inspect (F), created in code like the shop action. */
+	UInputAction* GetInspectAction() const;
+
 private:
 	UPROPERTY(Transient)
 	mutable TObjectPtr<UInputAction> IA_BuyMenuRuntime;
+
+	UPROPERTY(Transient)
+	mutable TObjectPtr<UInputAction> IA_InspectRuntime;
 
 public:
 
@@ -177,6 +183,9 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
 	FKey Key_BuyMenu = EKeys::B;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")
+	FKey Key_Inspect = EKeys::F;
 
 	/** v2.0: 1 primary, 2 pistol, 3 knife, 4 HE grenade, 5 flashbang. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "CS|Input|Keys")

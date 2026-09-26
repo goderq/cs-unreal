@@ -1554,6 +1554,11 @@ void ACSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompone
 		Input->BindAction(InputConfig->IA_Scoreboard, ETriggerEvent::Completed, this, &ACSCharacter::Input_ScoreboardStop);
 		++Bound;
 	}
+	if (UInputAction* InspectAction = InputConfig->GetInspectAction())
+	{
+		Input->BindAction(InspectAction, ETriggerEvent::Started, this, &ACSCharacter::Input_Inspect);
+		++Bound;
+	}
 	if (UInputAction* BuyAction = InputConfig->GetBuyMenuAction())
 	{
 		Input->BindAction(BuyAction, ETriggerEvent::Started, this, &ACSCharacter::Input_BuyMenu);
@@ -1690,6 +1695,12 @@ void ACSCharacter::Input_Reload(const FInputActionValue& /*Value*/)
 	{
 		WeaponComponent->RequestReload();
 	}
+}
+
+void ACSCharacter::Input_Inspect(const FInputActionValue& /*Value*/)
+{
+	// Cosmetic and local: turns the weapon in the hands (UpdateFirstPersonView).
+	StartInspect();
 }
 
 void ACSCharacter::Input_Interact(const FInputActionValue& /*Value*/)

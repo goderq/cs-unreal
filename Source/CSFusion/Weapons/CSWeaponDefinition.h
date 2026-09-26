@@ -231,6 +231,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation", meta = (ClampMin = "0.1"))
 	float MuzzleFlashScale = 1.f;
 
+	/** v2.0 phase 3: seconds to raise the sights (the look only; the authority's aim rule is MinAimSeconds). */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation", meta = (ClampMin = "0.05", ClampMax = "0.6"))
+	float AimSeconds = 0.16f;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	FLinearColor TracerColor = FLinearColor(1.f, 0.75f, 0.35f);
 

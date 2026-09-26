@@ -25,6 +25,7 @@ TArray<FCSRebindableBinding> UCSInputConfig::GetRebindableBindings() const
 		{ TEXT("Drop"),            LOCTEXT("Drop", "Drop weapon"),            Key_Drop },
 		{ TEXT("Scoreboard"),      LOCTEXT("Scoreboard", "Scoreboard (hold)"), Key_Scoreboard },
 		{ TEXT("BuyMenu"),         LOCTEXT("BuyMenu", "Shop"),                Key_BuyMenu },
+		{ TEXT("Inspect"),         LOCTEXT("Inspect", "Inspect weapon"),      Key_Inspect },
 	};
 }
 
@@ -92,6 +93,7 @@ UInputMappingContext* UCSInputConfig::BuildRuntimeMappingContext(UObject* Outer,
 	Map(IA_Scoreboard,      Resolve(TEXT("Scoreboard"), Key_Scoreboard),       {});
 	Map(IA_Drop,            Resolve(TEXT("Drop"), Key_Drop),                   {});
 	Map(GetBuyMenuAction(), Resolve(TEXT("BuyMenu"), Key_BuyMenu),        {});
+	Map(GetInspectAction(), Resolve(TEXT("Inspect"), Key_Inspect),        {});
 
 	// Every number key drives the same action; a Scalar modifier turns the
 	// digital 1.0 into the key's own number, which Input_EquipSlot decodes.
@@ -116,4 +118,14 @@ UInputAction* UCSInputConfig::GetBuyMenuAction() const
 		IA_BuyMenuRuntime->ValueType = EInputActionValueType::Boolean;
 	}
 	return IA_BuyMenuRuntime;
+}
+
+UInputAction* UCSInputConfig::GetInspectAction() const
+{
+	if (!IA_InspectRuntime)
+	{
+		IA_InspectRuntime = NewObject<UInputAction>(const_cast<UCSInputConfig*>(this), TEXT("IA_InspectRuntime"), RF_Transient);
+		IA_InspectRuntime->ValueType = EInputActionValueType::Boolean;
+	}
+	return IA_InspectRuntime;
 }

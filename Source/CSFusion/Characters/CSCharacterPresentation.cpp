@@ -299,7 +299,8 @@ void ACSCharacter::PlayShotPresentation(const FVector& TracerEnd, bool bLocalPre
 
 	if (bFirstPersonView)
 	{
-		FireKick = 1.f; // procedural kick in UpdateFirstPersonView
+		// Procedural kick in UpdateFirstPersonView, scaled by how hard the weapon kicks.
+		FireKick = Weapon ? FMath::Clamp(Weapon->RecoilPitch / 0.6f, 0.6f, 2.2f) : 1.f;
 	}
 
 	const FTransform Muzzle = GetMuzzleTransform(bFirstPersonView);

@@ -141,6 +141,14 @@ protected:
 	/** -cstestsurfaces (C9): footstep surfaces and sound occlusion on the real level. */
 	void CSTestSurfaces();
 	FTimerHandle TestSurfacesTimer;
+	/** -cstestview: inspect, aim time and landing dip of the first-person weapon. */
+	void CSTestView();
+	FTimerHandle TestViewTimer;
+	FQuat ViewRestRotation = FQuat::Identity;
+	double ViewAimStart = 0.0;
+	float ViewAimTook = -1.f;
+	float ViewMaxDip = 0.f;
+	int32 ViewJumpTicks = 0;
 	/** -cstestfx (C10): effect gallery screenshots and both effect pools. */
 	void CSTestFX();
 	void CSTestFXStep();

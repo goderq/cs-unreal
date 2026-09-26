@@ -19,6 +19,9 @@
 
 namespace
 {
+	/** Length of the first-person weapon inspect, seconds. */
+	constexpr float InspectSeconds = 2.6f;
+
 	/** Frame-rate independent exponential approach factor. */
 	float Approach(float Speed, float Dt)
 	{
@@ -129,7 +132,21 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 
 	// --- Aim blend ---------------------------------------------------------
 	const bool bWantAim = bAlive && !bBusy && WeaponComponent && WeaponComponent->IsAiming();
-	AimAlpha = FMath::FInterpConstantTo(AimAlpha, bWantAim ? 1.f : 0.f, DeltaSeconds, 1.f / 0.16f);
+	// Heavier weapons come up to the eye more slowly (UCSWeaponDefinition::AimSeconds).
+	const UCSWeaponDefinition* ViewWeapon = DisplayedWeapon.Get();
+	const float AimSeconds = ViewWeapon ? FMath::Max(ViewWeapon->AimSeconds, 0.05f) : 0.16f;
+	AimAlpha = FMath::FInterpConstantTo(AimAlpha, bWantAim ? 1.f : 0.f, DeltaSeconds, 1.f / AimSeconds);
+
+	// Inspect runs only while the hands are otherwise idle; anything else ends it.
+	if (ViewInspectTime >= 0.f)
+	{
+		ViewInspectTime += DeltaSeconds;
+		const bool bInterrupted = !bAlive || bBusy || bWantAim || ViewMeleeTime >= 0.f || ViewThrowTime >= 0.f || FireKick > 0.3f;
+		if (bInterrupted || ViewInspectTime > InspectSeconds)
+		{
+			ViewInspectTime = -1.f;
+		}
+	}
 	const float Ease = FMath::SmoothStep(0.f, 1.f, AimAlpha);
 
 	float BaseFov = DefaultFieldOfView;
@@ -176,6 +193,26 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 	LookSway = FVector2D::ZeroVector;
 
 	FireKick = FMath::FInterpTo(FireKick, 0.f, DeltaSeconds, 14.f);
+
+	// Breathing: a slow rise and fall while standing still, much less aimed.
+	BreathPhase = FMath::Fmod(BreathPhase + DeltaSeconds * 1.7f, 2.f * PI);
+	const float Still01 = 1.f - FMath::Clamp(Move01, 0.f, 1.f);
+	const float Breath = FMath::Sin(BreathPhase) * Still01 * FMath::Lerp(1.f, 0.3f, Ease);
+
+	// Strafing leans the weapon into the turn of the body.
+	const float Lateral = FVector::DotProduct(GetVelocity(), GetActorRightVector()) / 450.f;
+	StrafeTilt = FMath::FInterpTo(StrafeTilt, FMath::Clamp(Lateral, -1.f, 1.f), DeltaSeconds, 8.f);
+
+	// In the air the weapon trails the jump; on landing it dips and settles.
+	const float VerticalSpeed = GetVelocity().Z;
+	AirLag = FMath::FInterpTo(AirLag, bGrounded ? 0.f : FMath::Clamp(-VerticalSpeed / 700.f, -1.f, 1.f), DeltaSeconds, 10.f);
+	if (bViewWasFalling && bGrounded)
+	{
+		WeaponLandDip = FMath::Clamp(ViewFallSpeed / 800.f, 0.3f, 1.f);
+	}
+	bViewWasFalling = !bGrounded;
+	ViewFallSpeed = bGrounded ? 0.f : FMath::Max(ViewFallSpeed, -VerticalSpeed);
+	WeaponLandDip = FMath::FInterpTo(WeaponLandDip, 0.f, DeltaSeconds, 7.f);
 
 	// Equip: rises from below, muzzle down. Reload: dips and rolls out, then back.
 	FVector ActionOffset = FVector::ZeroVector;
@@ -243,10 +280,26 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 		ActionOffset = FVector(-2.f, -3.f, -9.f - Tug) * E;
 		ActionRotation = FRotator(-12.f, 8.f, 32.f) * E;
 	}
+	else if (ViewInspectTime >= 0.f)
+	{
+		// Inspect: bring it in and turn the right side to the eye, then roll
+		// over to show the top and left, then back into the hands.
+		const float T = ViewInspectTime;
+		const float In = FMath::SmoothStep(0.f, 0.45f, T);
+		const float Out = FMath::SmoothStep(InspectSeconds - 0.45f, InspectSeconds, T);
+		const float Turn = FMath::SmoothStep(1.1f, 1.7f, T);
+		const float Drift = FMath::Sin(T * 2.3f) * 0.6f;
+		const float Envelope = In * (1.f - Out);
+		ActionOffset = FMath::Lerp(FVector(-5.f, -7.f, 4.f), FVector(-3.f, -5.f, 6.f), Turn) * Envelope + FVector(0.f, 0.f, Drift) * Envelope;
+		ActionRotation = FMath::Lerp(FRotator(6.f, 28.f, -58.f), FRotator(22.f, -26.f, 38.f), Turn) * Envelope;
+	}
 
-	const FVector ProcOffset = (Bob + FVector(0.f, -LookSwayNow.X, -LookSwayNow.Y)) * Hip01
-		+ FVector(-FireKick * FMath::Lerp(2.4f, 1.3f, Ease), 0.f, 0.f) + ActionOffset;
-	const FRotator ProcRotation = FRotator(FireKick * FMath::Lerp(3.f, 1.f, Ease), 0.f, -LookSwayNow.X * 2.f * Hip01)
+	const FVector ProcOffset = (Bob + FVector(0.f, -LookSwayNow.X - StrafeTilt * 0.6f, -LookSwayNow.Y + Breath * 0.25f + AirLag * 1.8f)) * Hip01
+		+ FVector(-FireKick * FMath::Lerp(2.4f, 1.3f, Ease), 0.f, -WeaponLandDip * FMath::Lerp(2.2f, 0.8f, Ease)) + ActionOffset;
+	const FRotator ProcRotation = FRotator(
+			FireKick * FMath::Lerp(3.f, 1.f, Ease) + Breath * 0.2f + AirLag * 2.f * Hip01 - WeaponLandDip * FMath::Lerp(3.f, 1.f, Ease),
+			0.f,
+			(-LookSwayNow.X * 2.f - StrafeTilt * 4.f) * Hip01 - StrafeTilt * 0.8f * Ease)
 		+ ActionRotation;
 
 	// --- Weapon in camera space ------------------------------------------------
@@ -407,4 +460,15 @@ void ACSCharacter::UpdateCameraHeight(float DeltaSeconds)
 	const FVector Shake(0.f, FMath::Sin(Time * 71.0) * ShakeAmp, FMath::Sin(Time * 57.0 + 1.3) * ShakeAmp);
 
 	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, CameraZ + LandDip) + Shake);
+}
+
+void ACSCharacter::StartInspect()
+{
+	const bool bAiming = WeaponComponent && WeaponComponent->IsAiming();
+	const bool bBusy = ViewEquipTime >= 0.f || ViewReloadTime >= 0.f || ViewMeleeTime >= 0.f || ViewThrowTime >= 0.f;
+	if (!IsLocalPlayerView() || !IsAliveAuthoritative() || bAiming || bBusy || ViewInspectTime >= 0.f)
+	{
+		return;
+	}
+	ViewInspectTime = 0.f;
 }

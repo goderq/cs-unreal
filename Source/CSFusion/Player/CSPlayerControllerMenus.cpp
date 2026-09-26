@@ -315,7 +315,7 @@ void ACSPlayerController::CSTestUI()
 					FCSPlayerPreferences Test = Saved;
 					Test.FieldOfView = 88.f;
 					Test.MouseSensitivity = 1.7f;
-					Test.KeyOverrides.Add(TEXT("Interact"), EKeys::F);
+					Test.KeyOverrides.Add(TEXT("Interact"), EKeys::H);
 					Settings->SetPreferences(Test, /*bSave*/ false);
 
 					// Enhanced Input rebuilds its key mappings on the next tick, so check a
@@ -336,9 +336,9 @@ void ACSPlayerController::CSTestUI()
 							// Ask the live input system which keys now drive the interact action.
 							const UInputAction* Interact = LivePawn->GetInputConfig() ? LivePawn->GetInputConfig()->IA_Interact.Get() : nullptr;
 							const TArray<FKey> Keys = Interact ? Input->QueryKeysMappedToAction(Interact) : TArray<FKey>();
-							bRebound = Keys.Contains(EKeys::F) && !Keys.Contains(EKeys::E);
+							bRebound = Keys.Contains(EKeys::H) && !Keys.Contains(EKeys::E);
 						}
-						UE_LOG(LogCS, Log, TEXT("UI TEST RESULT: settings apply -> %s (FOV %.0f, interact rebound to F %s)"),
+						UE_LOG(LogCS, Log, TEXT("UI TEST RESULT: settings apply -> %s (FOV %.0f, interact rebound to H %s)"),
 							(FMath::IsNearlyEqual(Fov, 88.f) && bRebound) ? TEXT("SETTINGS OK") : TEXT("SETTINGS BROKEN"),
 							Fov, bRebound ? TEXT("yes") : TEXT("no"));
 

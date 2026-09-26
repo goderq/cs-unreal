@@ -284,6 +284,7 @@ protected:
 	void Input_ScoreboardStart(const FInputActionValue& Value);
 	void Input_ScoreboardStop(const FInputActionValue& Value);
 	void Input_BuyMenu(const FInputActionValue& Value);
+	void Input_Inspect(const FInputActionValue& Value);
 
 	/** Local: choose the pickup nearest the crosshair within reach and in sight. */
 	void UpdateFocusedPickup();
@@ -582,6 +583,10 @@ public:
 
 	/** 0 = hip, 1 = fully aimed down sights. Local view only. */
 	float GetAimAlpha() const { return AimAlpha; }
+	/** First-person weapon inspect (F): cosmetic, local. Ignored while busy or aiming. */
+	void StartInspect();
+	bool IsInspecting() const { return ViewInspectTime >= 0.f; }
+	float GetWeaponLandDip() const { return WeaponLandDip; }
 
 	/** Aimed through a scope: the HUD draws the scope, the model is hidden. */
 	bool IsScopedView() const { return bScopedView; }
@@ -649,6 +654,14 @@ private:
 	FVector2D LookSway = FVector2D::ZeroVector;
 	FVector2D LookSwayNow = FVector2D::ZeroVector;
 	float FireKick = 0.f;
+	// v2.0 phase 3: inspect, breathing, strafe tilt, jump lag and landing dip.
+	float ViewInspectTime = -1.f;
+	float BreathPhase = 0.f;
+	float StrafeTilt = 0.f;
+	float AirLag = 0.f;
+	float WeaponLandDip = 0.f;
+	bool bViewWasFalling = false;
+	float ViewFallSpeed = 0.f;
 
 	// --- v1.0 remote smoothing state ---
 	FVector SmoothedLocation = FVector::ZeroVector;
