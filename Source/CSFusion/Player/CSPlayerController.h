@@ -161,6 +161,14 @@ protected:
 	int32 MapBudgetPrims = 0;
 	int32 MapBudgetWorstDraws = 0;
 	int32 MapBudgetWorstPrims = 0;
+	/** -cstestgraphics (phase 5): presets, upscalers (DLSS where it runs), ray tracing, FPS per case. */
+	UFUNCTION(Exec)
+	void CSTestGraphics();
+	void GraphicsTestStep();
+	FTimerHandle TestGraphicsTimer;
+	FDelegateHandle GraphicsFrameHandle;
+	int32 GraphicsCase = -1;
+	bool bGraphicsSampling = false;
 	/** -cstestfx (C10): effect gallery screenshots and both effect pools. */
 	void CSTestFX();
 	void CSTestFXStep();

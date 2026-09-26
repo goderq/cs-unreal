@@ -59,6 +59,7 @@ $Suites = @(
     @{ Name = "mapdepot";  Flags = "-cstestmapaudit";         Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "mapoldtown"; Flags = "-cstestmapaudit";        Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_OldTown" },
     @{ Name = "mapwarehouse"; Flags = "-cstestmapaudit";      Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_Warehouse" },
+    @{ Name = "graphics";   Flags = "-cstestgraphics";          Done = "GRAPHICS TEST: done";           Timeout = 240; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT";              Timeout = 120 }
 )
 
@@ -79,9 +80,9 @@ function Start-Client([string]$ClientArgs, [string]$LogName, [string]$StartMap =
     $ClientArgs = "-noaccount $ClientArgs"
     if ($ClientArgs -notmatch "cstestmodes|cstestposes|cstestcomp") { $ClientArgs = "-nospawnprotection $ClientArgs" }
     if ($Packaged) {
-        return Start-Process -FilePath $GameExe -ArgumentList "$StartMap -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
+        return Start-Process -FilePath $GameExe -ArgumentList "$StartMap -windowed -ResX=960 -ResY=540 -noautodetect $ClientArgs $logArg" -PassThru
     }
-    return Start-Process -FilePath $Editor -ArgumentList "`"$Project`" $StartMap -game -windowed -ResX=960 -ResY=540 $ClientArgs $logArg" -PassThru
+    return Start-Process -FilePath $Editor -ArgumentList "`"$Project`" $StartMap -game -windowed -ResX=960 -ResY=540 -noautodetect $ClientArgs $logArg" -PassThru
 }
 
 function Stop-Client($Proc) {
@@ -245,14 +246,15 @@ if ($Network) {
         foreach ($p in @($logA, $logB)) { if (Test-Path $p) { Remove-Item $p -Force } }
         $startMap = if ($n.Menu) { "" } else { $Map }
 
-        $a = Start-Client ($n.A -replace '\{ROOM\}', $room) (Split-Path $logA -Leaf) $startMap
+        # -cstestlowgfx: two games share one GPU here (Settings/CSGameUserSettings.cpp).
+        $a = Start-Client ("-cstestlowgfx " + ($n.A -replace '\{ROOM\}', $room)) (Split-Path $logA -Leaf) $startMap
         # B must not start before A is in the room: otherwise B can create it
         # first and become the Master Client, which inverts every scenario.
         if (-not (Wait-ForLine $logA "-> ECSSessionState::InRoom" 90)) {
             Add-Result $n.Name $false "A never reached the room"
         }
         Start-Sleep -Seconds $n.DelayB
-        $b = Start-Client ("-WinX=980 " + ($n.B -replace '\{ROOM\}', $room)) (Split-Path $logB -Leaf) $startMap
+        $b = Start-Client ("-cstestlowgfx -WinX=980 " + ($n.B -replace '\{ROOM\}', $room)) (Split-Path $logB -Leaf) $startMap
 
         $deadline = (Get-Date).AddSeconds($n.Timeout)
         if ($n.KillB) {

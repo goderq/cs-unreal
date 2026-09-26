@@ -12,6 +12,7 @@
 #include "AI/CSBotTuning.h"
 #include "Audio/CSAudio.h"
 #include "Audio/CSAudioSettings.h"
+#include "Graphics/CSGraphics.h"
 #include "Characters/CSCharacter.h"
 #include "Combat/CSCheatGuard.h"
 #include "Combat/CSMatchDirector.h"
@@ -135,6 +136,56 @@ bool FCSUnitSettingsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("defaults are legal (FOV)"), Copy.FieldOfView, Defaults.FieldOfView);
 	TestEqual(TEXT("defaults are legal (sensitivity)"), Copy.MouseSensitivity, Defaults.MouseSensitivity);
 	TestFalse(TEXT("FPS counter off by default"), Defaults.bShowFps);
+	return true;
+}
+
+// v2.0 phase 5: presets, custom mixes and the render scale table.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCSUnitGraphicsTest, "CSFusion.Unit.Settings.Graphics", CSUnitFlags)
+bool FCSUnitGraphicsTest::RunTest(const FString& Parameters)
+{
+	FCSGraphicsSettings G;
+	UCSSettingsSubsystem::SetPreset(G, 4);
+	bool bAllCinematic = true;
+	for (const int32 Level : G.Groups)
+	{
+		bAllCinematic &= Level == 4;
+	}
+	TestTrue(TEXT("Cinematic sets every group to 4"), bAllCinematic);
+
+	G.Groups[static_cast<int32>(ECSGraphicsGroup::Shadows)] = 1;
+	UCSSettingsSubsystem::SanitizeGraphics(G);
+	TestEqual(TEXT("a changed group makes the preset Custom"), G.Preset, FCSGraphicsSettings::CustomPreset);
+
+	UCSSettingsSubsystem::SetPreset(G, FCSGraphicsSettings::CustomPreset);
+	TestEqual(TEXT("Custom leaves the groups alone"), G.Groups[static_cast<int32>(ECSGraphicsGroup::Shadows)], 1);
+
+	FCSGraphicsSettings Same;
+	for (int32& Level : Same.Groups)
+	{
+		Level = 1;
+	}
+	Same.Preset = FCSGraphicsSettings::CustomPreset;
+	UCSSettingsSubsystem::SanitizeGraphics(Same);
+	TestEqual(TEXT("Custom with equal groups stays Custom"), Same.Preset, FCSGraphicsSettings::CustomPreset);
+	Same.Preset = 3;
+	UCSSettingsSubsystem::SanitizeGraphics(Same);
+	TestEqual(TEXT("a preset that does not match its groups follows them"), Same.Preset, 1);
+
+	FCSGraphicsSettings Bad;
+	Bad.Preset = 42;
+	Bad.Upscaler = 9;
+	Bad.RenderScale = -3;
+	Bad.Groups[0] = 17;
+	UCSSettingsSubsystem::SanitizeGraphics(Bad);
+	TestEqual(TEXT("upscaler clamped"), Bad.Upscaler, 2);
+	TestEqual(TEXT("render scale clamped"), Bad.RenderScale, 0);
+	TestEqual(TEXT("group clamped"), Bad.Groups[0], 4);
+	TestEqual(TEXT("preset clamped, groups differ -> Custom"), Bad.Preset, FCSGraphicsSettings::CustomPreset);
+
+	TestEqual(TEXT("native is 100%"), CSGraphics::ScreenPercentage(ECSRenderScale::Native), 100.f);
+	TestEqual(TEXT("performance is 50%"), CSGraphics::ScreenPercentage(ECSRenderScale::Performance), 50.f);
+	TestTrue(TEXT("scales go down"), CSGraphics::ScreenPercentage(ECSRenderScale::Quality) > CSGraphics::ScreenPercentage(ECSRenderScale::Balanced)
+		&& CSGraphics::ScreenPercentage(ECSRenderScale::Balanced) > CSGraphics::ScreenPercentage(ECSRenderScale::UltraPerformance));
 	return true;
 }
 
