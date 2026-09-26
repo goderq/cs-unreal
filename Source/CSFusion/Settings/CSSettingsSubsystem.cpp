@@ -15,6 +15,9 @@
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Framework/Application/SlateApplication.h"
+#include "HAL/IConsoleManager.h"
+#include "Rendering/SlateRenderer.h"
 
 void UCSSettingsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -22,6 +25,7 @@ void UCSSettingsSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	LoadPreferences();
 	ApplyAudio();
+	ApplyVisual();
 
 	// The engine applies GameUserSettings.ini on its own at startup
 	// (UCSGameUserSettings adds the upscaler and ray tracing). The first time
@@ -47,39 +51,78 @@ UCSSettingsSubsystem* UCSSettingsSubsystem::Get(const UObject* WorldContextObjec
 // Preferences
 // ---------------------------------------------------------------------------
 
+bool UCSSettingsSubsystem::LoadPreferencesFromSlot(const FString& Slot, FCSPlayerPreferences& Out, int32* OutSchema)
+{
+	if (!UGameplayStatics::DoesSaveGameExist(Slot, 0))
+	{
+		return false;
+	}
+	const UCSSettingsSave* Save = Cast<UCSSettingsSave>(UGameplayStatics::LoadGameFromSlot(Slot, 0));
+	if (!Save)
+	{
+		UE_LOG(LogCS, Warning, TEXT("Settings save '%s' is unreadable; using defaults."), *Slot);
+		return false;
+	}
+	// Schema migration: fields a file does not have keep their class
+	// defaults, so a schema-1 file (before the C11 options) already reads as
+	// schema 2 with those options at their defaults. Nothing to convert yet;
+	// a field that changes meaning later is converted here, by SchemaVersion.
+	Out = Save->Preferences;
+	SanitizePreferences(Out);   // a hand-edited file must not produce absurd values
+	if (OutSchema)
+	{
+		*OutSchema = Save->SchemaVersion;
+	}
+	return true;
+}
+
+bool UCSSettingsSubsystem::SavePreferencesToSlot(const FCSPlayerPreferences& In, const FString& Slot)
+{
+	UCSSettingsSave* Save = Cast<UCSSettingsSave>(UGameplayStatics::CreateSaveGameObject(UCSSettingsSave::StaticClass()));
+	if (!Save)
+	{
+		return false;
+	}
+	Save->SchemaVersion = UCSSettingsSave::CurrentSchema;
+	Save->Preferences = In;
+	return UGameplayStatics::SaveGameToSlot(Save, Slot, 0);
+}
+
 void UCSSettingsSubsystem::LoadPreferences()
 {
 	Preferences = DefaultPreferences();
-
-	if (!UGameplayStatics::DoesSaveGameExist(SlotName(), 0))
+	int32 Schema = UCSSettingsSave::CurrentSchema;
+	if (LoadPreferencesFromSlot(SlotName(), Preferences, &Schema) && Schema < UCSSettingsSave::CurrentSchema)
 	{
-		return;
-	}
-
-	if (const UCSSettingsSave* Save = Cast<UCSSettingsSave>(UGameplayStatics::LoadGameFromSlot(SlotName(), 0)))
-	{
-		Preferences = Save->Preferences;
-
-		// A hand-edited file must not be able to produce absurd values.
-		SanitizePreferences(Preferences);
-	}
-	else
-	{
-		UE_LOG(LogCS, Warning, TEXT("Settings save '%s' is unreadable; using defaults."), SlotName());
+		UE_LOG(LogCS, Log, TEXT("Settings save migrated from schema %d to %d."), Schema, UCSSettingsSave::CurrentSchema);
+		SavePreferences();
 	}
 }
 
 void UCSSettingsSubsystem::SavePreferences() const
 {
-	UCSSettingsSave* Save = Cast<UCSSettingsSave>(UGameplayStatics::CreateSaveGameObject(UCSSettingsSave::StaticClass()));
-	if (!Save)
-	{
-		return;
-	}
-	Save->Preferences = Preferences;
-	if (!UGameplayStatics::SaveGameToSlot(Save, SlotName(), 0))
+	if (!SavePreferencesToSlot(Preferences, SlotName()))
 	{
 		UE_LOG(LogCS, Warning, TEXT("Failed to write settings save '%s'."), SlotName());
+	}
+}
+
+void UCSSettingsSubsystem::ApplyVisual() const
+{
+	// Colour vision: the engine's correction (daltonisation) over the whole
+	// frame, 3D and UI alike.
+	if (FSlateApplication::IsInitialized() && FSlateApplication::Get().GetRenderer())
+	{
+		static const EColorVisionDeficiency Types[] = { EColorVisionDeficiency::NormalVision, EColorVisionDeficiency::Protanope,
+			EColorVisionDeficiency::Deuteranope, EColorVisionDeficiency::Tritanope };
+		const EColorVisionDeficiency Type = Types[FMath::Clamp(Preferences.ColorVision, 0, 3)];
+		FSlateApplication::Get().GetRenderer()->SetColorVisionDeficiencyType(Type, Type == EColorVisionDeficiency::NormalVision ? 0 : 10,
+			/*bCorrectDeficiency*/ true, /*bShowCorrectionWithDeficiency*/ false);
+		FSlateApplication::Get().SetApplicationScale(Preferences.UIScale);
+	}
+	if (IConsoleVariable* Blur = IConsoleManager::Get().FindConsoleVariable(TEXT("r.MotionBlur.Amount")))
+	{
+		Blur->Set(Preferences.bMotionBlur ? 0.4f : 0.f, ECVF_SetByCode);
 	}
 }
 
@@ -88,6 +131,7 @@ void UCSSettingsSubsystem::SetPreferences(const FCSPlayerPreferences& NewPrefere
 	Preferences = NewPreferences;
 	SanitizePreferences(Preferences);
 	ApplyAudio();
+	ApplyVisual();
 	if (bSave)
 	{
 		SavePreferences();
@@ -297,6 +341,15 @@ void UCSSettingsSubsystem::SanitizePreferences(FCSPlayerPreferences& InOut)
 	InOut.MasterVolume = FMath::Clamp(InOut.MasterVolume, 0.f, 1.f);
 	InOut.MusicVolume = FMath::Clamp(InOut.MusicVolume, 0.f, 1.f);
 	InOut.EffectsVolume = FMath::Clamp(InOut.EffectsVolume, 0.f, 1.f);
+	InOut.AimSensitivity = FMath::Clamp(InOut.AimSensitivity, 0.2f, 2.f);
+	InOut.CrosshairStyle = FMath::Clamp(InOut.CrosshairStyle, 0, 3);
+	InOut.CrosshairColor = FMath::Clamp(InOut.CrosshairColor, 0, 5);
+	InOut.CrosshairSize = FMath::Clamp(InOut.CrosshairSize, 2.f, 20.f);
+	InOut.CrosshairGap = FMath::Clamp(InOut.CrosshairGap, 0.f, 16.f);
+	InOut.CrosshairThickness = FMath::Clamp(InOut.CrosshairThickness, 1.f, 5.f);
+	InOut.ColorVision = FMath::Clamp(InOut.ColorVision, 0, 3);
+	InOut.UIScale = FMath::Clamp(InOut.UIScale, 0.8f, 1.3f);
+	InOut.CameraMotion = FMath::Clamp(InOut.CameraMotion, 0.f, 1.f);
 	for (auto It = InOut.KeyOverrides.CreateIterator(); It; ++It)
 	{
 		if (!It->Value.IsValid())

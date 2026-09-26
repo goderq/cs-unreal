@@ -10,6 +10,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -280,4 +281,109 @@ void SCSSelector::SetOptions(const TArray<FText>& InOptions, int32 Index)
 {
 	Options = InOptions;
 	SetSelectedIndex(Index);
+}
+
+// ---------------------------------------------------------------------------
+// Animated page switcher (phase 6)
+// ---------------------------------------------------------------------------
+
+void SCSAnimatedSwitcher::Construct(const FArguments& InArgs)
+{
+	Intro = FCurveSequence(0.f, 0.2f, ECurveEaseFunction::CubicOut);
+	ChildSlot
+	[
+		SAssignNew(Switcher, SWidgetSwitcher)
+	];
+}
+
+int32 SCSAnimatedSwitcher::AddPage(TSharedRef<SWidget> Page)
+{
+	Switcher->AddSlot()[Page];
+	return Switcher->GetNumWidgets() - 1;
+}
+
+void SCSAnimatedSwitcher::SetActivePage(int32 Index)
+{
+	if (Index == Switcher->GetActiveWidgetIndex())
+	{
+		return;
+	}
+	Switcher->SetActiveWidgetIndex(Index);
+	PlayIntro();
+}
+
+int32 SCSAnimatedSwitcher::GetActivePage() const
+{
+	return Switcher->GetActiveWidgetIndex();
+}
+
+void SCSAnimatedSwitcher::PlayIntro()
+{
+	Intro.Play(AsShared());
+}
+
+void SCSAnimatedSwitcher::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
+{
+	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+	const float T = Intro.IsPlaying() ? Intro.GetLerp() : 1.f;
+	SetRenderOpacity(T);
+	SetRenderTransform(FSlateRenderTransform(FVector2f(0.f, (1.f - T) * 14.f)));
+}
+
+// ---------------------------------------------------------------------------
+// Crosshair preview (phase 6)
+// ---------------------------------------------------------------------------
+
+int32 SCSCrosshairPreview::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
+	FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	const FVector2D Size = AllottedGeometry.GetLocalSize();
+	auto Box = [&](float X, float Y, float W, float H, const FLinearColor& Color, int32 Layer)
+	{
+		FSlateDrawElement::MakeBox(OutDrawElements, Layer,
+			AllottedGeometry.ToPaintGeometry(FVector2f(W, H), FSlateLayoutTransform(FVector2f(X, Y))),
+			CSUI::WhiteBrush(), ESlateDrawEffect::None, Color);
+	};
+	// A light and a dark half, to judge the colour and the outline on both.
+	Box(0.f, 0.f, Size.X * 0.5f, Size.Y, FLinearColor(0.62f, 0.58f, 0.5f), LayerId);
+	Box(Size.X * 0.5f, 0.f, Size.X * 0.5f, Size.Y, FLinearColor(0.08f, 0.09f, 0.1f), LayerId);
+
+	int32 Style = 0, Color = 0;
+	float Len = 8.f, Gap = 5.f, Thick = 2.f;
+	bool bOutline = true;
+	if (Source)
+	{
+		Source(Style, Color, Len, Gap, Thick, bOutline);
+	}
+	const FLinearColor Col = CSUI::CrosshairColors[FMath::Clamp(Color, 0, 5)];
+	const FLinearColor Outline(0.f, 0.f, 0.f, bOutline ? 0.6f : 0.f);
+	const float CX = Size.X * 0.5f, CY = Size.Y * 0.5f;
+	auto Bar = [&](float X, float Y, float W, float H)
+	{
+		Box(X - 1.f, Y - 1.f, W + 2.f, H + 2.f, Outline, LayerId + 1);
+		Box(X, Y, W, H, Col, LayerId + 2);
+	};
+	if (Style == 3)
+	{
+		const float R = FMath::Max(Gap + Len * 0.5f, 3.f);
+		for (int32 i = 0; i < 24; ++i)
+		{
+			const float A = i * UE_TWO_PI / 24.f;
+			Bar(CX + FMath::Cos(A) * R - Thick * 0.5f, CY + FMath::Sin(A) * R - Thick * 0.5f, Thick, Thick);
+		}
+		Bar(CX - Thick * 0.5f, CY - Thick * 0.5f, Thick, Thick);
+		return LayerId + 2;
+	}
+	if (Style == 0 || Style == 1)
+	{
+		Bar(CX - Gap - Len, CY - Thick * 0.5f, Len, Thick);
+		Bar(CX + Gap, CY - Thick * 0.5f, Len, Thick);
+		Bar(CX - Thick * 0.5f, CY - Gap - Len, Thick, Len);
+		Bar(CX - Thick * 0.5f, CY + Gap, Thick, Len);
+	}
+	if (Style == 1 || Style == 2)
+	{
+		Bar(CX - Thick * 0.5f, CY - Thick * 0.5f, Thick, Thick);
+	}
+	return LayerId + 2;
 }

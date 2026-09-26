@@ -361,6 +361,7 @@ void ACSCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLife
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ACSCharacter, Stance);
 	DOREPLIFETIME(ACSCharacter, Heartbeat);
+	DOREPLIFETIME(ACSCharacter, PingMs);
 	DOREPLIFETIME(ACSCharacter, bIsBot);
 	DOREPLIFETIME(ACSCharacter, BotId);
 }
@@ -389,6 +390,10 @@ void ACSCharacter::Tick(float DeltaSeconds)
 		{
 			HeartbeatAccumulator = 0.f;
 			++Heartbeat;
+			if (!bIsBot)
+			{
+				PingMs = FMath::Clamp(UCSAuthority::GetRttMs(this), 0, 999);
+			}
 		}
 	}
 
@@ -1602,6 +1607,8 @@ void ACSCharacter::Input_Look(const FInputActionValue& Value)
 		{
 			Scale *= FMath::Clamp(FirstPersonCamera->FieldOfView / BaseFov, 0.1f, 1.f);
 		}
+		// And the player's own aiming multiplier on top (C11), blended in with the sights.
+		Scale *= FMath::Lerp(1.f, Settings->GetPreferences().AimSensitivity, GetAimAlpha());
 	}
 	AddLookSway(Axis);
 	AddControllerYawInput(Axis.X * Scale);
@@ -1673,17 +1680,24 @@ void ACSCharacter::Input_FireStop(const FInputActionValue& /*Value*/)
 	}
 }
 
+bool ACSCharacter::IsAimToggle() const
+{
+	const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
+	return Settings && Settings->GetPreferences().bToggleAim;
+}
+
 void ACSCharacter::Input_AimStart(const FInputActionValue& /*Value*/)
 {
 	if (WeaponComponent)
 	{
-		WeaponComponent->SetAiming(true);
+		// Toggle (C11): each press flips it; hold: aim while the button is down.
+		WeaponComponent->SetAiming(IsAimToggle() ? !WeaponComponent->IsAiming() : true);
 	}
 }
 
 void ACSCharacter::Input_AimStop(const FInputActionValue& /*Value*/)
 {
-	if (WeaponComponent)
+	if (WeaponComponent && !IsAimToggle())
 	{
 		WeaponComponent->SetAiming(false);
 	}

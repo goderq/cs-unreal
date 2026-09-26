@@ -115,6 +115,10 @@ public:
 	/** First run on this PC: the engine benchmark plus this PC's DLSS and ray tracing support. */
 	void AutoDetectGraphics();
 
+	/** Reads preferences from a save slot (sanitised); the file's schema too. False = no or bad file. */
+	static bool LoadPreferencesFromSlot(const FString& Slot, FCSPlayerPreferences& Out, int32* OutSchema = nullptr);
+	static bool SavePreferencesToSlot(const FCSPlayerPreferences& In, const FString& Slot);
+
 	/** Name of the save slot, for tests and docs. */
 	static const TCHAR* SlotName() { return TEXT("CSSettings"); }
 
@@ -122,6 +126,8 @@ private:
 	void LoadPreferences();
 	void SavePreferences() const;
 	void ApplyAudio() const;
+	/** Colour vision, UI scale and motion blur (phase 6, C11). */
+	void ApplyVisual() const;
 
 	FCSPlayerPreferences Preferences;
 };

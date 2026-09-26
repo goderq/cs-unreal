@@ -10,7 +10,6 @@
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
-#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -42,6 +41,66 @@ void SCSPauseMenu::Construct(const FArguments& InArgs)
 			];
 	};
 
+	// Phase 6: the pages ease in (menu opened, settings, leave confirmation).
+	const TSharedRef<SWidget> MainPage = Page(
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				CSUI::MakeHeader(LOCTEXT("Paused", "MENU"), LOCTEXT("NoPause", "The match keeps running - you can still be hit."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 18.f)
+			[
+				SNew(STextBlock).Text(this, &SCSPauseMenu::GetSessionLine).Font(CSUI::Font(14)).ColorAndOpacity(CSUI::TextDim)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
+			[
+				CSUI::MakeButton(LOCTEXT("Resume", "RESUME"),
+					FOnClicked::CreateLambda([this]() { OnResume.ExecuteIfBound(); return FReply::Handled(); }), CSUI::EButtonKind::Primary)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
+			[
+				CSUI::MakeButton(LOCTEXT("Settings", "SETTINGS"),
+					FOnClicked::CreateLambda([this]() { ShowSettings(); return FReply::Handled(); }))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
+			[
+				CSUI::MakeButton(LOCTEXT("Leave", "LEAVE MATCH"),
+					FOnClicked::CreateLambda([this]() { Switcher->SetActivePage(ConfirmLeave); return FReply::Handled(); }),
+					CSUI::EButtonKind::Danger)
+			],
+		560.f);
+	const TSharedRef<SWidget> LeavePage = Page(
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				CSUI::MakeHeader(LOCTEXT("LeaveTitle", "LEAVE MATCH?"),
+					LOCTEXT("LeaveBody", "Everything in your inventory drops where you stand, and other players can take it."))
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
+			[
+				CSUI::MakeButton(LOCTEXT("LeaveConfirm", "LEAVE"),
+					FOnClicked::CreateLambda([this]() { OnLeaveMatch.ExecuteIfBound(); return FReply::Handled(); }),
+					CSUI::EButtonKind::Danger)
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
+			[
+				CSUI::MakeButton(LOCTEXT("Stay", "STAY"),
+					FOnClicked::CreateLambda([this]() { ResetToMain(); return FReply::Handled(); }))
+			],
+		560.f);
+	const TSharedRef<SWidget> SettingsPageWidget = SNew(SBox).WidthOverride(900.f).HeightOverride(820.f)
+		[
+			SNew(SBorder)
+			.BorderImage(CSUI::WhiteBrush())
+			.BorderBackgroundColor(CSUI::Panel)
+			.Padding(FMargin(36.f, 32.f))
+			[
+				SAssignNew(Settings, SCSSettingsPanel)
+				.WorldContext(WorldContext)
+				.OnClose_Lambda([this]() { ResetToMain(); })
+			]
+		];
+
 	ChildSlot
 	[
 		SNew(SOverlay)
@@ -51,79 +110,12 @@ void SCSPauseMenu::Construct(const FArguments& InArgs)
 		]
 		+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center).Padding(FMargin(16.f, 40.f))
 		[
-			SAssignNew(Switcher, SWidgetSwitcher)
-
-			+ SWidgetSwitcher::Slot()
-			[
-				Page(
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						CSUI::MakeHeader(LOCTEXT("Paused", "MENU"), LOCTEXT("NoPause", "The match keeps running - you can still be hit."))
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 18.f)
-					[
-						SNew(STextBlock).Text(this, &SCSPauseMenu::GetSessionLine).Font(CSUI::Font(14)).ColorAndOpacity(CSUI::TextDim)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
-					[
-						CSUI::MakeButton(LOCTEXT("Resume", "RESUME"),
-							FOnClicked::CreateLambda([this]() { OnResume.ExecuteIfBound(); return FReply::Handled(); }), CSUI::EButtonKind::Primary)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
-					[
-						CSUI::MakeButton(LOCTEXT("Settings", "SETTINGS"),
-							FOnClicked::CreateLambda([this]() { ShowSettings(); return FReply::Handled(); }))
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
-					[
-						CSUI::MakeButton(LOCTEXT("Leave", "LEAVE MATCH"),
-							FOnClicked::CreateLambda([this]() { Switcher->SetActiveWidgetIndex(ConfirmLeave); return FReply::Handled(); }),
-							CSUI::EButtonKind::Danger)
-					],
-				560.f)
-			]
-
-			+ SWidgetSwitcher::Slot()
-			[
-				Page(
-					SNew(SVerticalBox)
-					+ SVerticalBox::Slot().AutoHeight()
-					[
-						CSUI::MakeHeader(LOCTEXT("LeaveTitle", "LEAVE MATCH?"),
-							LOCTEXT("LeaveBody", "Everything in your inventory drops where you stand, and other players can take it."))
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
-					[
-						CSUI::MakeButton(LOCTEXT("LeaveConfirm", "LEAVE"),
-							FOnClicked::CreateLambda([this]() { OnLeaveMatch.ExecuteIfBound(); return FReply::Handled(); }),
-							CSUI::EButtonKind::Danger)
-					]
-					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 4.f)
-					[
-						CSUI::MakeButton(LOCTEXT("Stay", "STAY"),
-							FOnClicked::CreateLambda([this]() { ResetToMain(); return FReply::Handled(); }))
-					],
-				560.f)
-			]
-
-			+ SWidgetSwitcher::Slot()
-			[
-				SNew(SBox).WidthOverride(900.f).HeightOverride(820.f)
-				[
-					SNew(SBorder)
-					.BorderImage(CSUI::WhiteBrush())
-					.BorderBackgroundColor(CSUI::Panel)
-					.Padding(FMargin(36.f, 32.f))
-					[
-						SAssignNew(Settings, SCSSettingsPanel)
-						.WorldContext(WorldContext)
-						.OnClose_Lambda([this]() { ResetToMain(); })
-					]
-				]
-			]
+			SAssignNew(Switcher, SCSAnimatedSwitcher)
 		]
 	];
+	Switcher->AddPage(MainPage);
+	Switcher->AddPage(LeavePage);
+	Switcher->AddPage(SettingsPageWidget);
 }
 
 FText SCSPauseMenu::GetSessionLine() const
@@ -143,20 +135,24 @@ FText SCSPauseMenu::GetSessionLine() const
 
 void SCSPauseMenu::ResetToMain()
 {
-	Switcher->SetActiveWidgetIndex(Main);
+	if (Switcher->GetActivePage() == Main)
+	{
+		Switcher->PlayIntro();   // the menu was just opened
+	}
+	Switcher->SetActivePage(Main);
 }
 
 void SCSPauseMenu::ShowSettings()
 {
 	Settings->Refresh();
-	Switcher->SetActiveWidgetIndex(SettingsPage);
+	Switcher->SetActivePage(SettingsPage);
 }
 
 FReply SCSPauseMenu::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (InKeyEvent.GetKey() == EKeys::Escape)
 	{
-		if (Switcher->GetActiveWidgetIndex() != Main)
+		if (Switcher->GetActivePage() != Main)
 		{
 			ResetToMain();
 		}

@@ -13,6 +13,8 @@
 #include "Audio/CSAudio.h"
 #include "Audio/CSAudioSettings.h"
 #include "Graphics/CSGraphics.h"
+#include "Kismet/GameplayStatics.h"
+#include "Settings/CSSettingsSave.h"
 #include "Characters/CSCharacter.h"
 #include "Combat/CSCheatGuard.h"
 #include "Combat/CSMatchDirector.h"
@@ -136,6 +138,62 @@ bool FCSUnitSettingsTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("defaults are legal (FOV)"), Copy.FieldOfView, Defaults.FieldOfView);
 	TestEqual(TEXT("defaults are legal (sensitivity)"), Copy.MouseSensitivity, Defaults.MouseSensitivity);
 	TestFalse(TEXT("FPS counter off by default"), Defaults.bShowFps);
+	return true;
+}
+
+// v2.0 phase 6 (C11): the preferences survive a restart (written to disk and
+// read back by a fresh load), and a schema-1 file keeps its values.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCSUnitSettingsRestartTest, "CSFusion.Unit.Settings.Restart", CSUnitFlags)
+bool FCSUnitSettingsRestartTest::RunTest(const FString& Parameters)
+{
+	const FString Slot = TEXT("CSSettingsUnitTest");
+	FCSPlayerPreferences P;
+	P.MouseSensitivity = 2.25f;
+	P.AimSensitivity = 0.6f;
+	P.bToggleAim = true;
+	P.CrosshairStyle = 3;
+	P.CrosshairColor = 2;
+	P.CrosshairSize = 12.f;
+	P.ColorVision = 2;
+	P.UIScale = 1.15f;
+	P.CameraMotion = 0.25f;
+	P.bReduceFlash = true;
+	P.bShowNetStats = true;
+	P.KeyOverrides.Add(TEXT("Jump"), EKeys::F);
+	TestTrue(TEXT("written"), UCSSettingsSubsystem::SavePreferencesToSlot(P, Slot));
+
+	FCSPlayerPreferences Back;
+	int32 Schema = 0;
+	TestTrue(TEXT("read back"), UCSSettingsSubsystem::LoadPreferencesFromSlot(Slot, Back, &Schema));
+	TestEqual(TEXT("schema"), Schema, UCSSettingsSave::CurrentSchema);
+	TestEqual(TEXT("sensitivity"), Back.MouseSensitivity, 2.25f);
+	TestEqual(TEXT("aim sensitivity"), Back.AimSensitivity, 0.6f);
+	TestTrue(TEXT("toggle aim"), Back.bToggleAim);
+	TestEqual(TEXT("crosshair style"), Back.CrosshairStyle, 3);
+	TestEqual(TEXT("crosshair colour"), Back.CrosshairColor, 2);
+	TestEqual(TEXT("crosshair size"), Back.CrosshairSize, 12.f);
+	TestEqual(TEXT("colour vision"), Back.ColorVision, 2);
+	TestEqual(TEXT("UI scale"), Back.UIScale, 1.15f);
+	TestEqual(TEXT("camera motion"), Back.CameraMotion, 0.25f);
+	TestTrue(TEXT("reduced flash"), Back.bReduceFlash);
+	TestTrue(TEXT("net stats"), Back.bShowNetStats);
+	TestTrue(TEXT("key override"), Back.KeyOverrides.FindRef(TEXT("Jump")) == EKeys::F);
+
+	// A file from before phase 6: schema 1, only the old fields set.
+	UCSSettingsSave* Old = Cast<UCSSettingsSave>(UGameplayStatics::CreateSaveGameObject(UCSSettingsSave::StaticClass()));
+	Old->SchemaVersion = 1;
+	Old->Preferences = FCSPlayerPreferences();
+	Old->Preferences.FieldOfView = 90.f;
+	Old->Preferences.MasterVolume = 0.4f;
+	TestTrue(TEXT("schema-1 file written"), UGameplayStatics::SaveGameToSlot(Old, Slot, 0));
+	FCSPlayerPreferences Migrated;
+	TestTrue(TEXT("schema-1 file read"), UCSSettingsSubsystem::LoadPreferencesFromSlot(Slot, Migrated, &Schema));
+	TestEqual(TEXT("its schema is reported"), Schema, 1);
+	TestEqual(TEXT("old FOV kept"), Migrated.FieldOfView, 90.f);
+	TestEqual(TEXT("old volume kept"), Migrated.MasterVolume, 0.4f);
+	TestEqual(TEXT("new option at its default"), Migrated.CameraMotion, 1.f);
+
+	UGameplayStatics::DeleteGameInSlot(Slot, 0);
 	return true;
 }
 

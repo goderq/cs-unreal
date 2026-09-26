@@ -15,7 +15,9 @@
 #include "Fonts/SlateFontInfo.h"
 #include "Input/Reply.h"
 #include "Styling/SlateTypes.h"
+#include "Animation/CurveSequence.h"
 #include "Widgets/SCompoundWidget.h"
+#include "Widgets/SLeafWidget.h"
 
 class STextBlock;
 
@@ -36,6 +38,12 @@ namespace CSUI
 	inline const FLinearColor TeamAlpha   = FLinearColor(0.250f, 0.620f, 1.000f, 1.00f);
 	inline const FLinearColor TeamBravo   = FLinearColor(1.000f, 0.360f, 0.260f, 1.00f);
 	inline const FLinearColor Money       = FLinearColor(0.420f, 0.920f, 0.450f, 1.00f);
+
+	/** Crosshair colours the settings offer (FCSPlayerPreferences::CrosshairColor), and their names. */
+	inline const FLinearColor CrosshairColors[] = {
+		FLinearColor(0.35f, 1.00f, 0.55f), FLinearColor(1.00f, 0.92f, 0.25f), FLinearColor(0.30f, 0.95f, 1.00f),
+		FLinearColor(1.00f, 1.00f, 1.00f), FLinearColor(1.00f, 0.35f, 0.95f), FLinearColor(1.00f, 0.30f, 0.25f) };
+	inline const TCHAR* CrosshairColorNames[] = { TEXT("Green"), TEXT("Yellow"), TEXT("Cyan"), TEXT("White"), TEXT("Magenta"), TEXT("Red") };
 	inline const FLinearColor Stroke      = FLinearColor(1.000f, 1.000f, 1.000f, 0.07f);
 
 	/** Team colour; free-for-all (None) is the accent. */
@@ -107,4 +115,51 @@ private:
 	TArray<FText> Options;
 	int32 Selected = 0;
 	FCSOnSelectionChanged OnSelectionChanged;
+};
+
+/**
+ * v2.0 phase 6: pages that ease in when switched - a short fade and a slide
+ * up (0.2 s). Used by the settings tabs, the main menu and the pause menu so
+ * a change of screen reads as one, instead of a hard cut.
+ */
+class CSFUSION_API SCSAnimatedSwitcher : public SCompoundWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SCSAnimatedSwitcher) {}
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs);
+
+	/** Adds a page; returns its index. */
+	int32 AddPage(TSharedRef<SWidget> Page);
+	void SetActivePage(int32 Index);
+	int32 GetActivePage() const;
+
+	/** Plays the ease-in again without switching (a panel being shown). */
+	void PlayIntro();
+
+	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
+
+private:
+	TSharedPtr<class SWidgetSwitcher> Switcher;
+	FCurveSequence Intro;
+};
+
+/** Live crosshair sample for the settings screen, drawn from the preferences it is given. */
+class CSFUSION_API SCSCrosshairPreview : public SLeafWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SCSCrosshairPreview) {}
+		/** Returns style, colour index, size, gap, thickness, outline. */
+		SLATE_ARGUMENT(TFunction<void(int32&, int32&, float&, float&, float&, bool&)>, Source)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs) { Source = InArgs._Source; }
+
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
+		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
+	virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(160.f, 120.f); }
+
+private:
+	TFunction<void(int32&, int32&, float&, float&, float&, bool&)> Source;
 };

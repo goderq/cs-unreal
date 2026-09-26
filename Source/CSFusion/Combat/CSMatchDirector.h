@@ -128,6 +128,13 @@ struct CSFUSION_API FCSPlayerCombatRecord
 	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
 	int32 DamageDealt = 0;
 
+	/** v2.0 phase 6: kills this player helped with (AssistMinDamage or more on the victim). */
+	UPROPERTY(BlueprintReadOnly, Category = "CS|Mode")
+	int32 Assists = 0;
+
+	/** Scoreboard score: 2 a kill, 1 an assist. */
+	int32 GetScore() const { return Kills * 2 + Assists; }
+
 	/**
 	 * Spawn protection until this network time (0 = none). No damage is taken
 	 * while it lasts; in Deathmatch modes the shop is open exactly as long.
@@ -498,6 +505,17 @@ private:
 
 	/** Last heartbeat value seen per player, and when it last changed. */
 	TMap<int32, TPair<int32, double>> HeartbeatSeen;
+
+	/**
+	 * Authority only (phase 6 assists): damage each attacker has done to each
+	 * player during that player's current life, victim -> attacker -> damage.
+	 * Cleared when the victim dies (after the assists are handed out) or
+	 * starts a new life.
+	 */
+	TMap<int32, TMap<int32, float>> DamageThisLife;
+
+	/** An assist needs this much damage on the victim (Counter-Strike's figure). */
+	static constexpr float AssistMinDamage = 40.f;
 
 	/**
 	 * How long a heartbeat may stay frozen before the player is marked

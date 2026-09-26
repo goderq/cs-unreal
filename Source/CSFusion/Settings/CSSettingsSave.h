@@ -51,6 +51,65 @@ struct CSFUSION_API FCSPlayerPreferences
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
 	TMap<FName, FKey> KeyOverrides;
+
+	// --- v2.0 phase 6 (AUDIT C11), schema 2 -----------------------------------
+
+	/** Extra multiplier while aiming down sights (on top of the zoom scaling). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings", meta = (ClampMin = "0.2", ClampMax = "2.0"))
+	float AimSensitivity = 1.f;
+
+	/** Aim: false = hold the button, true = press once to aim, again to stop. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	bool bToggleAim = false;
+
+	/** Crosshair: 0 cross, 1 cross with a dot, 2 dot only, 3 circle. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	int32 CrosshairStyle = 0;
+
+	/** Index into CSUI::CrosshairColors (0 green .. 5 red). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	int32 CrosshairColor = 0;
+
+	/** Arm length, px at 1080p. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings", meta = (ClampMin = "2", ClampMax = "20"))
+	float CrosshairSize = 8.f;
+
+	/** Gap from the centre, px at 1080p. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings", meta = (ClampMin = "0", ClampMax = "16"))
+	float CrosshairGap = 5.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings", meta = (ClampMin = "1", ClampMax = "5"))
+	float CrosshairThickness = 2.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	bool bCrosshairOutline = true;
+
+	/** The crosshair opens with the weapon's spread. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	bool bCrosshairDynamic = true;
+
+	/** 0 off, 1 protanopia, 2 deuteranopia, 3 tritanopia (engine colour correction). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	int32 ColorVision = 0;
+
+	/** Menus and HUD size. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings", meta = (ClampMin = "0.8", ClampMax = "1.3"))
+	float UIScale = 1.f;
+
+	/** Weapon and camera motion (breathing, strafe tilt, lag, landing dip): 0 = still, 1 = full. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float CameraMotion = 1.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	bool bMotionBlur = false;
+
+	/** Flashbangs white out to a grey, not a full white (photosensitivity). */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	bool bReduceFlash = false;
+
+	/** Ping, jitter and FPS in a corner of the HUD. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "CS|Settings")
+	bool bShowNetStats = false;
 };
 
 UCLASS()
@@ -59,9 +118,15 @@ class CSFUSION_API UCSSettingsSave : public USaveGame
 	GENERATED_BODY()
 
 public:
-	/** Bump when a field changes meaning, so old files can be migrated or discarded. */
+	/**
+	 * Bump when a field changes meaning, so old files can be migrated or discarded.
+	 * 2 (v2.0 phase 6): the C11 options; a schema-1 file keeps every value it
+	 * had and gets the new ones at their defaults.
+	 */
+	static constexpr int32 CurrentSchema = 2;
+
 	UPROPERTY()
-	int32 SchemaVersion = 1;
+	int32 SchemaVersion = CurrentSchema;
 
 	UPROPERTY()
 	FCSPlayerPreferences Preferences;

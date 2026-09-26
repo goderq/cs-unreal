@@ -1,6 +1,8 @@
 // Copyright (c) 2026 CS-Fusion. All Rights Reserved.
 //
 // Settings screen, shared by the main menu and the in-match ESC menu.
+// v2.0 phase 6: six tabs (video, controls, crosshair with a live sample,
+// audio, accessibility, key bindings) that ease in when switched.
 //
 // Edits a working copy; APPLY writes it through UCSSettingsSubsystem (which
 // saves it), BACK discards it. Key rebinding: click a key, press the new
@@ -35,6 +37,9 @@ public:
 
 	bool IsCapturingKey() const { return !CapturingBinding.IsNone(); }
 
+	/** Tab 0 video .. 5 key bindings. */
+	void ShowTab(int32 Index);
+
 private:
 	UCSSettingsSubsystem* GetSettings() const;
 	const UCSInputConfig* GetInputConfig() const;
@@ -68,6 +73,18 @@ private:
 	TSharedPtr<SCSSelector> VSyncSelector;
 	TSharedPtr<SCSSelector> InvertSelector;
 	TSharedPtr<SCSSelector> ShowFpsSelector;
+	// Phase 6 (C11).
+	TSharedPtr<SCSSelector> NetStatsSelector;
+	TSharedPtr<SCSSelector> AimToggleSelector;
+	TSharedPtr<SCSSelector> CrosshairStyleSelector;
+	TSharedPtr<SCSSelector> CrosshairColorSelector;
+	TSharedPtr<SCSSelector> CrosshairOutlineSelector;
+	TSharedPtr<SCSSelector> CrosshairDynamicSelector;
+	TSharedPtr<SCSSelector> ColorVisionSelector;
+	TSharedPtr<SCSSelector> MotionBlurSelector;
+	TSharedPtr<SCSSelector> ReduceFlashSelector;
+	/** Tabs: video, controls, crosshair, audio, accessibility, keys. */
+	TSharedPtr<class SCSAnimatedSwitcher> PageSwitcher;
 	TSharedPtr<SVerticalBox> KeyRows;
 
 	FName CapturingBinding;

@@ -54,6 +54,146 @@ void SCSSettingsPanel::Construct(const FArguments& InArgs)
 	}
 
 	const TArray<FText> OffOn = { LOCTEXT("Off", "Off"), LOCTEXT("On", "On") };
+	auto Percent = [](float V) { return FText::AsPercent(V); };
+	auto Pixels = [](float V) { return FText::Format(LOCTEXT("Px", "{0} px"), FText::AsNumber(FMath::RoundToInt(V))); };
+
+	// --- Pages (phase 6: tabs instead of one long list) ------------------------
+	TSharedRef<SVerticalBox> Video = SNew(SVerticalBox);
+	Video->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("Resolution", "Resolution"),
+		SAssignNew(ResolutionSelector, SCSSelector).Options(ResolutionOptions)
+		.OnSelectionChanged_Lambda([this](int32 i) { if (Resolutions.IsValidIndex(i)) { WorkingGfx.Resolution = Resolutions[i]; } })) ];
+	Video->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("DisplayMode", "Display mode"),
+		SAssignNew(WindowModeSelector, SCSSelector)
+		.Options({ LOCTEXT("Fullscreen", "Fullscreen"), LOCTEXT("Borderless", "Borderless window"), LOCTEXT("Windowed", "Windowed") })
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.WindowMode = GWindowModes[FMath::Clamp(i, 0, 2)]; })) ];
+	Video->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("FrameLimit", "FPS limit"),
+		SAssignNew(FrameLimitSelector, SCSSelector).Options(FrameOptions)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.FrameRateLimit = UCSSettingsSubsystem::GetFrameRateChoices()[i]; })) ];
+	Video->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("VSync", "VSync"),
+		SAssignNew(VSyncSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.bVSync = i == 1; })) ];
+	Video->AddSlot().AutoHeight()[ MakeGraphicsRows() ];
+	Video->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("ShowFps", "Show FPS"),
+		SAssignNew(ShowFpsSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bShowFps = i == 1; })) ];
+	Video->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("NetStats", "Show ping and jitter"),
+		SAssignNew(NetStatsSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bShowNetStats = i == 1; })) ];
+
+	TSharedRef<SVerticalBox> Controls = SNew(SVerticalBox);
+	Controls->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("Sensitivity", "Mouse sensitivity"),
+		MakeSlider(0.05f, 5.f, [this]() { return WorkingPrefs.MouseSensitivity; }, [this](float V) { WorkingPrefs.MouseSensitivity = V; },
+			[](float V) { return FText::AsNumber(V, &FNumberFormattingOptions().SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2)); })) ];
+	Controls->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("AimSensitivity", "Aiming sensitivity"),
+		MakeSlider(0.2f, 2.f, [this]() { return WorkingPrefs.AimSensitivity; }, [this](float V) { WorkingPrefs.AimSensitivity = V; }, Percent)) ];
+	Controls->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("AimMode", "Aim"),
+		SAssignNew(AimToggleSelector, SCSSelector).Options({ LOCTEXT("Hold", "Hold"), LOCTEXT("Toggle", "Toggle") })
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bToggleAim = i == 1; })) ];
+	Controls->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("InvertY", "Invert mouse Y"),
+		SAssignNew(InvertSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bInvertY = i == 1; })) ];
+	Controls->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("FOV", "Field of view"),
+		MakeSlider(70.f, 120.f, [this]() { return WorkingPrefs.FieldOfView; }, [this](float V) { WorkingPrefs.FieldOfView = FMath::RoundToFloat(V); },
+			[](float V) { return FText::Format(LOCTEXT("Deg", "{0} deg"), FText::AsNumber(FMath::RoundToInt(V))); })) ];
+
+	TArray<FText> ColorNames;
+	for (const TCHAR* Name : CSUI::CrosshairColorNames)
+	{
+		ColorNames.Add(FText::FromString(Name));
+	}
+	TSharedRef<SVerticalBox> Crosshair = SNew(SVerticalBox);
+	Crosshair->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0.f, 0.f, 0.f, 10.f)
+	[
+		SNew(SBox).WidthOverride(240.f).HeightOverride(140.f)
+		[
+			SNew(SCSCrosshairPreview)
+			.Source([this](int32& Style, int32& Color, float& Size, float& Gap, float& Thick, bool& bOutline)
+			{
+				Style = WorkingPrefs.CrosshairStyle; Color = WorkingPrefs.CrosshairColor; Size = WorkingPrefs.CrosshairSize;
+				Gap = WorkingPrefs.CrosshairGap; Thick = WorkingPrefs.CrosshairThickness; bOutline = WorkingPrefs.bCrosshairOutline;
+			})
+		]
+	];
+	Crosshair->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CrossStyle", "Style"),
+		SAssignNew(CrosshairStyleSelector, SCSSelector)
+		.Options({ LOCTEXT("Cross", "Cross"), LOCTEXT("CrossDot", "Cross and dot"), LOCTEXT("Dot", "Dot"), LOCTEXT("Circle", "Circle") })
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.CrosshairStyle = i; })) ];
+	Crosshair->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CrossColor", "Colour"),
+		SAssignNew(CrosshairColorSelector, SCSSelector).Options(ColorNames)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.CrosshairColor = i; })) ];
+	Crosshair->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CrossSize", "Size"),
+		MakeSlider(2.f, 20.f, [this]() { return WorkingPrefs.CrosshairSize; }, [this](float V) { WorkingPrefs.CrosshairSize = FMath::RoundToFloat(V); }, Pixels)) ];
+	Crosshair->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CrossGap", "Gap"),
+		MakeSlider(0.f, 16.f, [this]() { return WorkingPrefs.CrosshairGap; }, [this](float V) { WorkingPrefs.CrosshairGap = FMath::RoundToFloat(V); }, Pixels)) ];
+	Crosshair->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CrossThick", "Thickness"),
+		MakeSlider(1.f, 5.f, [this]() { return WorkingPrefs.CrosshairThickness; }, [this](float V) { WorkingPrefs.CrosshairThickness = FMath::RoundToFloat(V); }, Pixels)) ];
+	Crosshair->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CrossOutline", "Outline"),
+		SAssignNew(CrosshairOutlineSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bCrosshairOutline = i == 1; })) ];
+	Crosshair->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CrossDynamic", "Opens with weapon spread"),
+		SAssignNew(CrosshairDynamicSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bCrosshairDynamic = i == 1; })) ];
+
+	TSharedRef<SVerticalBox> Audio = SNew(SVerticalBox);
+	Audio->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("Master", "Master volume"),
+		MakeSlider(0.f, 1.f, [this]() { return WorkingPrefs.MasterVolume; }, [this](float V) { WorkingPrefs.MasterVolume = V; }, Percent)) ];
+	Audio->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("Music", "Music volume"),
+		MakeSlider(0.f, 1.f, [this]() { return WorkingPrefs.MusicVolume; }, [this](float V) { WorkingPrefs.MusicVolume = V; }, Percent)) ];
+	Audio->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("Effects", "Effects volume"),
+		MakeSlider(0.f, 1.f, [this]() { return WorkingPrefs.EffectsVolume; }, [this](float V) { WorkingPrefs.EffectsVolume = V; }, Percent)) ];
+
+	TSharedRef<SVerticalBox> Access = SNew(SVerticalBox);
+	Access->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("ColorVision", "Colour vision correction"),
+		SAssignNew(ColorVisionSelector, SCSSelector)
+		.Options({ LOCTEXT("CVOff", "Off"), LOCTEXT("Protan", "Protanopia (red)"), LOCTEXT("Deutan", "Deuteranopia (green)"), LOCTEXT("Tritan", "Tritanopia (blue)") })
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.ColorVision = i; })) ];
+	Access->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("UIScale", "Interface size"),
+		MakeSlider(0.8f, 1.3f, [this]() { return WorkingPrefs.UIScale; }, [this](float V) { WorkingPrefs.UIScale = FMath::RoundToFloat(V * 20.f) / 20.f; }, Percent)) ];
+	Access->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("CameraMotion", "Camera and weapon motion"),
+		MakeSlider(0.f, 1.f, [this]() { return WorkingPrefs.CameraMotion; }, [this](float V) { WorkingPrefs.CameraMotion = V; }, Percent)) ];
+	Access->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("MotionBlur", "Motion blur"),
+		SAssignNew(MotionBlurSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bMotionBlur = i == 1; })) ];
+	Access->AddSlot().AutoHeight()[ CSUI::MakeRow(LOCTEXT("ReduceFlash", "Softer flashbang white-out"),
+		SAssignNew(ReduceFlashSelector, SCSSelector).Options(OffOn)
+		.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bReduceFlash = i == 1; })) ];
+
+	TSharedRef<SVerticalBox> Keys = SNew(SVerticalBox);
+	Keys->AddSlot().AutoHeight()[ SAssignNew(KeyRows, SVerticalBox) ];
+
+	const FText TabNames[] = { LOCTEXT("TabVideo", "VIDEO"), LOCTEXT("TabControls", "CONTROLS"), LOCTEXT("TabCrosshair", "CROSSHAIR"),
+		LOCTEXT("TabAudio", "AUDIO"), LOCTEXT("TabAccess", "ACCESSIBILITY"), LOCTEXT("TabKeys", "KEY BINDINGS") };
+	TSharedRef<SWidget> Pages[] = { Video, Controls, Crosshair, Audio, Access, Keys };
+
+	TSharedRef<SHorizontalBox> Tabs = SNew(SHorizontalBox);
+	SAssignNew(PageSwitcher, SCSAnimatedSwitcher);
+	for (int32 t = 0; t < UE_ARRAY_COUNT(TabNames); ++t)
+	{
+		PageSwitcher->AddPage(SNew(SScrollBox) + SScrollBox::Slot().Padding(FMargin(0.f, 0.f, 14.f, 0.f))[ Pages[t] ]);
+		Tabs->AddSlot().AutoWidth().Padding(0.f, 0.f, 4.f, 0.f)
+		[
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SButton).IsFocusable(false)
+				.ButtonStyle(&CSUI::ButtonStyle(CSUI::EButtonKind::Nav))
+				.ContentPadding(FMargin(12.f, 8.f))
+				.OnClicked_Lambda([this, t]() { PageSwitcher->SetActivePage(t); return FReply::Handled(); })
+				[
+					SNew(STextBlock).Text(TabNames[t]).Font(CSUI::Font(14, true))
+					.ColorAndOpacity_Lambda([this, t]() { return FSlateColor(PageSwitcher->GetActivePage() == t ? CSUI::Accent : CSUI::TextDim); })
+				]
+			]
+			+ SVerticalBox::Slot().AutoHeight()
+			[
+				SNew(SBox).HeightOverride(3.f)
+				[
+					SNew(SBorder).BorderImage(CSUI::WhiteBrush())
+					.BorderBackgroundColor_Lambda([this, t]() { return FSlateColor(PageSwitcher->GetActivePage() == t ? CSUI::Accent : FLinearColor::Transparent); })
+				]
+			]
+		];
+	}
 
 	ChildSlot
 	[
@@ -62,104 +202,13 @@ void SCSSettingsPanel::Construct(const FArguments& InArgs)
 		[
 			CSUI::MakeHeader(LOCTEXT("Title", "SETTINGS"), LOCTEXT("Subtitle", "Saved on this PC only. Nothing here affects gameplay state."))
 		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 12.f)
+		[
+			Tabs
+		]
 		+ SVerticalBox::Slot().FillHeight(1.f)
 		[
-			SNew(SScrollBox)
-			+ SScrollBox::Slot().Padding(FMargin(0.f, 0.f, 14.f, 0.f))
-			[
-				SNew(SVerticalBox)
-
-				// --- Video --------------------------------------------------
-				+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("Video", "VIDEO")) ]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("Resolution", "Resolution"),
-						SAssignNew(ResolutionSelector, SCSSelector).Options(ResolutionOptions)
-						.OnSelectionChanged_Lambda([this](int32 i) { if (Resolutions.IsValidIndex(i)) { WorkingGfx.Resolution = Resolutions[i]; } }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("DisplayMode", "Display mode"),
-						SAssignNew(WindowModeSelector, SCSSelector)
-						.Options({ LOCTEXT("Fullscreen", "Fullscreen"), LOCTEXT("Borderless", "Borderless window"), LOCTEXT("Windowed", "Windowed") })
-						.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.WindowMode = GWindowModes[FMath::Clamp(i, 0, 2)]; }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("FrameLimit", "FPS limit"),
-						SAssignNew(FrameLimitSelector, SCSSelector).Options(FrameOptions)
-						.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.FrameRateLimit = UCSSettingsSubsystem::GetFrameRateChoices()[i]; }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("VSync", "VSync"),
-						SAssignNew(VSyncSelector, SCSSelector).Options(OffOn)
-						.OnSelectionChanged_Lambda([this](int32 i) { WorkingGfx.bVSync = i == 1; }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					MakeGraphicsRows()
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("ShowFps", "Show FPS"),
-						SAssignNew(ShowFpsSelector, SCSSelector).Options(OffOn)
-						.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bShowFps = i == 1; }))
-				]
-
-				// --- Controls -----------------------------------------------
-				+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("Controls", "CONTROLS")) ]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("Sensitivity", "Mouse sensitivity"),
-						MakeSlider(0.05f, 5.f,
-							[this]() { return WorkingPrefs.MouseSensitivity; },
-							[this](float V) { WorkingPrefs.MouseSensitivity = V; },
-							[](float V) { return FText::AsNumber(V, &FNumberFormattingOptions().SetMinimumFractionalDigits(2).SetMaximumFractionalDigits(2)); }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("InvertY", "Invert mouse Y"),
-						SAssignNew(InvertSelector, SCSSelector).Options(OffOn)
-						.OnSelectionChanged_Lambda([this](int32 i) { WorkingPrefs.bInvertY = i == 1; }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("FOV", "Field of view"),
-						MakeSlider(70.f, 120.f,
-							[this]() { return WorkingPrefs.FieldOfView; },
-							[this](float V) { WorkingPrefs.FieldOfView = FMath::RoundToFloat(V); },
-							[](float V) { return FText::Format(LOCTEXT("Deg", "{0} deg"), FText::AsNumber(FMath::RoundToInt(V))); }))
-				]
-
-				// --- Audio --------------------------------------------------
-				+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("Audio", "AUDIO")) ]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("Master", "Master volume"),
-						MakeSlider(0.f, 1.f, [this]() { return WorkingPrefs.MasterVolume; }, [this](float V) { WorkingPrefs.MasterVolume = V; },
-							[](float V) { return FText::AsPercent(V); }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("Music", "Music volume"),
-						MakeSlider(0.f, 1.f, [this]() { return WorkingPrefs.MusicVolume; }, [this](float V) { WorkingPrefs.MusicVolume = V; },
-							[](float V) { return FText::AsPercent(V); }))
-				]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					CSUI::MakeRow(LOCTEXT("Effects", "Effects volume"),
-						MakeSlider(0.f, 1.f, [this]() { return WorkingPrefs.EffectsVolume; }, [this](float V) { WorkingPrefs.EffectsVolume = V; },
-							[](float V) { return FText::AsPercent(V); }))
-				]
-
-				// --- Key bindings -------------------------------------------
-				+ SVerticalBox::Slot().AutoHeight()[ CSUI::MakeSectionLabel(LOCTEXT("Keys", "KEY BINDINGS")) ]
-				+ SVerticalBox::Slot().AutoHeight()
-				[
-					SAssignNew(KeyRows, SVerticalBox)
-				]
-			]
+			PageSwitcher.ToSharedRef()
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 12.f, 0.f, 0.f)
 		[
@@ -187,6 +236,14 @@ void SCSSettingsPanel::Construct(const FArguments& InArgs)
 	];
 
 	Refresh();
+}
+
+void SCSSettingsPanel::ShowTab(int32 Index)
+{
+	if (PageSwitcher.IsValid())
+	{
+		PageSwitcher->SetActivePage(FMath::Clamp(Index, 0, 5));
+	}
 }
 
 UCSSettingsSubsystem* SCSSettingsPanel::GetSettings() const
@@ -281,6 +338,15 @@ void SCSSettingsPanel::SyncSelectors()
 	VSyncSelector->SetSelectedIndex(WorkingGfx.bVSync ? 1 : 0);
 	InvertSelector->SetSelectedIndex(WorkingPrefs.bInvertY ? 1 : 0);
 	ShowFpsSelector->SetSelectedIndex(WorkingPrefs.bShowFps ? 1 : 0);
+	NetStatsSelector->SetSelectedIndex(WorkingPrefs.bShowNetStats ? 1 : 0);
+	AimToggleSelector->SetSelectedIndex(WorkingPrefs.bToggleAim ? 1 : 0);
+	CrosshairStyleSelector->SetSelectedIndex(WorkingPrefs.CrosshairStyle);
+	CrosshairColorSelector->SetSelectedIndex(WorkingPrefs.CrosshairColor);
+	CrosshairOutlineSelector->SetSelectedIndex(WorkingPrefs.bCrosshairOutline ? 1 : 0);
+	CrosshairDynamicSelector->SetSelectedIndex(WorkingPrefs.bCrosshairDynamic ? 1 : 0);
+	ColorVisionSelector->SetSelectedIndex(WorkingPrefs.ColorVision);
+	MotionBlurSelector->SetSelectedIndex(WorkingPrefs.bMotionBlur ? 1 : 0);
+	ReduceFlashSelector->SetSelectedIndex(WorkingPrefs.bReduceFlash ? 1 : 0);
 }
 
 void SCSSettingsPanel::RebuildKeyRows()

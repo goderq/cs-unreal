@@ -742,6 +742,7 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 		if (FCSPlayerCombatRecord* Dealer = FindRecordMutable(InstigatorId))
 		{
 			Dealer->DamageDealt += FMath::RoundToInt(Applied);
+			DamageThisLife.FindOrAdd(VictimId).FindOrAdd(InstigatorId) += Applied;
 		}
 	}
 	const bool bKilledNow = Victim->Health <= 0.f;
@@ -776,6 +777,24 @@ float ACSMatchDirector::ApplyDamage(int32 VictimId, int32 InstigatorId, float Da
 				OnRecordsChanged.Broadcast(InstigatorId);
 			}
 		}
+
+		// Assists: everyone else who did enough damage during this life.
+		if (const TMap<int32, float>* Attackers = DamageThisLife.Find(VictimId))
+		{
+			for (const TPair<int32, float>& Attacker : *Attackers)
+			{
+				if (Attacker.Key == InstigatorId || Attacker.Value < AssistMinDamage)
+				{
+					continue;
+				}
+				if (FCSPlayerCombatRecord* Helper = FindRecordMutable(Attacker.Key))
+				{
+					Helper->Assists += 1;
+					OnRecordsChanged.Broadcast(Attacker.Key);
+				}
+			}
+		}
+		DamageThisLife.Remove(VictimId);
 
 		UE_LOG(LogCSCombat, Log, TEXT("Player %d killed by %d (%s)."),
 			VictimId, InstigatorId, *UEnum::GetValueAsString(Zone));
@@ -831,6 +850,7 @@ void ACSMatchDirector::ResetLife(FCSPlayerCombatRecord& Record, int32 SpawnPoint
 	Record.LastFireNetworkTime = 0.0;
 	Record.ReloadCompleteNetworkTime = 0.0;
 	Record.ReloadSlot = INDEX_NONE;
+	DamageThisLife.Remove(Record.PlayerId);
 	// A new life starts with a steady weapon and not aiming (B8).
 	SprayStates.Remove(Record.PlayerId);
 	AimStates.Remove(Record.PlayerId);
@@ -1371,6 +1391,7 @@ void ACSMatchDirector::ResetForNewMatch()
 
 	const FCSModeRules& Rules = ModeRules(this);
 	bMatchHadBots = false;
+	DamageThisLife.Empty();
 
 	// Teams: anyone registered before the mode was known gets one now, and a
 	// lopsided split (players left during the last match) is evened out.
@@ -1408,6 +1429,7 @@ void ACSMatchDirector::ResetForNewMatch()
 	{
 		Record.Kills = 0;
 		Record.Deaths = 0;
+		Record.Assists = 0;
 		Record.Headshots = 0;
 		Record.DamageDealt = 0;
 		Record.Money = Rules.StartMoney;
@@ -1933,10 +1955,11 @@ void ACSMatchDirector::ResetScores()
 
 	for (FCSPlayerCombatRecord& Record : Records)
 	{
-		if (Record.PlayerId != 0 && (Record.Kills != 0 || Record.Deaths != 0))
+		if (Record.PlayerId != 0 && (Record.Kills != 0 || Record.Deaths != 0 || Record.Assists != 0))
 		{
 			Record.Kills = 0;
 			Record.Deaths = 0;
+			Record.Assists = 0;
 			Record.Headshots = 0;
 			Record.DamageDealt = 0;
 			OnRecordsChanged.Broadcast(Record.PlayerId);

@@ -265,6 +265,10 @@ void ACSHUD::DrawHUD()
 	}
 
 	S = Canvas->ClipY / 1080.f;
+	if (const UCSSettingsSubsystem* UISettings = UCSSettingsSubsystem::Get(this))
+	{
+		S *= UISettings->GetPreferences().UIScale;   // UI scale (C11)
+	}
 	BindToDirector();
 
 	const double Now = GetWorld()->GetRealTimeSeconds();
@@ -275,6 +279,7 @@ void ACSHUD::DrawHUD()
 	DrawModeTag();
 	DrawKillFeed();
 	DrawFpsCounter();
+	DrawNetStats();
 
 	const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn());
 	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
@@ -329,7 +334,12 @@ void ACSHUD::DrawHUD()
 		const float Flash = Viewer->GetFlashAmount();
 		if (Flash > 0.f)
 		{
-			DrawRect(FLinearColor(1.f, 1.f, 1.f, FMath::Clamp(Flash * 1.05f, 0.f, 1.f)), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
+			// Reduced (C11, photosensitivity): a mid grey that never fully covers the screen.
+			const UCSSettingsSubsystem* FlashSettings = UCSSettingsSubsystem::Get(this);
+			const bool bReduce = FlashSettings && FlashSettings->GetPreferences().bReduceFlash;
+			const float Grey = bReduce ? 0.45f : 1.f;
+			const float MaxAlpha = bReduce ? 0.85f : 1.f;
+			DrawRect(FLinearColor(Grey, Grey, Grey, FMath::Clamp(Flash * 1.05f, 0.f, MaxAlpha)), 0.f, 0.f, Canvas->ClipX, Canvas->ClipY);
 		}
 	}
 }
@@ -354,6 +364,7 @@ TArray<FCSPlayerCombatRecord> ACSHUD::SortedScores(const ACSMatchDirector* Direc
 	}
 	Out.Sort([](const FCSPlayerCombatRecord& A, const FCSPlayerCombatRecord& B)
 	{
+		if (A.GetScore() != B.GetScore()) { return A.GetScore() > B.GetScore(); }
 		if (A.Kills != B.Kills) { return A.Kills > B.Kills; }
 		if (A.Deaths != B.Deaths) { return A.Deaths < B.Deaths; }
 		return A.PlayerId < B.PlayerId;
@@ -526,10 +537,16 @@ float ACSHUD::DrawScoreTable(const TArray<FCSPlayerCombatRecord>& Rows, float X,
 		DrawLabel(FString::FromInt(TeamScore), X + Width - 18.f, Y + 4.f, Color, 32.f, true, 1.f);
 	}
 
-	const float ColMoney = X + Width - 330.f;
-	const float ColK = X + Width - 200.f;
-	const float ColD = X + Width - 130.f;
+	// Phase 6 (D6): assists, score and ping next to kills and deaths.
+	const float ColMoney = X + Width - 500.f;
+	const float ColK = X + Width - 390.f;
+	const float ColA = X + Width - 335.f;
+	const float ColD = X + Width - 280.f;
+	const float ColScore = X + Width - 210.f;
+	const float ColPing = X + Width - 130.f;
 	const float ColState = X + Width - 50.f;
+	const ACSMatchDirector* Director = ACSMatchDirector::Get(this);
+	const int32 HostId = Director ? UCSAuthority::GetOwningPlayerId(Director) : 0;
 	float RowY = Y + 52.f;
 	DrawLabel(TEXT("PLAYER"), X + 20.f, RowY, CSUI::TextDim, 13.f, true);
 	if (bShowMoney)
@@ -537,7 +554,10 @@ float ACSHUD::DrawScoreTable(const TArray<FCSPlayerCombatRecord>& Rows, float X,
 		DrawLabel(TEXT("MONEY"), ColMoney, RowY, CSUI::TextDim, 13.f, true, 0.5f);
 	}
 	DrawLabel(TEXT("K"), ColK, RowY, CSUI::TextDim, 13.f, true, 0.5f);
+	DrawLabel(TEXT("A"), ColA, RowY, CSUI::TextDim, 13.f, true, 0.5f);
 	DrawLabel(TEXT("D"), ColD, RowY, CSUI::TextDim, 13.f, true, 0.5f);
+	DrawLabel(TEXT("SCORE"), ColScore, RowY, CSUI::TextDim, 13.f, true, 0.5f);
+	DrawLabel(TEXT("PING"), ColPing, RowY, CSUI::TextDim, 13.f, true, 0.5f);
 	RowY += 24.f;
 
 	if (Rows.Num() == 0)
@@ -556,13 +576,36 @@ float ACSHUD::DrawScoreTable(const TArray<FCSPlayerCombatRecord>& Rows, float X,
 		}
 		const FLinearColor TextColor = R.bAlive ? CSUI::Text : CSUI::TextDim;
 		DrawLabel(FString::Printf(TEXT("%d"), i + 1), X + 20.f, RowY + 8.f, CSUI::TextDim, 16.f);
-		DrawLabel(PlayerLabel(R.PlayerId), X + 52.f, RowY + 6.f, bMine ? CSUI::Accent : TextColor, 19.f, bMine);
+		const FString Name = PlayerLabel(R.PlayerId);
+		DrawLabel(Name, X + 52.f, RowY + 6.f, bMine ? CSUI::Accent : TextColor, 19.f, bMine);
+		// Tags after the name: a bot, or the player whose game runs the match.
+		const bool bBot = CSBots::IsBotId(R.PlayerId);
+		const FString Tag = bBot ? TEXT("BOT") : (R.PlayerId == HostId ? TEXT("HOST") : TEXT(""));
+		if (!Tag.IsEmpty())
+		{
+			const float TagX = X + 52.f + FMath::Min(TextWidth(Name, 19.f, bMine), 260.f) + 10.f;
+			DrawLabel(Tag, TagX, RowY + 10.f, bBot ? CSUI::TextDim : CSUI::Warning, 12.f, true);
+		}
 		if (bShowMoney)
 		{
 			DrawLabel(CSUI::MoneyText(R.Money).ToString(), ColMoney, RowY + 7.f, WithAlpha(CSUI::Money, R.bAlive ? 1.f : 0.6f), 17.f, false, 0.5f);
 		}
 		DrawLabel(FString::FromInt(R.Kills), ColK, RowY + 6.f, TextColor, 19.f, true, 0.5f);
+		DrawLabel(FString::FromInt(R.Assists), ColA, RowY + 6.f, TextColor, 19.f, false, 0.5f);
 		DrawLabel(FString::FromInt(R.Deaths), ColD, RowY + 6.f, TextColor, 19.f, false, 0.5f);
+		DrawLabel(FString::FromInt(R.GetScore()), ColScore, RowY + 6.f, TextColor, 19.f, true, 0.5f);
+		// Ping as the player's own game reports it; bots have none.
+		FString Ping = TEXT("-");
+		FLinearColor PingColor = CSUI::TextDim;
+		if (!bBot)
+		{
+			if (const ACSCharacter* Pawn = ACSMatchDirector::FindPawnForPlayer(this, R.PlayerId); Pawn && Pawn->GetPingMs() > 0)
+			{
+				Ping = FString::FromInt(Pawn->GetPingMs());
+				PingColor = Pawn->GetPingMs() <= 60 ? CSUI::Money : (Pawn->GetPingMs() <= 120 ? CSUI::Warning : CSUI::Danger);
+			}
+		}
+		DrawLabel(Ping, ColPing, RowY + 7.f, PingColor, 17.f, false, 0.5f);
 		if (!R.bAlive)
 		{
 			DrawLabel(TEXT("DEAD"), ColState, RowY + 9.f, CSUI::Danger, 13.f, true, 0.5f);
@@ -815,8 +858,14 @@ void ACSHUD::DrawCrosshair()
 	const float CX = Canvas->ClipX * 0.5f;
 	const float CY = Canvas->ClipY * 0.5f;
 
-	// Open the crosshair with the current spread so bloom is visible.
-	float Gap = CrosshairGap;
+	// The player's crosshair (C11): style, colour, size, gap, thickness,
+	// outline, and whether it opens with the weapon's spread.
+	FCSPlayerPreferences Prefs;
+	if (const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this))
+	{
+		Prefs = Settings->GetPreferences();
+	}
+	float Gap = Prefs.CrosshairGap;
 	float Alpha = 1.f;
 	if (const ACSCharacter* Pawn = Cast<ACSCharacter>(GetOwningPawn()))
 	{
@@ -831,28 +880,81 @@ void ACSHUD::DrawCrosshair()
 		{
 			return;
 		}
-		if (const UCSWeaponComponent* Weapon = Pawn->GetWeaponComponent())
+		if (const UCSWeaponComponent* Weapon = Pawn->GetWeaponComponent(); Weapon && Prefs.bCrosshairDynamic)
 		{
 			Gap += Weapon->GetCurrentSpreadDegrees() * 6.f;
 		}
 	}
-	const FLinearColor Col(CrosshairColor.R, CrosshairColor.G, CrosshairColor.B, CrosshairColor.A * Alpha);
-	const FLinearColor Outline(0.f, 0.f, 0.f, 0.55f * Alpha);
+	const FLinearColor Base = CSUI::CrosshairColors[FMath::Clamp(Prefs.CrosshairColor, 0, 5)];
+	const FLinearColor Col(Base.R, Base.G, Base.B, 0.95f * Alpha);
+	const FLinearColor Outline(0.f, 0.f, 0.f, (Prefs.bCrosshairOutline ? 0.6f : 0.f) * Alpha);
 
 	const float G = Gap * S;
-	const float L = CrosshairLength * S;
-	const float T = FMath::Max(1.f, 2.f * S);
+	const float L = Prefs.CrosshairSize * S;
+	const float T = FMath::Max(1.f, Prefs.CrosshairThickness * S);
 	const float O = FMath::Max(1.f, 1.f * S);
-	// Dark outline under each arm keeps it readable on bright walls.
-	DrawRect(Outline, CX - G - L - O, CY - T * 0.5f - O, L + 2.f * O, T + 2.f * O);
-	DrawRect(Outline, CX + G - O, CY - T * 0.5f - O, L + 2.f * O, T + 2.f * O);
-	DrawRect(Outline, CX - T * 0.5f - O, CY - G - L - O, T + 2.f * O, L + 2.f * O);
-	DrawRect(Outline, CX - T * 0.5f - O, CY + G - O, T + 2.f * O, L + 2.f * O);
-	DrawRect(Col, CX - G - L, CY - T * 0.5f, L, T);
-	DrawRect(Col, CX + G, CY - T * 0.5f, L, T);
-	DrawRect(Col, CX - T * 0.5f, CY - G - L, T, L);
-	DrawRect(Col, CX - T * 0.5f, CY + G, T, L);
-	DrawRect(Col, CX - T * 0.5f, CY - T * 0.5f, T, T);
+	auto Bar = [&](float X, float Y, float W, float H)
+	{
+		DrawRect(Outline, X - O, Y - O, W + 2.f * O, H + 2.f * O);
+		DrawRect(Col, X, Y, W, H);
+	};
+	const int32 Style = FMath::Clamp(Prefs.CrosshairStyle, 0, 3);
+	if (Style == 3)
+	{
+		// Circle: short segments around the gap, plus a centre dot.
+		const float R = FMath::Max(G + L * 0.5f, 3.f * S);
+		constexpr int32 Segments = 24;
+		for (int32 i = 0; i < Segments; ++i)
+		{
+			const float A = i * UE_TWO_PI / Segments;
+			Bar(CX + FMath::Cos(A) * R - T * 0.5f, CY + FMath::Sin(A) * R - T * 0.5f, T, T);
+		}
+		Bar(CX - T * 0.5f, CY - T * 0.5f, T, T);
+		return;
+	}
+	if (Style == 0 || Style == 1)
+	{
+		Bar(CX - G - L, CY - T * 0.5f, L, T);
+		Bar(CX + G, CY - T * 0.5f, L, T);
+		Bar(CX - T * 0.5f, CY - G - L, T, L);
+		Bar(CX - T * 0.5f, CY + G, T, L);
+	}
+	if (Style == 1 || Style == 2)
+	{
+		Bar(CX - T * 0.5f, CY - T * 0.5f, T, T);
+	}
+}
+
+void ACSHUD::DrawNetStats()
+{
+	const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
+	if (!Settings || !Settings->GetPreferences().bShowNetStats)
+	{
+		return;
+	}
+	// Ping once a second from this game's own measurement; jitter = the mean
+	// change between those samples.
+	const double Now = FPlatformTime::Seconds();
+	if (Now - LastPingSample >= 1.0)
+	{
+		LastPingSample = Now;
+		PingSamples.Add(UCSAuthority::GetRttMs(this));
+		if (PingSamples.Num() > 10)
+		{
+			PingSamples.RemoveAt(0);
+		}
+	}
+	float Jitter = 0.f;
+	for (int32 i = 1; i < PingSamples.Num(); ++i)
+	{
+		Jitter += FMath::Abs(PingSamples[i] - PingSamples[i - 1]);
+	}
+	Jitter = PingSamples.Num() > 1 ? Jitter / (PingSamples.Num() - 1) : 0.f;
+	const int32 Ping = PingSamples.Num() ? PingSamples.Last() : 0;
+	const bool bOnline = UCSAuthority::IsSessionActive(this);
+	const FString NetRole = !bOnline ? TEXT("OFFLINE") : (UCSAuthority::IsGameAuthority(this) ? TEXT("HOST") : TEXT("CLIENT"));
+	const FLinearColor Color = !bOnline ? CSUI::TextDim : (Ping <= 60 ? CSUI::Money : (Ping <= 120 ? CSUI::Warning : CSUI::Danger));
+	DrawLabel(FString::Printf(TEXT("%s  PING %d ms  JITTER %.0f ms"), *NetRole, Ping, Jitter), 24.f, 72.f, Color, 14.f, true);
 }
 
 void ACSHUD::DrawHitMarker()

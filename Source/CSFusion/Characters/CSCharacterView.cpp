@@ -294,12 +294,20 @@ void ACSCharacter::UpdateFirstPersonView(float DeltaSeconds)
 		ActionRotation = FMath::Lerp(FRotator(6.f, 28.f, -58.f), FRotator(22.f, -26.f, 38.f), Turn) * Envelope;
 	}
 
-	const FVector ProcOffset = (Bob + FVector(0.f, -LookSwayNow.X - StrafeTilt * 0.6f, -LookSwayNow.Y + Breath * 0.25f + AirLag * 1.8f)) * Hip01
-		+ FVector(-FireKick * FMath::Lerp(2.4f, 1.3f, Ease), 0.f, -WeaponLandDip * FMath::Lerp(2.2f, 0.8f, Ease)) + ActionOffset;
+	// Camera motion setting (C11): breathing, strafe tilt, air lag and the
+	// landing dip scale down to nothing; fire kick and sway follow the mouse
+	// and the weapon, so they stay.
+	const float Motion = CameraMotionScale();
+	const float BreathM = Breath * Motion;
+	const float TiltM = StrafeTilt * Motion;
+	const float LagM = AirLag * Motion;
+	const float DipM = WeaponLandDip * Motion;
+	const FVector ProcOffset = (Bob * Motion + FVector(0.f, -LookSwayNow.X - TiltM * 0.6f, -LookSwayNow.Y + BreathM * 0.25f + LagM * 1.8f)) * Hip01
+		+ FVector(-FireKick * FMath::Lerp(2.4f, 1.3f, Ease), 0.f, -DipM * FMath::Lerp(2.2f, 0.8f, Ease)) + ActionOffset;
 	const FRotator ProcRotation = FRotator(
-			FireKick * FMath::Lerp(3.f, 1.f, Ease) + Breath * 0.2f + AirLag * 2.f * Hip01 - WeaponLandDip * FMath::Lerp(3.f, 1.f, Ease),
+			FireKick * FMath::Lerp(3.f, 1.f, Ease) + BreathM * 0.2f + LagM * 2.f * Hip01 - DipM * FMath::Lerp(3.f, 1.f, Ease),
 			0.f,
-			(-LookSwayNow.X * 2.f - StrafeTilt * 4.f) * Hip01 - StrafeTilt * 0.8f * Ease)
+			(-LookSwayNow.X * 2.f - TiltM * 4.f) * Hip01 - TiltM * 0.8f * Ease)
 		+ ActionRotation;
 
 	// --- Weapon in camera space ------------------------------------------------
@@ -463,7 +471,18 @@ void ACSCharacter::UpdateCameraHeight(float DeltaSeconds)
 	const double Time = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	const FVector Shake(0.f, FMath::Sin(Time * 71.0) * ShakeAmp, FMath::Sin(Time * 57.0 + 1.3) * ShakeAmp);
 
-	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, CameraZ + LandDip) + Shake);
+	const float Motion = CameraMotionScale();
+	FirstPersonCamera->SetRelativeLocation(FVector(0.f, 0.f, CameraZ + LandDip * Motion) + Shake * Motion);
+}
+
+float ACSCharacter::CameraMotionScale() const
+{
+	if (!IsLocallyControlled() || IsBot())
+	{
+		return 1.f;
+	}
+	const UCSSettingsSubsystem* Settings = UCSSettingsSubsystem::Get(this);
+	return Settings ? Settings->GetPreferences().CameraMotion : 1.f;
 }
 
 void ACSCharacter::StartInspect()

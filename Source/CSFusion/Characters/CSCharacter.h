@@ -275,6 +275,10 @@ protected:
 	void Input_FireStart(const FInputActionValue& Value);
 	void Input_FireStop(const FInputActionValue& Value);
 	void Input_AimStart(const FInputActionValue& Value);
+	/** Aim is press-to-toggle in the settings (C11) rather than hold. */
+	bool IsAimToggle() const;
+	/** The camera motion setting (C11), 1 for anyone but the local player. */
+	float CameraMotionScale() const;
 	void Input_AimStop(const FInputActionValue& Value);
 	void Input_Reload(const FInputActionValue& Value);
 	void Input_Interact(const FInputActionValue& Value);
@@ -445,6 +449,15 @@ protected:
 	UPROPERTY(Replicated)
 	int32 Heartbeat = 0;
 
+	/**
+	 * v2.0 phase 6: this player's round trip to the Photon cloud, ms, for the
+	 * scoreboard. Written by the owner once a second with the heartbeat; the
+	 * authority cannot measure other players' connections itself. Display
+	 * only - nothing trusts it.
+	 */
+	UPROPERTY(Replicated)
+	int32 PingMs = 0;
+
 	/** Set once by the authority when the pawn is spawned as a bot. */
 	UPROPERTY(Replicated)
 	bool bIsBot = false;
@@ -466,6 +479,7 @@ protected:
 
 public:
 	int32 GetHeartbeat() const { return Heartbeat; }
+	int32 GetPingMs() const { return PingMs; }
 
 protected:
 

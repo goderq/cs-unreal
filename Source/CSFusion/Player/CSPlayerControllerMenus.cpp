@@ -22,6 +22,7 @@
 #include "UI/CSHUD.h"
 #include "UI/CSUIStyle.h"
 #include "UI/SCSPauseMenu.h"
+#include "UI/SCSSettingsPanel.h"
 #include "UI/SCSShopPanel.h"
 #include "Combat/CSMatchDirector.h"
 #include "UnrealClient.h"
@@ -297,6 +298,20 @@ void ACSPlayerController::CSTestUI()
 					PauseMenu->ShowSettings();
 				}
 				TestScreenshot(TEXT("settings"));
+				// Phase 6: every settings tab (settings_tab1..5), each after its ease-in.
+				for (int32 Tab = 1; Tab <= 5; ++Tab)
+				{
+					FTimerHandle TabTimer;
+					GetWorldTimerManager().SetTimer(TabTimer, [this, Tab]()
+					{
+						if (PauseMenu.IsValid() && PauseMenu->GetSettingsPanel())
+						{
+							PauseMenu->GetSettingsPanel()->ShowTab(Tab);
+						}
+						FTimerHandle ShotTimer;
+						GetWorldTimerManager().SetTimer(ShotTimer, [this, Tab]() { TestScreenshot(FString::Printf(TEXT("settings_tab%d"), Tab)); }, 0.35f, false);
+					}, 0.5f * Tab, false);
+				}
 
 				GetWorldTimerManager().SetTimer(TestUITimer, [this]()
 				{
@@ -354,7 +369,7 @@ void ACSPlayerController::CSTestUI()
 							CSHud ? CSHud->GetKillFeedCount() : -1, CSHud ? CSHud->GetSecondsSinceHitMarker() : -1.0);
 						TestScreenshot(TEXT("hud_combat"));
 					}, 11.f, false);
-				}, 1.5f, false);
+				}, 3.5f, false);   // after the tab screenshots
 			}, 1.5f, false);
 	}, 1.0f, false);
 }

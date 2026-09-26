@@ -33,6 +33,8 @@ public:
 
 	void ShowSettings();
 
+	SCSSettingsPanel* GetSettingsPanel() const { return Settings.Get(); }
+
 private:
 	FText GetSessionLine() const;
 
@@ -40,6 +42,6 @@ private:
 	FSimpleDelegate OnResume;
 	FSimpleDelegate OnLeaveMatch;
 
-	TSharedPtr<SWidgetSwitcher> Switcher;
+	TSharedPtr<class SCSAnimatedSwitcher> Switcher;
 	TSharedPtr<SCSSettingsPanel> Settings;
 };

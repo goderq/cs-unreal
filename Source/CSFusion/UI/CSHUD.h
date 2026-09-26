@@ -118,14 +118,10 @@ protected:
 	/** Colour a player is drawn in: team colour, or you / others in free for all. */
 	FLinearColor PlayerColor(int32 PlayerId) const;
 
-	UPROPERTY(EditDefaultsOnly, Category = "CS|HUD")
-	FLinearColor CrosshairColor = FLinearColor(0.35f, 1.f, 0.55f, 0.95f);
-
-	UPROPERTY(EditDefaultsOnly, Category = "CS|HUD")
-	float CrosshairGap = 6.f;
-
-	UPROPERTY(EditDefaultsOnly, Category = "CS|HUD")
-	float CrosshairLength = 9.f;
+	/** Ping, jitter and whether this game hosts the match (C11 option). */
+	void DrawNetStats();
+	double LastPingSample = 0.0;
+	TArray<int32> PingSamples;
 
 	UPROPERTY(EditDefaultsOnly, Category = "CS|HUD")
 	float KillFeedSeconds = 6.f;
