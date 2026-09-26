@@ -54,6 +54,10 @@
 			"Enabled": false
 		},
 		{
+			"Name": "AndroidFileServer",
+			"Enabled": false
+		},
+		{
 			"Name": "PythonScriptPlugin",
 			"Enabled": true,
 			"TargetAllowList": [
