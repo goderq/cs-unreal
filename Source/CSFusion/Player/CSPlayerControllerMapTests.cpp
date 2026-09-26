@@ -51,6 +51,7 @@ namespace
 {
 	constexpr float GridStep = 100.f;     // 1 m: a 2 m grid missed the 1.5-2 m passages players use
 	constexpr float EyeHeight = 150.f;     // above a navmesh point, which lies on the floor
+	constexpr float SightRadius = 5.f;     // sightlines: a 10 cm wide look (see the sweep below)
 	constexpr float RunSpeed = 420.f;      // UCSCharacterMovementComponent::WalkSpeed
 	constexpr float SightCap = 12000.f;
 	constexpr float Elevated = 100.f;      // above the ground floor counts as "up"
@@ -477,8 +478,13 @@ void ACSPlayerController::CSTestMapAudit()
 		{
 			const float Angle = d * UE_TWO_PI / 16.f;
 			const FVector Dir(FMath::Cos(Angle), FMath::Sin(Angle), 0.f);
+			// v2.0 phase 8: a 10 cm wide look, not an infinitely thin line. The
+			// packaged Depot saw 88 m exactly through the corner of a shelf
+			// (x -1000, y -700) that the editor's collision closed: a sightline
+			// that exists only through a corner is not one a player has.
 			FHitResult Hit;
-			const float Dist = World->LineTraceSingleByChannel(Hit, Eye, Eye + Dir * SightCap, ECC_Visibility, Params) ? Hit.Distance : SightCap;
+			const float Dist = World->SweepSingleByChannel(Hit, Eye, Eye + Dir * SightCap, FQuat::Identity, ECC_Visibility,
+				FCollisionShape::MakeSphere(SightRadius), Params) ? Hit.Distance : SightCap;
 			Max = FMath::Max(Max, Dist);
 			if (Dist > 5000.f)
 			{
