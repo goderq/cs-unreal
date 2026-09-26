@@ -53,8 +53,7 @@
     сам плагин, RuntimeDependencies).
   - Собрать без DLSS можно только явно: `-NoDLSS`.
   - Проверено 26.09: Development-сборка за 4 минуты, в ней
-    `CSFusion\Plugins\DLSS\Binaries\ThirdParty\Win64
-vngx_dlss.dll`;
+    `CSFusion\Plugins\DLSS\Binaries\ThirdParty\Win64\nvngx_dlss.dll`;
     `run_tests.ps1 -Packaged -Only graphics` — 12/12, DLSS включён в самой
     собранной игре.
 - **Не в публичном git** — только файлы самого плагина; остальное ниже про
