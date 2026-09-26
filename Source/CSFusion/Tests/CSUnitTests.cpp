@@ -13,6 +13,8 @@
 #include "Audio/CSAudio.h"
 #include "Audio/CSAudioSettings.h"
 #include "Graphics/CSGraphics.h"
+#include "Items/CSItemDefinition.h"
+#include "Items/CSItemSettings.h"
 #include "Kismet/GameplayStatics.h"
 #include "Settings/CSSettingsSave.h"
 #include "Characters/CSCharacter.h"
@@ -726,6 +728,30 @@ bool FCSUnitAudioMixingTest::RunTest(const FString& Parameters)
 		{
 			TestEqual(TEXT("surface type"), UPhysicalMaterial::DetermineSurfaceType(Material), Surface.Value);
 		}
+	}
+	return true;
+}
+
+// v2.0 phase 7 (C18): the combat event carries the weapon as a registry
+// index; every peer turns it back into the same kill feed name.
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCSUnitCombatWeaponTest, "CSFusion.Unit.Net.CombatWeapon", CSUnitFlags)
+bool FCSUnitCombatWeaponTest::RunTest(const FString& Parameters)
+{
+	const UCSItemSettings* Items = UCSItemSettings::Get();
+	TestEqual(TEXT("no item -> no name"), ACSMatchDirector::CombatWeaponName(INDEX_NONE), FString());
+	TestEqual(TEXT("an index outside the registry -> no name"), ACSMatchDirector::CombatWeaponName(Items->Items.Num() + 7), FString());
+
+	const int32 Grenade = Items->FindItemIndex(TEXT("grenade"));
+	TestTrue(TEXT("the HE grenade is in the registry"), Grenade != INDEX_NONE);
+	TestEqual(TEXT("a grenade kill reads as before (v1.2 sent the text 'HE Grenade')"), ACSMatchDirector::CombatWeaponName(Grenade), FString(TEXT("HE Grenade")));
+
+	const int32 Rifle = Items->FindItemIndex(TEXT("ak47"));
+	const UCSItemDefinition* RifleItem = Items->GetItem(Rifle);
+	const UCSWeaponDefinition* RifleWeapon = RifleItem ? RifleItem->Weapon.LoadSynchronous() : nullptr;
+	TestNotNull(TEXT("the AK-47 has a weapon"), RifleWeapon);
+	if (RifleWeapon)
+	{
+		TestEqual(TEXT("a weapon kill reads as its weapon's name"), ACSMatchDirector::CombatWeaponName(Rifle), RifleWeapon->DisplayName.ToString());
 	}
 	return true;
 }

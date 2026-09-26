@@ -1641,15 +1641,19 @@ void ACSMatchDirector::QueueCombatEvent(int32 VictimId, int32 InstigatorId, floa
 	Event.bKilled = bKilled;
 	Event.Zone = Zone;
 
-	if (!CombatWeaponOverride.IsEmpty())
+	if (CombatItemOverride != INDEX_NONE)
 	{
-		Event.WeaponName = CombatWeaponOverride;
+		Event.ItemIndex = CombatItemOverride;
 	}
-	else
+	else if (const ACSPlayerInventory* Inventory = ACSPlayerInventory::Find(this, InstigatorId))
 	{
-		const FCSLoadoutView Loadout = GetLoadout(InstigatorId);
-		Event.WeaponName = Loadout.Weapon ? Loadout.Weapon->DisplayName.ToString() : FString();
+		FCSInventorySlot InHand;
+		if (Inventory->GetSlot(Inventory->GetEquippedSlot(), InHand) && !InHand.IsEmpty())
+		{
+			Event.ItemIndex = InHand.ItemIndex;
+		}
 	}
+	Event.WeaponName = CombatWeaponName(Event.ItemIndex);
 
 	if (const ACSCharacter* Shooter = FindPawnForPlayer(this, InstigatorId))
 	{
@@ -1679,16 +1683,28 @@ void ACSMatchDirector::FlushCombatEvents()
 		// HUD is fed through the same receive handler as everyone else's.
 		if (bInSession)
 		{
-			RpcCombatEvent(Event.VictimId, Event.InstigatorId, Event.Damage, Event.bKilled, Zone, Event.WeaponName, Event.FromLocation);
+			RpcCombatEvent(Event.VictimId, Event.InstigatorId, Event.Damage, Event.bKilled, Zone, Event.ItemIndex, Event.FromLocation);
 		}
 		else
 		{
-			RpcCombatEvent_Receive(Event.VictimId, Event.InstigatorId, Event.Damage, Event.bKilled, Zone, Event.WeaponName, Event.FromLocation);
+			RpcCombatEvent_Receive(Event.VictimId, Event.InstigatorId, Event.Damage, Event.bKilled, Zone, Event.ItemIndex, Event.FromLocation);
 		}
 	}
 }
 
-void ACSMatchDirector::RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation)
+FString ACSMatchDirector::CombatWeaponName(int32 ItemIndex)
+{
+	const UCSItemDefinition* Item = UCSItemSettings::Get()->GetItem(ItemIndex);
+	if (!Item)
+	{
+		return FString();
+	}
+	// A grenade's weapon asset only drives the model and the hands; its name is the item's.
+	const UCSWeaponDefinition* Weapon = Item->ItemType == ECSItemType::Grenade ? nullptr : Item->Weapon.LoadSynchronous();
+	return Weapon ? Weapon->DisplayName.ToString() : Item->DisplayName.ToString();
+}
+
+void ACSMatchDirector::RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, int32 ItemIndex, FVector FromLocation)
 {
 	if (!CSRpcGuard::FromMasterClient(this, TEXT("RpcCombatEvent"))
 		|| !CSValidate::IsSaneNumber(Damage, 10000.0) || !CSValidate::IsSaneLocation(FromLocation))
@@ -1701,12 +1717,14 @@ void ACSMatchDirector::RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId
 	Event.Damage = Damage;
 	Event.bKilled = bKilled;
 	Event.Zone = static_cast<ECSHitZone>(FMath::Clamp(Zone, 0, 255));
-	Event.WeaponName = WeaponName;
+	// An index outside the registry is shown as no weapon, not trusted.
+	Event.ItemIndex = UCSItemSettings::Get()->IsValidIndex(ItemIndex) ? ItemIndex : INDEX_NONE;
+	Event.WeaponName = CombatWeaponName(Event.ItemIndex);
 	Event.FromLocation = FromLocation;
 
 	UE_LOG(LogCSCombat, Log, TEXT("Combat event: %d -> %d, %.0f dmg%s%s (%s)"),
 		InstigatorId, VictimId, Damage, bKilled ? TEXT(", KILL") : TEXT(""),
-		Event.Zone == ECSHitZone::Head ? TEXT(", head") : TEXT(""), *WeaponName);
+		Event.Zone == ECSHitZone::Head ? TEXT(", head") : TEXT(""), *Event.WeaponName);
 
 	OnCombatEvent.Broadcast(Event);
 }
@@ -2162,13 +2180,13 @@ void ACSMatchDirector::ExplodeGrenade(ACSGrenade* Grenade)
 		}
 	}
 
-	CombatWeaponOverride = TEXT("HE Grenade");
+	CombatItemOverride = UCSItemSettings::Get()->FindItemIndex(TEXT("grenade"));
 	for (const TPair<int32, float>& Hit : Hits)
 	{
 		ApplyDamage(Hit.Key, ThrowerId, Hit.Value, ECSHitZone::Torso);
 	}
 	FlushCombatEvents();
-	CombatWeaponOverride.Reset();
+	CombatItemOverride = INDEX_NONE;
 
 	// Right away here, so the fuse check does not fire again while the RPC
 	// travels back to this peer (the receive handler then finds it done).

@@ -192,6 +192,9 @@ struct FCSCombatEvent
 	float Damage = 0.f;
 	bool bKilled = false;
 	ECSHitZone Zone = ECSHitZone::None;
+	/** UCSItemSettings registry index of the weapon or grenade, INDEX_NONE if unknown. */
+	int32 ItemIndex = INDEX_NONE;
+	/** Kill feed name, resolved from ItemIndex on each peer (ACSMatchDirector::CombatWeaponName). */
 	FString WeaponName;
 	FVector FromLocation = FVector::ZeroVector;
 };
@@ -417,10 +420,15 @@ public:
 	/**
 	 * One per victim and shooter per frame: pellets of a shotgun blast are
 	 * summed by the authority before sending (see FlushCombatEvents).
+	 * v2.0 phase 7 (C18): the weapon travels as its registry index, not its
+	 * name - 4 bytes instead of a string on every hit, and no free text.
 	 */
 	SEND_FUSIONRPC(TargetAllClients)
-	void RpcCombatEvent(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation);
-	void RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, FString& WeaponName, FVector FromLocation);
+	void RpcCombatEvent(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, int32 ItemIndex, FVector FromLocation);
+	void RpcCombatEvent_Receive(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, int32 Zone, int32 ItemIndex, FVector FromLocation);
+
+	/** Kill feed name of a registry item: the weapon's name, a grenade's own; empty for INDEX_NONE. */
+	static FString CombatWeaponName(int32 ItemIndex);
 
 protected:
 	/** Authority-side respawn timer and reload completion. */
@@ -548,8 +556,8 @@ private:
 	void FlushCombatEvents();
 	void QueueCombatEvent(int32 VictimId, int32 InstigatorId, float Damage, bool bKilled, ECSHitZone Zone);
 
-	/** Kill feed name while a grenade blast is being applied (else the thrower's weapon in hand). */
-	FString CombatWeaponOverride;
+	/** Kill feed item while a grenade blast is being applied (else the thrower's weapon in hand). */
+	int32 CombatItemOverride = INDEX_NONE;
 	int32 NextGrenadeSerial = 1;
 	TMap<int32, double> LastThrowTime;
 	/**
