@@ -6,6 +6,7 @@
 
 #include "Core/CSAuthority.h"
 #include "Core/CSLog.h"
+#include "Core/CSWorldCache.h"
 #include "EngineUtils.h"
 #include "Items/CSItemDefinition.h"
 #include "Items/CSItemSettings.h"
@@ -46,14 +47,9 @@ ACSPlayerInventory* ACSPlayerInventory::Find(const UObject* WorldContextObject, 
 		return nullptr;
 	}
 
-	for (TActorIterator<ACSPlayerInventory> It(World); It; ++It)
-	{
-		if (It->OwnerPlayerId == PlayerId && !It->IsActorBeingDestroyed())
-		{
-			return *It;
-		}
-	}
-	return nullptr;
+	UCSWorldCache* Cache = UCSWorldCache::Get(World);
+	return UCSWorldCache::FindOwned<ACSPlayerInventory>(World, Cache ? &Cache->Inventories : nullptr, PlayerId,
+		[](const ACSPlayerInventory* Inventory) { return Inventory->OwnerPlayerId; });
 }
 
 int32 ACSPlayerInventory::SlotForItem(const UCSItemDefinition* Item)

@@ -15,6 +15,7 @@
 #include "Core/CSAuthority.h"
 #include "Core/CSRpcGuard.h"
 #include "Core/CSValidate.h"
+#include "Core/CSWorldCache.h"
 #include "Core/CSCombatSettings.h"
 #include "Core/CSLog.h"
 #include "Core/CSModeSettings.h"
@@ -99,8 +100,18 @@ ACSMatchDirector* ACSMatchDirector::Get(const UObject* WorldContextObject)
 		return nullptr;
 	}
 
+	// One director per world; remembered, not searched for on every call (C8).
+	UCSWorldCache* Cache = UCSWorldCache::Get(World);
+	if (ACSMatchDirector* Known = Cache ? Cache->Director.Get() : nullptr)
+	{
+		return Known;
+	}
 	for (TActorIterator<ACSMatchDirector> It(const_cast<UWorld*>(World)); It; ++It)
 	{
+		if (Cache)
+		{
+			Cache->Director = *It;
+		}
 		return *It;
 	}
 	return nullptr;
@@ -337,14 +348,9 @@ ACSCharacter* ACSMatchDirector::FindPawnForPlayer(const UObject* WorldContextObj
 	{
 		return nullptr;
 	}
-	for (TActorIterator<ACSCharacter> It(World); It; ++It)
-	{
-		if (!It->IsActorBeingDestroyed() && It->GetOwningPlayerId() == PlayerId)
-		{
-			return *It;
-		}
-	}
-	return nullptr;
+	UCSWorldCache* Cache = UCSWorldCache::Get(World);
+	return UCSWorldCache::FindOwned<ACSCharacter>(World, Cache ? &Cache->Pawns : nullptr, PlayerId,
+		[](const ACSCharacter* Pawn) { return Pawn->GetOwningPlayerId(); });
 }
 
 bool ACSMatchDirector::GetLastKnownLocation(int32 PlayerId, FVector& OutLocation) const
