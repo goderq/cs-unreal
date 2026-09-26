@@ -90,6 +90,11 @@ if (-not $NoDLSS) {
 $saved = Join-Path $staged "CSFusion\Saved"
 if (Test-Path $saved) { Remove-Item $saved -Recurse -Force }
 
+# v2.0 phase 7 (C15): -prereqs stages the ARM64 VC++ runtime next to the x64
+# one (11 MB); the game is built for x64 only.
+$arm64 = Join-Path $staged "Engine\Extras\Redist\en-us\vc_redist.arm64.exe"
+if (Test-Path $arm64) { Remove-Item $arm64 -Force }
+
 # --- Account keys -----------------------------------------------------------------
 # Staging only picks up Default*.ini, so Config\Backend.ini is copied in by hand.
 # Without it the packaged game cannot sign anybody in - and signing in is what

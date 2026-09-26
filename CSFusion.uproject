@@ -50,6 +50,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "NNEDenoiser",
+			"Enabled": false
+		},
+		{
 			"Name": "PythonScriptPlugin",
 			"Enabled": true,
 			"TargetAllowList": [
