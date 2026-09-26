@@ -42,6 +42,8 @@ $Suites = @(
     @{ Name = "doubledrop"; Flags = "-cstestdoubledrop";       Done = "DOUBLE DROP TEST RESULT";       Timeout = 60 },
     @{ Name = "ui";         Flags = "-cstestui";               Done = "UI TEST RESULT: combat HUD";    Timeout = 80 },
     @{ Name = "bots";       Flags = "-bots=4 -cstestbots";     Done = "BOT TEST RESULT";               Timeout = 150 },
+    @{ Name = "botsoldtown"; Flags = "-bots=4 -cstestbots";    Done = "BOT TEST RESULT";               Timeout = 150; Map = "/Game/Maps/Lvl_OldTown" },
+    @{ Name = "botswarehouse"; Flags = "-bots=4 -cstestbots";  Done = "BOT TEST RESULT";               Timeout = 150; Map = "/Game/Maps/Lvl_Warehouse" },
     @{ Name = "weapons";    Flags = "-cstestweapons";          Done = "WEAPON TEST: done";             Timeout = 150 },
     @{ Name = "round";     Flags = "-roundtime=20 -bots=2 -cstestround"; Done = "SCORES RESET|ROUND FLOW BROKEN"; Timeout = 120 },
     @{ Name = "cheat";     Flags = "-cstestcheat";            Done = "suspension lifted";             Timeout = 90 },
@@ -53,6 +55,10 @@ $Suites = @(
     @{ Name = "surfaces";  Flags = "-cstestsurfaces";         Done = "SURFACE TEST RESULT";           Timeout = 60; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "tourdepot"; Flags = "-cstesttour";             Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_Depot" },
     @{ Name = "touroldtown"; Flags = "-cstesttour";           Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_OldTown" },
+    @{ Name = "tourwarehouse"; Flags = "-cstesttour";         Done = "TOUR RESULT";                   Timeout = 150; Map = "/Game/Maps/Lvl_Warehouse" },
+    @{ Name = "mapdepot";  Flags = "-cstestmapaudit";         Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_Depot" },
+    @{ Name = "mapoldtown"; Flags = "-cstestmapaudit";        Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_OldTown" },
+    @{ Name = "mapwarehouse"; Flags = "-cstestmapaudit";      Done = "MAP AUDIT: done";               Timeout = 180; Map = "/Game/Maps/Lvl_Warehouse" },
     @{ Name = "perf";       Flags = "-bots=8 -cstestperf";     Done = "PERF TEST RESULT";              Timeout = 120 }
 )
 

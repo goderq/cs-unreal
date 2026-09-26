@@ -260,6 +260,10 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestUITimer, this, &ACSPlayerController::CSTestUI, 10.f, false);
 	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("cstestmapaudit")))
+	{
+		GetWorldTimerManager().SetTimer(TestMapTimer, this, &ACSPlayerController::CSTestMapAudit, 6.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstesttour")))
 	{
 		GetWorldTimerManager().SetTimer(TestModesTimer, this, &ACSPlayerController::CSTestTour, 8.f, false);

@@ -149,6 +149,18 @@ protected:
 	float ViewAimTook = -1.f;
 	float ViewMaxDip = 0.f;
 	int32 ViewJumpTicks = 0;
+	/** -cstestmapaudit (phase 4): spawns, navmesh reach, routes, sightlines, machines, reverb, budgets. */
+	UFUNCTION(Exec)
+	void CSTestMapAudit();
+	void MapAuditBudgetStep();
+	FTimerHandle TestMapTimer;
+	FDelegateHandle MapBudgetFrameHandle;
+	TArray<FTransform> MapBudgetViews;
+	int32 MapBudgetStop = -1;
+	int32 MapBudgetDraws = 0;
+	int32 MapBudgetPrims = 0;
+	int32 MapBudgetWorstDraws = 0;
+	int32 MapBudgetWorstPrims = 0;
 	/** -cstestfx (C10): effect gallery screenshots and both effect pools. */
 	void CSTestFX();
 	void CSTestFXStep();

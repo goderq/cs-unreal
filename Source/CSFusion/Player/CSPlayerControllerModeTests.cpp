@@ -116,11 +116,19 @@ void ACSPlayerController::CSTestTour()
 	{
 		Starts.Add(*It);
 	}
-	Starts.Sort([](const AActor& A, const AActor& B) { return A.GetName() < B.GetName(); });
+	// By position, not by name: names change each time a map is rebuilt, and
+	// before/after screenshots must show the same places.
+	Starts.Sort([](const AActor& A, const AActor& B)
+	{
+		const FVector PA = A.GetActorLocation(), PB = B.GetActorLocation();
+		return PA.X != PB.X ? PA.X < PB.X : PA.Y < PB.Y;
+	});
 	TourPoints.Reset();
 	for (int32 i = 0; i < Starts.Num(); i += 4)
 	{
 		TourPoints.Add(Starts[i]->GetActorTransform());
+		UE_LOG(LogCS, Log, TEXT("TOUR: stop %d at %s, yaw %.0f"), TourPoints.Num() - 1,
+			*Starts[i]->GetActorLocation().ToCompactString(), Starts[i]->GetActorRotation().Yaw);
 	}
 	TourIndex = -1;
 	const FString Map = GetWorld()->GetMapName();
@@ -137,27 +145,38 @@ void ACSPlayerController::CSTestTour()
 		{
 			TestScreenshot(FString::Printf(TEXT("tour_%s_%02d"), *Map.Replace(TEXT("UEDPIE_0_"), TEXT("")), TourIndex));
 		}
-		++TourIndex;
-		if (TourIndex < TourPoints.Num())
+		// The screenshot is written at the end of the frame: move on a moment
+		// later, or each picture shows the next stop.
+		FTimerHandle MoveOn;
+		GetWorldTimerManager().SetTimer(MoveOn, [this]()
 		{
-			const FTransform& T = TourPoints[TourIndex];
-			Pawn->SetActorLocation(T.GetLocation() + FVector(0.f, 0.f, 20.f), false, nullptr, ETeleportType::TeleportPhysics);
-			SetControlRotation(FRotator(-6.f, T.Rotator().Yaw, 0.f));
-			return;
-		}
-		if (TourIndex == TourPoints.Num())
-		{
-			// Overview from high above the centre, looking down.
-			if (UCharacterMovementComponent* Move = Pawn->GetCharacterMovement())
+			ACSCharacter* Walker = Cast<ACSCharacter>(GetPawn());
+			if (!Walker)
 			{
-				Move->SetMovementMode(MOVE_Flying);
+				return;
 			}
-			Pawn->SetActorLocation(FVector(-3400.f, -3000.f, 3400.f), false, nullptr, ETeleportType::TeleportPhysics);
-			SetControlRotation(FRotator(-42.f, 40.f, 0.f));
-			return;
-		}
-		GetWorldTimerManager().ClearTimer(TestModesTimer);
-		UE_LOG(LogCS, Log, TEXT("TOUR RESULT: %d screenshots -> TOUR DONE"), TourIndex);
+			++TourIndex;
+			if (TourIndex < TourPoints.Num())
+			{
+				const FTransform& T = TourPoints[TourIndex];
+				Walker->SetActorLocation(T.GetLocation() + FVector(0.f, 0.f, 20.f), false, nullptr, ETeleportType::TeleportPhysics);
+				SetControlRotation(FRotator(-6.f, T.Rotator().Yaw, 0.f));
+				return;
+			}
+			if (TourIndex == TourPoints.Num())
+			{
+				// Overview from high above the centre, looking down.
+				if (UCharacterMovementComponent* Move = Walker->GetCharacterMovement())
+				{
+					Move->SetMovementMode(MOVE_Flying);
+				}
+				Walker->SetActorLocation(FVector(-3400.f, -3000.f, 3400.f), false, nullptr, ETeleportType::TeleportPhysics);
+				SetControlRotation(FRotator(-42.f, 40.f, 0.f));
+				return;
+			}
+			GetWorldTimerManager().ClearTimer(TestModesTimer);
+			UE_LOG(LogCS, Log, TEXT("TOUR RESULT: %d screenshots -> TOUR DONE"), TourIndex);
+		}, 0.5f, false);
 	}, 2.5f, true);
 }
 
