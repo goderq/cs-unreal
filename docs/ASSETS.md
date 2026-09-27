@@ -102,6 +102,32 @@ Quaternius выше.
 Этот файл и есть их дизайн. Треугольная призма для фронтонов
 (`Content/Environment/Meshes/SM_Wedge`) сделана им же через Geometry Script.
 
+### Карты v2.1: Poly Haven (скачивание одобрено владельцем 27.09.2026, 447 МБ исходников)
+
+| Что | Путь в проекте | Откуда | В git |
+|---|---|---|---|
+| 16 PBR-наборов 2K: road_damaged, concrete_floor_damaged_01, gravel_ground_01, dry_ground_01, leafy_grass, factory_wall, container_side, patterned_cobblestone, pavement_03, worn_cracked_plaster, red_plaster_weathered, roof_tiles_14, concrete_floor_painted, asphalt_04, exterior_wall_cladding, blue_metal_plate | `Content/Environment/V21/Textures`, варианты (≈54 MI) в `Content/Environment/V21/Surfaces` | [polyhaven.com](https://polyhaven.com), официальный API, `Scripts/maps/download_assets.py` | да (uasset); исходники в `SourceArt/_download/polyhaven_v21` — нет |
+| 21 PBR-набор 1K: box_profile_metal_sheet, rusty_metal_grid, painted_metal_shutter, concrete_block_wall, blue_plaster_weathered, yellow_plaster_02, damaged_plaster, mixed_brick_wall, large_sandstone_blocks_01, park_dirt, brick_pavement, anti_slip_concrete, concrete_pavers_02, corrugated_iron_02, metal_grate_rusty, concrete_wall_006, grey_roof_tiles, sparse_grass, grassy_cobblestone, grass_concrete_pavement, bark_platanus | то же | то же | то же |
+| 47 моделей: промышленные трубы и вентиляция, сетчатый забор, генератор, электрошкафы, кондиционер, прожекторы и светильники, газовые баллоны, IBC-ёмкость, ящики, бочки, шины, тележка, стеллажи, лестницы, бетонные блоки, кран-балка, компрессор, пожарная лестница, водостоки, фонари, мусорный бак, машина под тентом, рольставни, люк, камера, ворота, растения (кусты, сорняки, папоротник, трава, одуванчики), пень, камни | `Content/Environment/V21/Props/<id>` | то же | то же |
+
+**Лицензия:** [CC0 1.0](https://polyhaven.com/license).
+
+Импорт и настройки — `Scripts/maps/import_assets.py`:
+- текстуры 1K/2K;
+- материалы-родители `M_CS_Surface`, `M_CS_Terrain`, `M_CS_Prop`, `M_CS_PropMasked`, `M_CS_PropCutout`, `M_CS_PropFoliage`, `M_CS_Decal`, `M_CS_Atlas`, `M_CS_Glass` собраны из узлов движка;
+- непрозрачные модели тяжелее 2000 треугольников — Nanite;
+- маскированные (забор, растения) — 4 LOD.
+
+### Карты v2.1: собственные ассеты
+
+| Что | Путь | Как сделано | В git |
+|---|---|---|---|
+| Атлас декалей 4×4 (трещины, масло, следы шин, ржавчина, копоть, лужа, грязь, разметка, стрелка, штриховка, мох, трафарет), трим-лист, атлас вывесок 2×8, макро-шум, кластер листвы, карточка травы | `SourceArt/Maps/Generated` → `Content/Environment/V21/Textures/Generated` | `Scripts/maps/make_textures.py` (Pillow, процедурно) | да |
+| Геометрия карт: рельеф, здания, лестницы, перила, окна, двери, контейнеры, прицепы, вагоны, поддоны, ящики, фонари, деревья | `Content/Environment/Generated/<Map>`, `Content/Environment/V21/Kit` | Geometry Script: `Scripts/maps/lib.py`, `kit.py`, `depot.py` | да |
+| Реверберация `RE_Alley` | `Content/Audio/Reverb` | `Scripts/maps/lib.py` | да |
+
+**Лицензия:** собственность проекта.
+
 ### Звуки выстрелов: The Free Firearm Sound Library (v1.1)
 
 | Что | Путь | Откуда | В git |

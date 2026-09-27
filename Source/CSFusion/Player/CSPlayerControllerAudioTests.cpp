@@ -14,7 +14,9 @@
 
 #include "Audio/CSAudio.h"
 #include "Characters/CSCharacter.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
 #include "Core/CSLog.h"
 #include "EngineUtils.h"
 #include "Materials/MaterialInterface.h"
@@ -60,20 +62,41 @@ void ACSPlayerController::CSTestSurfaces()
 				continue;
 			}
 			FTally& T = Tally.FindOrAdd(Declared);
-			if (T.Probed >= 40)
+			// v2.1 maps place props as instances and merge buildings into one mesh:
+			// probe the top of each instance, and only small single meshes (the top of
+			// a merged building's bounds is air or a roof of another material).
+			TArray<FVector, TInlineAllocator<16>> Tops;
+			if (const UInstancedStaticMeshComponent* Instanced = Cast<UInstancedStaticMeshComponent>(Mesh))
 			{
-				continue;
-			}
-			const FBoxSphereBounds Bounds = Mesh->Bounds;
-			const FVector Top(Bounds.Origin.X, Bounds.Origin.Y, Bounds.Origin.Z + Bounds.BoxExtent.Z + 5.f);
-			++T.Probed;
-			if (CSAudio::SurfaceBelow(this, Top, Mine) == Declared)
-			{
-				++T.Agreed;
-				if (!bHaveOccluder)
+				const FBox Local = Instanced->GetStaticMesh() ? Instanced->GetStaticMesh()->GetBoundingBox() : FBox(ForceInit);
+				for (int32 i = 0; i < Instanced->GetInstanceCount() && Tops.Num() < 8 && Local.IsValid; ++i)
 				{
-					OccluderTop = Top;
-					bHaveOccluder = true;
+					FTransform Xf;
+					Instanced->GetInstanceTransform(i, Xf, true);
+					const FBox Placed = Local.TransformBy(Xf);
+					Tops.Add(FVector(Placed.GetCenter().X, Placed.GetCenter().Y, Placed.Max.Z + 5.f));
+				}
+			}
+			else if (Mesh->Bounds.BoxExtent.GetMax() < 250.f)
+			{
+				const FBoxSphereBounds Bounds = Mesh->Bounds;
+				Tops.Add(FVector(Bounds.Origin.X, Bounds.Origin.Y, Bounds.Origin.Z + Bounds.BoxExtent.Z + 5.f));
+			}
+			for (const FVector& Top : Tops)
+			{
+				if (T.Probed >= 40)
+				{
+					break;
+				}
+				++T.Probed;
+				if (CSAudio::SurfaceBelow(this, Top, Mine) == Declared)
+				{
+					++T.Agreed;
+					if (!bHaveOccluder)
+					{
+						OccluderTop = Top;
+						bHaveOccluder = true;
+					}
 				}
 			}
 		}

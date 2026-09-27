@@ -154,7 +154,13 @@ def build_terrain():
     mesh = lib.save_mesh(dm, OUT + "/SM_Depot_Terrain", mats, collision="complex")
     lib.place(mesh, folder="Terrain", label="Terrain")
     far = lib.MeshBuilder(ground=kit.NOGRIME)
-    far.quad((-40000, -40000, -40), (40000, -40000, -40), (40000, 40000, -40), (-40000, 40000, -40), S("Ground_GrassDry"), uv_scale=0.25)
+    # A ring around the terrain, never under it: the apron (-120) and the ditch (-55) sink below
+    # the ring's height, and a full plane showed grass above their floor.
+    F, ix, iy = 40000.0, X + 500.0, Y + 500.0
+    grass = S("Ground_GrassDry")
+    for a, b_, c, d in (((-F, -F), (F, -F), (F, -iy), (-F, -iy)), ((-F, iy), (F, iy), (F, F), (-F, F)),
+                        ((-F, -iy), (-ix, -iy), (-ix, iy), (-F, iy)), ((ix, -iy), (F, -iy), (F, iy), (ix, iy))):
+        far.quad(a + (-40,), b_ + (-40,), c + (-40,), d + (-40,), grass, uv_scale=0.25)
     lib.place(lib.save_mesh(far, OUT + "/SM_Depot_FarGround", collision="none"), folder="Terrain", label="FarGround", collision=False, shadow=False)
     lib.log("terrain: %d triangles" % tris)
 
@@ -1247,6 +1253,18 @@ def views():
          ("east_stair", (2605, -20, e), 12, 90), ("west_stair", (-2700, 960, 60 + e), 5, 0), ("walk_end", (2450, 935, 440 + e), -10, 180), ("tank_farm", (-1500, -2850, e), -3, -8), ("road", (-2700, -100, e), -2, 0), ("garage", (-250, 1100, e), -2, 90), ("tank_inside", (-150, -3150, e), -2, 5),
          ("over_sw", (-6800, -5800, 3600), -30, 40), ("over_ne", (6800, 5600, 3600), -30, 220), ("over_top", (0, -5500, 5200), -48, 90)]
     lib.write_views("depot", v)
+    # First-person walk along the four routes and the high ground (eye 165 above the floor).
+    def fp(label, x, y, yaw, z=None, pitch=-3):
+        return (label, (x, y, (ground(x, y) if z is None else z) + e), pitch, yaw)
+    lib.write_views("depot_fp", [
+        fp("gapN_top", -3200, -770, 0, UPPER), fp("gapN_down", -2700, -770, 20), fp("road_w", -2500, 100, 0),
+        fp("checkpoint", -1500, 150, 0), fp("road_mid", 0, 250, 0), fp("road_e", 2200, 0, 0), fp("bravo_exit", 3700, 1060, 180),
+        fp("ramp", -2900, 1100, 0), fp("tech", -2100, 1150, 30), fp("ditch_w", -1800, 2300, 0), fp("ditch_mid", 300, 2280, 0),
+        fp("workshop", 800, 1850, 180), fp("containers", 3700, 1450, 90), fp("gapS", -2700, -2670, -20),
+        fp("parking_n", -2300, -700, -90), fp("south_lane", -1500, -3100, 0), fp("tank_aisle", -400, -3150, 0),
+        fp("apron", 2600, -3000, 30), fp("west_door", -1450, -1250, 0, 3), fp("mezz", -900, -1400, -90, MEZZ),
+        fp("hall", 500, -1800, 0, 3), fp("dock2", 2300, -1850, 0, 0), fp("walkway", 0, 935, 0, 440, -8),
+        fp("container_top", 3500, 1950, 180, ground(3350, 1950) + 259), fp("crest", 0, 3000, 180, 250), fp("behind_crest", -2000, 3350, 0)])
 
 
 def build():

@@ -410,9 +410,11 @@ def shutters(w=120.0, h=150.0):
     return _once(name, build)
 
 
-def door(w=100.0, h=215.0, style="wood"):
-    """Door unit like the window: frame, recessed leaf with panels, handle. Slots: 0 frame, 1 leaf, 2 metal."""
-    name = "SM_Kit_Door_%s_%dx%d" % (style, w, h)
+def door(w=100.0, h=215.0, style="wood", open=True):
+    """Door unit like the window: frame, leaf with panels, handle. Slots: 0 frame, 1 leaf, 2 metal.
+    open: the leaf stands swung 95 degrees into the room (+Y) on its hinge - the doors of the
+    kit sit in walkable openings, and a closed-looking leaf you walk through reads as a bug."""
+    name = "SM_Kit_Door_%s_%dx%d%s" % (style, w, h, "_open" if open else "")
 
     def build():
         b = MeshBuilder(ground=NOGRIME)
@@ -423,11 +425,32 @@ def door(w=100.0, h=215.0, style="wood"):
         b.box(-w / 2, -w / 2 + f, 6, 18, 0, h, frame)
         b.box(w / 2 - f, w / 2, 6, 18, 0, h, frame)
         b.box(-w / 2, w / 2, 6, 18, h - f, h, frame)
-        b.box(-w / 2 + f, w / 2 - f, 12, 16, 0, h - f, leaf)
+        if not open:
+            b.box(-w / 2 + f, w / 2 - f, 12, 16, 0, h - f, leaf)
+            for z0, z1 in ((20, 95), (110, h - 25)):
+                for xa, xb in ((-w / 2 + 16, -3), (3, w / 2 - 16)):
+                    b.box(xa, xb, 10, 12, z0, z1, leaf)
+            b.box(w / 2 - 24, w / 2 - 12, 6, 10, 100, 104, metal)
+            return save_mesh(b, KIT + "/" + name, collision="none")
+        # Open leaf: hinged at the left jamb, swung into the room.
+        lw = w - 2 * f
+        ang = math.radians(95.0)
+        d = (math.cos(ang), math.sin(ang))
+        hx, hy = -w / 2 + f, 16.0
+
+        def at(t, off=0.0):
+            return (hx + d[0] * t - d[1] * off, hy + d[1] * t + d[0] * off)
+        yaw = math.degrees(ang)
+        c = at(lw / 2)
+        b.obox((c[0], c[1], (h - f) / 2 + 1), (lw, 4, h - f - 2), yaw, leaf)
         for z0, z1 in ((20, 95), (110, h - 25)):
-            for xa, xb in ((-w / 2 + 16, -3), (3, w / 2 - 16)):
-                b.box(xa, xb, 10, 12, z0, z1, leaf)
-        b.box(w / 2 - 24, w / 2 - 12, 6, 10, 100, 104, metal)
+            for t0, t1 in ((8, lw / 2 - 3), (lw / 2 + 3, lw - 8)):
+                for side in (-1, 1):
+                    p = at((t0 + t1) / 2, side * 2.5)
+                    b.obox((p[0], p[1], (z0 + z1) / 2), (t1 - t0, 1.5, z1 - z0), yaw, leaf)
+        for side in (-1, 1):
+            p = at(lw - 10, side * 5)
+            b.obox((p[0], p[1], 102), (12, 3, 4), yaw, metal)
         return save_mesh(b, KIT + "/" + name, collision="none")
     return _once(name, build)
 
