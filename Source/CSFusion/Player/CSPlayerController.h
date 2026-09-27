@@ -213,6 +213,14 @@ protected:
 	FTimerHandle TestModesTimer;
 	TArray<FTransform> TourPoints;
 	int32 TourIndex = -1;
+
+	/** v2.1 map rework: screenshots from listed places (CSPlayerControllerMapViews.cpp). */
+	UFUNCTION(Exec)
+	void CSTestViews();
+	FTimerHandle TestViewsTimer;
+	TArray<TPair<FString, FTransform>> ViewPoints;
+	int32 ViewIndex = -1;
+	TWeakObjectPtr<class ACameraActor> ViewCamera;
 	int32 ModesStep = 0;
 	int32 ModesMoneyBefore = 0;
 	int32 ModesGrenadesBefore = 0;

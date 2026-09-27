@@ -295,15 +295,110 @@ void ACSPlayerController::CSTestMapAudit()
 			}
 		}
 	}
-	float FloorZ = TNumericLimits<float>::Max();
+	// v2.1: the ground floor is the most common floor height (25 cm buckets), not the lowest
+	// point - a sunken truck apron would otherwise lift the whole yard to "up".
 	int32 Reached = 0;
+	TMap<int32, int32> Levels;
 	for (FMapNode& Node : GNodes)
 	{
 		Node.bReach = PathLength(World, Origin, Node.P) >= 0.f;
 		if (Node.bReach)
 		{
 			++Reached;
-			FloorZ = FMath::Min(FloorZ, float(Node.P.Z));
+			++Levels.FindOrAdd(FMath::FloorToInt(Node.P.Z / 25.f));
+		}
+	}
+	int32 FloorBucket = 0, FloorCount = -1;
+	for (const TPair<int32, int32>& Level : Levels)
+	{
+		if (Level.Value > FloorCount)
+		{
+			FloorBucket = Level.Key;
+			FloorCount = Level.Value;
+		}
+	}
+	const float FloorZ = FloorBucket * 25.f + 12.5f;
+
+	// Debug: -mapauditprobe=x,y,z;x,y,z... logs whether each point is on the navmesh and reachable.
+	FString ProbeList;
+	if (FParse::Value(FCommandLine::Get(), TEXT("mapauditprobe="), ProbeList, false))
+	{
+		TArray<FString> Probes;
+		ProbeList.ParseIntoArray(Probes, TEXT(";"));
+		for (const FString& Probe : Probes)
+		{
+			TArray<FString> C;
+			Probe.ParseIntoArray(C, TEXT(","));
+			if (C.Num() != 3)
+			{
+				continue;
+			}
+			const FVector Want(FCString::Atof(*C[0]), FCString::Atof(*C[1]), FCString::Atof(*C[2]));
+			FVector P;
+			const bool bOn = OnNav(Want, P);
+			UE_LOG(LogCS, Log, TEXT("MAP AUDIT: %s probe (%s): %s, path from Alpha %.0f m"), *Map, *Probe,
+				bOn ? *FString::Printf(TEXT("on navmesh at (%.0f, %.0f, %.0f)"), P.X, P.Y, P.Z) : TEXT("OFF navmesh"),
+				bOn ? PathLength(World, Origin, P) / 100.f : -1.f);
+		}
+	}
+
+	// v2.1: navmesh islands nobody can walk to (a stair that does not connect, a sealed yard):
+	// unreachable points grouped by grid neighbourhood, the biggest ones logged.
+	{
+		TMap<FIntPoint, TArray<int32>> Loose;
+		for (int32 i = 0; i < GNodes.Num(); ++i)
+		{
+			if (!GNodes[i].bReach)
+			{
+				Loose.FindOrAdd(FIntPoint(FMath::FloorToInt((GNodes[i].P.X - Bounds.Min.X) / GridStep),
+					FMath::FloorToInt((GNodes[i].P.Y - Bounds.Min.Y) / GridStep))).Add(i);
+			}
+		}
+		TSet<int32> Seen;
+		TArray<TPair<int32, FVector>> Islands;
+		for (const TPair<FIntPoint, TArray<int32>>& Start : Loose)
+		{
+			for (int32 Seed : Start.Value)
+			{
+				if (Seen.Contains(Seed))
+				{
+					continue;
+				}
+				TArray<TPair<FIntPoint, int32>> Stack = { { Start.Key, Seed } };
+				Seen.Add(Seed);
+				FBox Box(ForceInit);
+				int32 Size = 0;
+				while (Stack.Num())
+				{
+					const TPair<FIntPoint, int32> Cur = Stack.Pop();
+					++Size;
+					Box += GNodes[Cur.Value].P;
+					for (int32 DX = -1; DX <= 1; ++DX)
+					{
+						for (int32 DY = -1; DY <= 1; ++DY)
+						{
+							if (const TArray<int32>* Next = Loose.Find(Cur.Key + FIntPoint(DX, DY)))
+							{
+								for (int32 N : *Next)
+								{
+									if (!Seen.Contains(N) && FMath::Abs(GNodes[N].P.Z - GNodes[Cur.Value].P.Z) < 60.f)
+									{
+										Seen.Add(N);
+										Stack.Add({ Cur.Key + FIntPoint(DX, DY), N });
+									}
+								}
+							}
+						}
+					}
+				}
+				Islands.Add({ Size, Box.GetCenter() });
+			}
+		}
+		Islands.Sort([](const TPair<int32, FVector>& A, const TPair<int32, FVector>& B) { return A.Key > B.Key; });
+		for (int32 i = 0; i < FMath::Min(8, Islands.Num()); ++i)
+		{
+			UE_LOG(LogCS, Log, TEXT("MAP AUDIT: %s unreachable island %d: %d points around (%.0f, %.0f, %.0f)"),
+				*Map, i + 1, Islands[i].Key, Islands[i].Value.X, Islands[i].Value.Y, Islands[i].Value.Z);
 		}
 	}
 	// Links between reachable neighbours (ramps included: navmesh raycast plus a clear line at knee height).
@@ -464,7 +559,7 @@ void ACSPlayerController::CSTestMapAudit()
 	struct FLine { float Dist; FVector Eye; int32 Dir; };
 	TArray<FLine> Open;
 	TArray<float> Longest;
-	int32 Close = 0, MidRange = 0, Long = 0, VeryLong = 0, Up = 0;
+	int32 Close = 0, MidRange = 0, Long = 0, VeryLong = 0, Up = 0, Down = 0;
 	for (const FMapNode& Node : GNodes)
 	{
 		if (!Node.bReach)
@@ -472,6 +567,7 @@ void ACSPlayerController::CSTestMapAudit()
 			continue;
 		}
 		Up += (Node.P.Z - FloorZ) > Elevated;
+		Down += (FloorZ - Node.P.Z) > Elevated;
 		const FVector Eye = Node.P + FVector(0.f, 0.f, EyeHeight);
 		float Max = 0.f;
 		for (int32 d = 0; d < 16; ++d)
@@ -482,9 +578,21 @@ void ACSPlayerController::CSTestMapAudit()
 			// packaged Depot saw 88 m exactly through the corner of a shelf
 			// (x -1000, y -700) that the editor's collision closed: a sightline
 			// that exists only through a corner is not one a player has.
+			// v2.1: a line ends where it leaves the play space (the navmesh bounds). From an
+			// embankment you see over the perimeter wall into the fields, but nobody stands there.
+			float Cap = SightCap;
+			if (Dir.X > UE_KINDA_SMALL_NUMBER || Dir.X < -UE_KINDA_SMALL_NUMBER)
+			{
+				Cap = FMath::Min(Cap, float(((Dir.X > 0.f ? Bounds.Max.X : Bounds.Min.X) - Eye.X) / Dir.X));
+			}
+			if (Dir.Y > UE_KINDA_SMALL_NUMBER || Dir.Y < -UE_KINDA_SMALL_NUMBER)
+			{
+				Cap = FMath::Min(Cap, float(((Dir.Y > 0.f ? Bounds.Max.Y : Bounds.Min.Y) - Eye.Y) / Dir.Y));
+			}
+			Cap = FMath::Max(Cap, 0.f);
 			FHitResult Hit;
-			const float Dist = World->SweepSingleByChannel(Hit, Eye, Eye + Dir * SightCap, FQuat::Identity, ECC_Visibility,
-				FCollisionShape::MakeSphere(SightRadius), Params) ? Hit.Distance : SightCap;
+			const float Dist = World->SweepSingleByChannel(Hit, Eye, Eye + Dir * Cap, FQuat::Identity, ECC_Visibility,
+				FCollisionShape::MakeSphere(SightRadius), Params) ? Hit.Distance : Cap;
 			Max = FMath::Max(Max, Dist);
 			if (Dist > 5000.f)
 			{
@@ -525,10 +633,68 @@ void ACSPlayerController::CSTestMapAudit()
 			break;
 		}
 	}
-	UE_LOG(LogCS, Log, TEXT("MAP AUDIT RESULT: %s longest line of sight per point: median %.0f m, p90 %.0f m, max %.0f m; close (<15 m) %.0f%%, mid %.0f%%, long (>35 m) %.0f%%, over 50 m %.0f%% -> %s"),
+	// v2.1: the longest line along which two standing players see each other (eye to eye).
+	// A level look from a 2.5 m embankment passes metres above everybody's head in the yard
+	// below; on terraced maps only this says how far a player can actually be shot from.
+	// 2 m subgrid, pairs over 50 m, the same 10 cm wide look as above.
+	TArray<int32> Sub;
+	for (int32 i = 0; i < GNodes.Num(); ++i)
+	{
+		const int32 CX = FMath::FloorToInt((GNodes[i].P.X - Bounds.Min.X) / GridStep);
+		const int32 CY = FMath::FloorToInt((GNodes[i].P.Y - Bounds.Min.Y) / GridStep);
+		if (GNodes[i].bReach && (CX % 2) == 0 && (CY % 2) == 0)
+		{
+			Sub.Add(i);
+		}
+	}
+	struct FPair { float Dist; FVector A; FVector B; };
+	TArray<FPair> Seen;
+	constexpr float PlayerEye = 160.f;
+	for (int32 i = 0; i < Sub.Num(); ++i)
+	{
+		const FVector A = GNodes[Sub[i]].P + FVector(0.f, 0.f, PlayerEye);
+		for (int32 j = i + 1; j < Sub.Num(); ++j)
+		{
+			const FVector B = GNodes[Sub[j]].P + FVector(0.f, 0.f, PlayerEye);
+			const float D = float(FVector::Dist(A, B));
+			if (D > 5000.f && !World->SweepTestByChannel(A, B, FQuat::Identity, ECC_Visibility, FCollisionShape::MakeSphere(SightRadius), Params))
+			{
+				Seen.Add({ D, A, B });
+			}
+		}
+	}
+	Seen.Sort([](const FPair& L, const FPair& R) { return L.Dist > R.Dist; });
+	const float PlayerMax = Seen.Num() ? Seen[0].Dist : 0.f;
+	int32 PlayerOver = 0;
+	for (const FPair& Pair : Seen)
+	{
+		PlayerOver += Pair.Dist > 6500.f;
+	}
+	TArray<FPair> ShownPairs;
+	for (const FPair& Pair : Seen)
+	{
+		if (Pair.Dist <= 6500.f || ShownPairs.Num() >= 8)
+		{
+			break;
+		}
+		const bool bNear = ShownPairs.ContainsByPredicate([&Pair](const FPair& S)
+		{
+			return (FVector::Dist2D(S.A, Pair.A) < 800.f && FVector::Dist2D(S.B, Pair.B) < 800.f)
+				|| (FVector::Dist2D(S.A, Pair.B) < 800.f && FVector::Dist2D(S.B, Pair.A) < 800.f);
+		});
+		if (!bNear)
+		{
+			ShownPairs.Add(Pair);
+			UE_LOG(LogCS, Log, TEXT("MAP AUDIT: %s players see each other %.0f m: (%.0f, %.0f, %.0f) - (%.0f, %.0f, %.0f)"), *Map, Pair.Dist / 100.f,
+				Pair.A.X, Pair.A.Y, Pair.A.Z - PlayerEye, Pair.B.X, Pair.B.Y, Pair.B.Z - PlayerEye);
+		}
+	}
+	UE_LOG(LogCS, Log, TEXT("MAP AUDIT: %s player-to-player lines over 50 m %d, over 65 m %d (of %d points on a 2 m grid)"),
+		*Map, Seen.Num(), PlayerOver, Sub.Num());
+	UE_LOG(LogCS, Log, TEXT("MAP AUDIT RESULT: %s longest line of sight per point: median %.0f m, p90 %.0f m, level max %.0f m; close (<15 m) %.0f%%, mid %.0f%%, long (>35 m) %.0f%%, over 50 m %.0f%%; players see each other up to %.0f m -> %s"),
 		*Map, Percentile(Longest, 0.5f) / 100.f, Percentile(Longest, 0.9f) / 100.f, MaxSight / 100.f,
-		100.f * Close / Samples, 100.f * MidRange / Samples, 100.f * Long / Samples, VeryLongShare,
-		(MaxSight <= 6500.f && VeryLongShare <= 25.f) ? TEXT("SIGHTLINES OK") : TEXT("SIGHTLINES BROKEN"));
+		100.f * Close / Samples, 100.f * MidRange / Samples, 100.f * Long / Samples, VeryLongShare, PlayerMax / 100.f,
+		(PlayerMax <= 6500.f && VeryLongShare <= 25.f) ? TEXT("SIGHTLINES OK") : TEXT("SIGHTLINES BROKEN"));
 	int32 UpAll = 0;
 	float Highest = 0.f;
 	for (const FMapNode& Node : GNodes)
@@ -536,11 +702,13 @@ void ACSPlayerController::CSTestMapAudit()
 		UpAll += (Node.P.Z - FloorZ) > Elevated;
 		Highest = Node.bReach ? FMath::Max(Highest, float(Node.P.Z - FloorZ)) : Highest;
 	}
-	UE_LOG(LogCS, Log, TEXT("MAP AUDIT: %s navmesh points above the ground floor %d, reachable %d, highest reachable %.1f m"),
-		*Map, UpAll, Up, Highest / 100.f);
+	UE_LOG(LogCS, Log, TEXT("MAP AUDIT: %s ground floor at %.0f cm (%d points); navmesh points above it %d, reachable %d, below it %d, highest reachable %.1f m"),
+		*Map, FloorZ, FloorCount, UpAll, Up, Down, Highest / 100.f);
+	// v2.1 maps are judged on relief: a real share of the play space on other levels.
 	const float UpShare = 100.f * Up / Samples;
-	UE_LOG(LogCS, Log, TEXT("MAP AUDIT RESULT: %s reachable points above the ground floor %.1f%% -> %s"),
-		*Map, UpShare, UpShare >= 3.f ? TEXT("HEIGHT OK") : TEXT("HEIGHT BROKEN"));
+	const float OtherShare = 100.f * (Up + Down) / Samples;
+	UE_LOG(LogCS, Log, TEXT("MAP AUDIT RESULT: %s reachable points above the ground floor %.1f%%, on other levels %.1f%% -> %s"),
+		*Map, UpShare, OtherShare, (UpShare >= 10.f && OtherShare >= 15.f) ? TEXT("HEIGHT OK") : TEXT("HEIGHT BROKEN"));
 
 	// --- Ammo machines (C19) ---------------------------------------------------
 	const TArray<ACSAmmoMachine*> Machines = ACSAmmoMachine::GetAllSorted(this);

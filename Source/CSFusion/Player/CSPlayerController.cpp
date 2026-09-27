@@ -273,6 +273,11 @@ void ACSPlayerController::ArmSelfTest()
 	{
 		GetWorldTimerManager().SetTimer(TestMapTimer, this, &ACSPlayerController::CSTestMapAudit, 6.f, false);
 	}
+	FString ViewSet;
+	if (FParse::Value(FCommandLine::Get(), TEXT("cstestviews="), ViewSet))
+	{
+		GetWorldTimerManager().SetTimer(TestViewsTimer, this, &ACSPlayerController::CSTestViews, 8.f, false);
+	}
 	if (FParse::Param(FCommandLine::Get(), TEXT("cstesttour")))
 	{
 		GetWorldTimerManager().SetTimer(TestModesTimer, this, &ACSPlayerController::CSTestTour, 8.f, false);

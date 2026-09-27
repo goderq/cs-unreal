@@ -34,7 +34,9 @@ param(
     # Console commands for every client, e.g. "r.VolumetricCloud 0" (A/B measurements).
     [string]$ExecCmds = "",
     # Run by the perf test right before its sample, after the game's own settings.
-    [string]$PerfCmds = ""
+    [string]$PerfCmds = "",
+    # Extra command-line flags for every suite (debugging, e.g. -mapauditprobe=...).
+    [string]$ExtraArgs = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -189,7 +191,7 @@ foreach ($s in $Suites) {
 
     $suiteMap = $(if ($s.Map -eq "MENU") { "" } elseif ($s.Map) { $s.Map } else { $Map })
     $script:FreshSettings = $s.Name -like "perf*"
-    $proc = Start-Client "-noautoconnect $($s.Flags)" $logName $suiteMap
+    $proc = Start-Client "-noautoconnect $($s.Flags) $ExtraArgs" $logName $suiteMap
     $script:FreshSettings = $false
     $done = Wait-ForLine $logPath $s.Done $s.Timeout
     # The trace is written in blocks: killing the game right away left it empty.
