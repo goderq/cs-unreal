@@ -567,23 +567,36 @@ def tree(kind=0):
             cyl(b, start, mid, trunk_r * 0.45, bark, seg=7, caps=False, r1=trunk_r * 0.3)
             cyl(b, mid, end, trunk_r * 0.3, bark, seg=6, caps=False, r1=trunk_r * 0.12)
             tips.append(end)
+            # Two side branches off each limb: the leaves fill the crown, not a few balls.
+            for k in range(2):
+                s0 = lib.lerp3(mid, end, r.uniform(0.1, 0.6))
+                a2 = ang + r.choice((-1, 1)) * r.uniform(0.5, 1.1)
+                l2 = length * r.uniform(0.35, 0.55)
+                e2 = (s0[0] + math.cos(a2) * l2, s0[1] + math.sin(a2) * l2, s0[2] + r.uniform(-0.1, 0.5) * l2)
+                cyl(b, s0, e2, trunk_r * 0.16, bark, seg=5, caps=False, r1=trunk_r * 0.07)
+                tips.append(e2)
         crown = (top[0], top[1], top[2] + height * 0.28)
         tips.append(crown)
-        # Leaf cards: 110-160 cm quads around the branch tips and inside the crown, random facing.
-        for i in range(cards):
+        # Leaf cards: many 60-130 cm quads around every tip, each facing away from the crown's
+        # centre (with jitter) - a full, irregular crown lit like a volume, not flat balls.
+        cc = (top[0], top[1], top[2] + height * 0.22)
+        for i in range(cards * 3):
             base = r.choice(tips)
-            c = (base[0] + r.gauss(0, spread * 0.35), base[1] + r.gauss(0, spread * 0.35), base[2] + r.gauss(0, height * 0.1))
-            size = r.uniform(150, 230)
-            yaw = r.uniform(0, math.tau)
-            tilt = r.uniform(-0.6, 0.6)
-            ux, uy = math.cos(yaw) * size / 2, math.sin(yaw) * size / 2
-            vz = size / 2 * math.cos(tilt)
-            vx, vy = -math.sin(yaw) * size / 2 * math.sin(tilt), math.cos(yaw) * size / 2 * math.sin(tilt)
-            p0 = (c[0] - ux - vx, c[1] - uy - vy, c[2] - vz)
-            p1 = (c[0] + ux - vx, c[1] + uy - vy, c[2] - vz)
-            p2 = (c[0] + ux + vx, c[1] + uy + vy, c[2] + vz)
-            p3 = (c[0] - ux + vx, c[1] - uy + vy, c[2] + vz)
-            b.quad(p0, p1, p2, p3, leaf, uvs=[(0, 1), (1, 1), (1, 0), (0, 0)], normal=(0.0, 0.0, 1.0))
+            c = (base[0] + r.gauss(0, spread * 0.2), base[1] + r.gauss(0, spread * 0.2), base[2] + r.gauss(0, height * 0.07))
+            n = norm((c[0] - cc[0] + r.gauss(0, 40), c[1] - cc[1] + r.gauss(0, 40), (c[2] - cc[2]) * 1.4 + r.gauss(0, 40) + 30))
+            u = norm(cross(n, (0.0, 0.0, 1.0))) if abs(n[2]) < 0.95 else (1.0, 0.0, 0.0)
+            v = cross(u, n)
+            spin = r.uniform(0, math.tau)
+            u, v = (scale(u, math.cos(spin))[0] + scale(v, math.sin(spin))[0], scale(u, math.cos(spin))[1] + scale(v, math.sin(spin))[1],
+                    scale(u, math.cos(spin))[2] + scale(v, math.sin(spin))[2]), \
+                   (scale(v, math.cos(spin))[0] - scale(u, math.sin(spin))[0], scale(v, math.cos(spin))[1] - scale(u, math.sin(spin))[1],
+                    scale(v, math.cos(spin))[2] - scale(u, math.sin(spin))[2])
+            half = r.uniform(60, 130) / 2
+            p0 = add(c, add(scale(u, -half), scale(v, -half)))
+            p1 = add(c, add(scale(u, half), scale(v, -half)))
+            p2 = add(c, add(scale(u, half), scale(v, half)))
+            p3 = add(c, add(scale(u, -half), scale(v, half)))
+            b.quad(p0, p1, p2, p3, leaf, uvs=[(0, 1), (1, 1), (1, 0), (0, 0)], normal=n)
         col = MeshBuilder(ground=NOGRIME)
         col.box(-trunk_r, trunk_r, -trunk_r, trunk_r, 0, height * 0.5, bark)
         sm = save_mesh(b, KIT + "/" + name, collision="none")

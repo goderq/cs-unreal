@@ -744,7 +744,7 @@ def main():
         "Diffuse": gen["T_LeafCluster_D"], "Alpha": gen["T_LeafCluster_A"], "Normal": flat,
         "Roughness": MEL.get_material_default_texture_parameter_value(PROP_PARENTS["masked"], "Roughness"),
         "Metallic": MEL.get_material_default_texture_parameter_value(PROP_PARENTS["masked"], "Metallic")},
-        {"MetallicScale": 0.0, "RoughnessScale": 0.9})
+        {"MetallicScale": 0.0, "RoughnessScale": 0.9}, {"Tint": (0.74, 0.86, 0.62)})
     instance("MI_GrassCard", SURF, PROP_PARENTS["masked"], {
         "Diffuse": gen["T_GrassCard_D"], "Alpha": gen["T_GrassCard_A"], "Normal": flat,
         "Roughness": MEL.get_material_default_texture_parameter_value(PROP_PARENTS["masked"], "Roughness"),

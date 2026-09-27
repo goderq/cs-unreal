@@ -353,6 +353,12 @@ def houses():
     H.append(House("Gallery", -4400, -3150, 200, 2300, SQ, 3, "Plaster_Yellow", faces={
         "e": dict(doors=[(600, 700)]), "s": dict(doors=[(-3900, -3800)])}, chimneys=2))
     H.append(House("LaneHouse", 1700, 2700, -1000, -400, SQ, 2, "Plaster_Yellow", faces={"n": dict(doors=[(2100, 2200)])}))
+    H.append(House("CourtWest1", -4500, -4250, -2000, -1250, LOW, 3, "Plaster_Ochre", roof="flat", faces={
+        "e": dict(doors=[(-1700, -1600)], balconies={2: [(-1500, -1300)]}), "n": dict(windows=False), "s": dict(windows=False),
+        "w": dict(windows=False)}, chimneys=1))
+    H.append(House("CourtWest2", -4500, -4250, -1250, 200, SQ, 3, "Plaster_Pink", faces={
+        "e": dict(doors=[(-400, -300)], balconies={1: [(-1000, -800)]}), "n": dict(windows=False), "s": dict(windows=False),
+        "w": dict(windows=False)}, chimneys=2))
     H.append(House("CourtHouse", -2400, -1850, -1250, -900, SQ, 2, "Plaster_Blue", faces={"n": dict(doors=[(-2200, -2100)])}))
     # North row above the upper street, balconies over it.
     north = [(-4500, -2700, 3, "Plaster_Red"), (-2700, -1100, 3, "Plaster_White"), (-1100, 800, 4, "Plaster_Ochre"),
@@ -668,10 +674,8 @@ def build_west(det):
     landing(b, -3240, -2960, -1250, -1170, SQ, stone)
     b.box(-2960, -2920, -1600, -1250, LOW - 60, SQ + 100, stone)
     # Courtyard 1 walls (west, and the side toward MidA).
-    b.box(-4500, -4400, -2000, -1250, LOW - 60, LOW + 700, plaster)
     b.box(-3000, -2920, -2000, -1600, LOW - 60, LOW + 600, plaster)
     # Courtyard 2 west wall.
-    b.box(-4500, -4400, -1250, 200, SQ - 60, SQ + 600, plaster)
     # External stair up to the gallery: along the lane between the gallery building and the palazzo.
     lx0, lx1 = -3150.0, -2800.0
     kit.stair_flight(b, (lx0 + lx1) / 2, 100, SQ, UP, 300, 90, stone, solid=True)
@@ -685,6 +689,9 @@ def build_west(det):
     kit.railing_run(det, (lx1 - 5, 100, SQ), (lx1 - 5, top_y, UP), mesh=kit.railing_segment("iron"))
     # A roof over the gallery on brackets.
     b.box(lx0, lx1 + 20, top_y, 2400, UP + 300, UP + 310, S("Roof_Terracotta"))
+    for ly in (1300, 1900):
+        lib.point_light(((lx0 + lx1) / 2, ly, UP + 260), intensity=500, radius=800, color=(1.0, 0.82, 0.55))
+        det.add(lib.prop("hanging_industrial_lamp"), ((lx0 + lx1) / 2, ly, UP + 300 - 136), 0, cull=6000)
     lib.place(lib.save_mesh(b, OUT + "/SM_OldTown_West", collision="complex"), folder="West", label="West")
     r = lib.rng(41)
     # Laundry lines across courtyard 1 and bins, pots, a bench.
@@ -692,16 +699,16 @@ def build_west(det):
     lb = lib.MeshBuilder(ground=kit.NOGRIME)
     for k, y in enumerate((-1800, -1500)):
         z = LOW + 520
-        kit.cyl(lb, (-4400, y, z), (-3000, y, z), 1.2, S("Metal_Plain"), seg=4, caps=False)
-        xx = -4300
+        kit.cyl(lb, (-4250, y, z), (-3000, y, z), 1.2, S("Metal_Plain"), seg=4, caps=False)
+        xx = -4150
         while xx < -3100:
             wdt, hgt = r.uniform(40, 90), r.uniform(50, 90)
             lb.box(xx, xx + wdt, y - 1, y + 1, z - hgt, z, r.choice(cloth))
             xx += wdt + r.uniform(20, 70)
     lib.place(lib.save_mesh(lb, OUT + "/SM_OldTown_Laundry", collision="none"), folder="West", label="Laundry", collision=False)
-    for x, y in ((-4300, -1350), (-4200, -1350)):
+    for x, y in ((-4150, -1350), (-4050, -1350)):
         det.add(lib.prop("metal_trash_can"), (x, y, LOW), r.uniform(-10, 10), collision=True)
-    for x, y, z in ((-4300, -1900, LOW), (-3100, -1900, LOW), (-4300, -300, SQ), (-3500, -1100, SQ), (-2600, -200, SQ)):
+    for x, y, z in ((-4150, -1900, LOW), (-3100, -1900, LOW), (-4150, -300, SQ), (-3500, -1100, SQ), (-2600, -200, SQ)):
         det.add(lib.prop("potted_plant_04"), (x, y, z), r.uniform(0, 360), 1.1, collision=True, cull=6000)
     det.add(old_prop("painted_wooden_bench"), (-3900, -700, SQ), 90, collision=True)
     det.add(old_prop("Barrel_01"), (-3400, -1700, LOW), 0, collision=True)
@@ -844,11 +851,11 @@ def views():
     def v(label, x, y, yaw, z=None, pitch=-3):
         return (label, (x, y, (ground(x, y) if z is None else z) + e), pitch, yaw)
     lib.write_views("oldtown", [
-        v("alpha", -600, -3000, 90), v("lower_w", -3800, -3000, 0), v("lower_e", 3800, -3000, 180), v("arch", -3700, -2700, 90),
+        v("alpha", -600, -3000, 90), v("lower_w", -3800, -2700, 0), v("lower_e", 3800, -2700, 180), v("arch", -3700, -2700, 90),
         v("court1", -3200, -1700, 150), v("court2", -2700, -600, 180), v("gallery", -2975, 1400, 90, UP), v("square_s", 0, -700, 90),
-        v("square_n", 300, 2100, -90), v("fountain", -800, 500, 20), v("arcade", -1950, 900, 90), v("church_in", 2300, 900, 180),
+        v("square_n", 300, 2100, -90), v("fountain", -800, 500, 20), v("arcade", -1950, 350, 90), v("church_in", 2300, 900, 180),
         v("church_out", 900, 700, 5, None, 2), v("alley_low", 3350, -2450, 90), v("alley_mid", 3350, 0, 90), v("alley_up", 3350, 2100, 90),
-        v("garden", 4200, -400, 150), v("upper_w", -3800, 2900, 0), v("upper_e", 3800, 2900, 180), v("bravo", 0, 3100, -90),
+        v("garden", 4200, -400, 150), v("upper_w", -3800, 2900, 0), v("upper_e", 3800, 2900, 180), v("bravo", 1500, 2900, -90),
         v("balustrade", 1800, 2600, -110), ("over_s", (0, -9000, 3600), -22, 90), ("over_n", (0, 9000, 4200), -25, -90),
         ("over_top", (-6000, -6000, 5500), -38, 45)])
 
