@@ -124,8 +124,9 @@ def cyl(b, p0, p1, r, mat, seg=12, caps=True, r1=None):
         mid = norm(add(add(scale(u, math.cos(math.tau * (k + 0.5) / seg)), scale(v, math.sin(math.tau * (k + 0.5) / seg))), (0, 0, 0)))
         b.quad(a, bb, c, d, mat, normal=mid)
     if caps:
-        b.poly(list(reversed(ring0)), mat, normal=scale(axis, -1))
-        b.poly(ring1, mat, normal=axis)
+        # (u, v) turn about -axis: ring0 as is faces -axis, ring1 reversed faces +axis.
+        b.poly(ring0, mat, normal=scale(axis, -1))
+        b.poly(list(reversed(ring1)), mat, normal=axis)
 
 
 def beam(b, p0, p1, w, h, mat):
@@ -210,8 +211,11 @@ def wall_openings(b, a, c, z0, z1, t, mat, openings, reveal_mat=None, outside=-1
     cursor = lo
     for s, e, zb, zt in sorted(openings):
         piece(cursor, s, z0, z1)
-        piece(s, e, z0, zb)
-        piece(s, e, zt, z1)
+        # Clamp to this band: a wall built as plinth + cladding passes every opening to both
+        # calls, and a window above the plinth must not raise the plinth up to its sill
+        # (that piece would sit inside the cladding and z-fight with it).
+        piece(s, e, z0, min(zb, z1))
+        piece(s, e, max(zt, z0), z1)
         cursor = e
     piece(cursor, hi, z0, z1)
 

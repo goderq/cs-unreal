@@ -18,7 +18,7 @@ Everything goes under /Game/Environment/V21:
   Materials/M_CS_Glass             opaque glass: reflective, optional glow
   Materials/M_CS_Prop              PBR for the Poly Haven props (D/N/R/M/Alpha)
   Surfaces/MI_<name>               surface variants (Concrete_A, _Dirty, ...)
-  Props/<model>/SM_*               props; Nanite above 20k triangles, simple
+  Props/<model>/SM_*               props; Nanite above 2k triangles (opaque), 3 LODs (masked), simple
                                    collision, textures capped at 1K (small: 512)
 Idempotent: assets are updated in place.
 """
@@ -146,7 +146,9 @@ MODELS = {
     "dandelion_01": dict(split=True, tex=512, masked=True, collide=False), "tree_stump_01": dict(tex=512), "rock_07": dict(tex=512),
     "rock_09": dict(tex=512), "stone_01": dict(tex=512), "namaqualand_stones_01": dict(split=True, tex=512),
 }
-NANITE_TRIANGLES = 5000
+NANITE_TRIANGLES = 2000
+MASKED_LOD_TRIANGLES = 1000
+
 PROP_PARENTS = {}
 
 _log = []
@@ -677,7 +679,12 @@ def finish_meshes(mid, opts, meshes, prop_mat, folder, dest):
                 parent = prop_mat
                 if opts.get("masked"):
                     plant = opts.get("collide", True) is False
-                    parent = PROP_PARENTS[("masked" if plant else "cutout") if "Alpha" in textures else "foliage"]
+                    # With an alpha: cutout (masked, two-sided). Without one: foliage shading for
+                    # plants only - a fence's steel posts get the plain opaque prop material.
+                    if "Alpha" in textures:
+                        parent = PROP_PARENTS["masked" if plant else "cutout"]
+                    else:
+                        parent = PROP_PARENTS["foliage"] if plant else prop_mat
                 # Every texture parameter gets a value of the right kind: a leftover from an
                 # earlier import (or the engine's white texture) would not match the Masks sampler.
                 cut = parent in (PROP_PARENTS["masked"], PROP_PARENTS["cutout"])
@@ -689,16 +696,33 @@ def finish_meshes(mid, opts, meshes, prop_mat, folder, dest):
                 mi_cache[stem] = instance("MI_" + stem, dest, parent, textures,
                                           {"MetallicScale": 1.0 if files.get("Metallic") else 0.0})
             mesh.set_material(i, mi_cache[stem])
+        # Per mesh, by its material: a split model (a fence) has opaque posts and masked panels.
+        cut_parents = (PROP_PARENTS["masked"], PROP_PARENTS["cutout"], PROP_PARENTS["foliage"])
+        masked = any(slot.material_interface and slot.material_interface.get_editor_property("parent") in cut_parents
+                     for slot in mesh.static_materials)
         tris = mesh.get_num_triangles(0)
-        # Masked foliage stays off Nanite (overdraw); it is culled by distance instead.
-        if tris > NANITE_TRIANGLES and not opts.get("masked"):
-            ns = mesh.get_editor_property("nanite_settings")
-            ns.set_editor_property("enabled", True)
-            mesh.set_editor_property("nanite_settings", ns)
+        # Opaque meshes above NANITE_TRIANGLES go Nanite. Masked ones stay off Nanite (overdraw)
+        # and get three reduced LODs instead, so the distant fence and bushes cost a fraction.
+        nanite = tris > NANITE_TRIANGLES and not masked
+        ns = mesh.get_editor_property("nanite_settings")
+        ns.set_editor_property("enabled", nanite)
+        mesh.set_editor_property("nanite_settings", ns)
+        lods = 1
+        if masked and tris > MASKED_LOD_TRIANGLES:
+            opts_r = unreal.EditorScriptingMeshReductionOptions()
+            opts_r.set_editor_property("auto_compute_lod_screen_size", False)
+            opts_r.set_editor_property("reduction_settings", [
+                unreal.EditorScriptingMeshReductionSettings(1.0, 1.0),
+                unreal.EditorScriptingMeshReductionSettings(0.5, 0.35),
+                unreal.EditorScriptingMeshReductionSettings(0.25, 0.15),
+                unreal.EditorScriptingMeshReductionSettings(0.12, 0.06)])
+            sub = unreal.get_editor_subsystem(unreal.StaticMeshEditorSubsystem)
+            lods = sub.set_lods(mesh, opts_r) if sub else unreal.EditorStaticMeshLibrary.set_lods(mesh, opts_r)
         EAL.save_loaded_asset(mesh, only_if_is_dirty=False)
         box = mesh.get_bounding_box()
-        log("prop %s: %d tris%s, %.0f x %.0f x %.0f cm" % (mesh.get_name(), tris, " (Nanite)" if tris > NANITE_TRIANGLES else "",
-                                                          box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z))
+        log("prop %s: %d tris%s%s, %.0f x %.0f x %.0f cm" % (mesh.get_name(), tris, " (Nanite)" if nanite else "",
+                                                            " (%d LODs)" % lods if lods > 1 else "",
+                                                            box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z))
     return meshes
 
 

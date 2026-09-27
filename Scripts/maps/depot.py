@@ -505,7 +505,7 @@ def build_upper_yard(det):
     kit.wall_openings(b, (px1, py0), (px1, py1), UPPER - 20, h, 30, brick, [(1750, 1870, UPPER, UPPER + 215), (1950, 2070, UPPER + 110, UPPER + 250)])
     kit.wall_openings(b, (px0, py0), (px0, py1), UPPER - 20, h, 30, brick, [])
     b.box(px0 - 15, px1 + 15, py0 - 15, py1 + 15, h, h + 15, S("Concrete_B"))
-    b.box(px0 - 15, px1 + 15, py0 - 15, py1 + 15, UPPER - 5, UPPER + 2, S("Concrete_B"), faces="t")
+    b.box(px0 - 15, px1 + 15, py0 - 15, py1 + 15, UPPER - 5, UPPER + 8, S("Concrete_B"), faces="t")
     kit.wall_openings(b, (px0 - 5, py0 - 5), (px1 + 5, py0 - 5), h + 15, h + 75, 20, S("Concrete_B"), [])
     kit.wall_openings(b, (px0 - 5, py1 + 5), (px1 + 5, py1 + 5), h + 15, h + 75, 20, S("Concrete_B"), [])
     rust = S("Metal_Rusty")
@@ -1004,7 +1004,7 @@ def build_yard(det):
         b.box(x - 10, x + 10, sy0 - 50, sy0 - 30, ground(x, sy0), 400, steel)
     b.box(sx0 - 20, sx1 + 20, sy1, sy1 + 12, ground(800, sy1) - 10, 400, S("Metal_Corrugated"))
     b.box(sx1 + 8, sx1 + 20, sy0 - 40, sy1, min(ground(sx1, sy0), ground(sx1, sy1)) - 10, 400, S("Metal_Corrugated"))
-    b.box(sx0, sx1, sy0 - 40, sy1, ground(800, 1900) - 5, ground(800, 1900) + 3, S("Concrete_Dirty"), faces="t")
+    b.box(sx0, sx1, sy0 - 40, sy1, ground(800, 1900) - 5, ground(800, 1900) + 8, S("Concrete_Dirty"), faces="t")
     b.box(500, 900, 2070, 2140, 0, 90, S("Wood_Dark"))
     lib.place(lib.save_mesh(b, OUT + "/SM_Depot_Workshop", collision="complex"), folder="Yard", label="Workshop")
     r = lib.rng(101)
@@ -1072,7 +1072,7 @@ def scatter(det):
             det.add(lib.prop("grass_bermuda_01", r.choice(["grass_bermuda_01_seedling_a", "grass_bermuda_01_seedling_d"])),
                     (x, y, ground(x, y) - 1), r.uniform(0, 360), r.uniform(1.5, 2.2), cull=2500, shadow=False)
         else:
-            det.add(lib.prop("dandelion_01", r.choice(["dandelion_01_c_LOD0", "dandelion_01_e_LOD0"])), (x, y, ground(x, y) - 1),
+            det.add(lib.prop("dandelion_01", r.choice(["dandelion_01_c_LOD1", "dandelion_01_e_LOD1"])), (x, y, ground(x, y) - 1),
                     r.uniform(0, 360), r.uniform(1.0, 1.4), cull=2500, shadow=False)
     # Shrubs along the north fence and round the compounds; a few trees by the ditch and the pump house.
     for x in range(-X + 200, X - 200, 260):
@@ -1192,7 +1192,7 @@ def build_garage(det):
     kit.wall_openings(b, (gx1, gy0), (gx1, gy1), g - 20, h, 25, brick, [(1410, 1530, g - 20, g + 215)])
     b.box(gx0 - 20, gx1 + 20, gy0 - 20, gy1 + 20, h, h + 18, S("Concrete_B"))
     kit.wall_openings(b, (gx0 - 8, gy0 - 8), (gx1 + 8, gy0 - 8), h + 18, h + 70, 16, S("Concrete_B"), [])
-    b.box(gx0, gx1, gy0, gy1, g - 5, g + 3, S("Concrete_Dirty"), faces="t")
+    b.box(gx0, gx1, gy0, gy1, g - 5, g + 8, S("Concrete_Dirty"), faces="t")
     b.box(-150, 150, gy0 - 5, gy0 + 5, g + 210, g + 330, shutter)          # second door half down
     for x0, x1 in ((-610, -290), (-160, 160)):
         b.box(x0, x1, gy0 - 40, gy0 - 12, g + 330, g + 380, kit.paint("Paint_TrimDark", (0.05, 0.055, 0.06), dirt=0.4))

@@ -96,10 +96,11 @@ void ACSPlayerController::CSTestBots()
 			FCSPlayerCombatRecord Record;
 			const bool bHasRecord = D && D->GetRecord(Id, Record);
 			const ACSBotController* Controller = Cast<ACSBotController>(It->GetController());
-			UE_LOG(LogCS, Log, TEXT("BOT TEST t=%.0f: %s hp %.0f %s, K %d D %d, items %d, moved %.0f cm, weapon %s, %s"),
+			UE_LOG(LogCS, Log, TEXT("BOT TEST t=%.0f: %s hp %.0f %s, K %d D %d, items %d, moved %.0f cm, at (%.0f, %.0f, %.0f), weapon %s, %s"),
 				BotTestElapsed, *ACSBotManager::GetBotName(Id), bHasRecord ? Record.Health : -1.f,
 				(bHasRecord && Record.bAlive) ? TEXT("alive") : TEXT("dead"),
 				bHasRecord ? Record.Kills : 0, bHasRecord ? Record.Deaths : 0, Items, BotTestMoved.FindRef(Id),
+				It->GetActorLocation().X, It->GetActorLocation().Y, It->GetActorLocation().Z,
 				(D && D->GetLoadout(Id).Weapon) ? *D->GetLoadout(Id).Weapon->DisplayName.ToString() : TEXT("-"),
 				Controller ? *Controller->DescribeState() : TEXT("NO CONTROLLER"));
 		}
