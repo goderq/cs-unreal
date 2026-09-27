@@ -77,6 +77,7 @@ Edge Functions. Функции проверяют токен, а база про
 | `005_match_integrity.sql` | Регистрация матча, билеты участников, проверки отчёта, статистика тренировок |
 | `006_admin_service.sql` | Функции AdminService: роль → право → ранг цели → изменение → журнал |
 | `007_hardening.sql` | Старая `apply_match_result` удалена; функции доступны только сервисной роли; новые объекты по умолчанию закрыты |
+| `009_email_auth.sql` | v2.4: вход по Email. `auth_user_id` (пользователь Supabase Auth) рядом с `epic_account_id`; каждый уникален и привязывается один раз; `link_identity` / `profile_identities` — только сервисная роль |
 
 - **Существующая база:** выполни в **SQL Editor** миграции, которых в ней
   ещё нет, по порядку.
@@ -97,7 +98,9 @@ Edge Functions. Функции проверяют токен, а база про
 
 | Функция | Для чего |
 |---|---|
-| `eos-login` | Вход: токен Epic → профиль и токен входа на 2 часа |
+| `eos-login` | Вход: токен Epic → профиль и токен входа на 2 часа. С `create: false` неизвестный Epic-аккаунт получает 404 `no_profile` (игра спрашивает: новый профиль или привязать к Email) |
+| `email-login` | v2.4: `check_nickname`; `login` — токен Supabase Auth → профиль (создаётся при первом входе с ником из регистрации) и тот же токен входа на 2 часа |
+| `account-link` | v2.4: привязать к профилю второй способ входа (Email или Epic). Нужны оба доказательства: токен входа профиля и токен Supabase/Epic. Занятый аккаунт — 409 `taken` |
 | `admin` | AdminService: все действия администрации |
 | `match` | `start` / `ticket` / `report` / `incident`: учёт матчей и инциденты античита |
 | `report-match` | Заглушка: старые сборки v1.2 получают ответ «обновите игру» (410) |
@@ -190,7 +193,35 @@ EncryptionKey=...
 
 ## 4. Что происходит в игре
 
-### Вход
+### Вход (v2.4: Email или Epic Games)
+
+На экране входа две кнопки: **LOGIN WITH EMAIL** и **LOGIN WITH EPIC GAMES**.
+
+- **Email.** Регистрация: ник + Email + пароль (от 8 символов). Пароль уходит
+  только в Supabase Auth по HTTPS; игра его не хранит и не пишет в лог. Ник
+  задаётся один раз, дальше его меняет только администрация.
+  - Подтверждение Email выключено (Authentication → Sign In / Providers →
+    Confirm email).
+  - Сессия запоминается: refresh-токен Supabase шифруется Windows DPAPI
+    (текущий пользователь Windows) в `Saved/Account/session.dat`. Следующий
+    запуск входит сам. SIGN OUT отзывает сессию на сервере и удаляет файл.
+  - **Восстановление пароля:** FORGOT PASSWORD → письмо → в игре вводится
+    6-значный код **или вставляется ссылка из письма целиком**, плюс новый
+    пароль. Стандартное письмо Supabase содержит только ссылку; чтобы в нём
+    был код, нужен свой SMTP (Authentication → Emails → Set up SMTP) и шаблон
+    Reset password с `{{ .Token }}`. **Без своего SMTP встроенная почта
+    Supabase шлёт письма только участникам команды проекта и ~2 в час** —
+    для настоящих игроков SMTP нужно настроить.
+- **Один профиль на игрока.** Email и Epic-аккаунт открывают не больше одного
+  профиля каждый; привязка не переносится и не заменяется.
+  - Первый вход через Epic без профиля → выбор: «I HAVE AN EMAIL ACCOUNT —
+    LINK EPIC» (вход по Email и привязка) или «CREATE A NEW PROFILE».
+  - На странице PROFILE: LINK EMAIL (у Epic-игрока) и LINK EPIC GAMES (у
+    Email-игрока).
+  - Два уже существующих профиля не сливаются: такая привязка отклоняется
+    («belongs to another profile»).
+
+#### Epic Games
 
 - **Первый запуск.**
   - Экран «Проверяем сессию Epic…» сменяется кнопкой [SIGN IN WITH EPIC].
@@ -208,7 +239,8 @@ EncryptionKey=...
 - **Выход.**
   - Кнопка **SIGN OUT** на странице PROFILE выходит из игры и из Epic и удаляет
     сохранённую сессию. Следующий запуск снова спросит аккаунт.
-  - **SWITCH ACCOUNT** — то же самое, и сразу окно Epic.
+  - **SWITCH ACCOUNT** — то же самое; у Epic-игрока сразу окно Epic, у
+    Email-игрока — экран входа.
 - **Нет сети** или сервер недоступен: [PLAY OFFLINE] — тренировка с ботами,
   ничего не записывается. Вернуться в онлайн — [SIGN IN WITH EPIC] в меню.
 - **Бан:** вход отклоняется с датой окончания бана.
@@ -321,3 +353,18 @@ update public.profiles set role = 'superadmin' where nickname = 'ТвойНик'
   (п. 2.1).
 - Если `Config/Backend.ini` нет, игра запускается и на экране входа честно
   сообщает, что аккаунты не настроены. Офлайн-тренировка при этом доступна.
+
+### Тест входа по Email: `-cstestemailauth=STAGE`
+
+Этапы по одному запуску: `register` → `relaunch` → `after`; привязка —
+`link` (нужна сохранённая сессия Epic) → `linkcheck`. Каждый пишет
+`EMAIL AUTH TEST RESULT: ... -> EMAIL AUTH OK`. Тестовые аккаунты
+`cstest-...@example.com` остаются в Supabase Auth; удалить:
+
+```sql
+delete from public.profiles where auth_user_id in (select id from auth.users where email like 'cstest-%@example.com') and epic_account_id is null;
+delete from auth.users where email like 'cstest-%@example.com';
+```
+
+Прогон 27.09.2026: `register` 12/12, `relaunch` 2/2; Epic — вход сохранённой
+сессией без окна.

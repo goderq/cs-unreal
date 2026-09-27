@@ -96,6 +96,12 @@ public class CSFusion : ModuleRules
 			"AssetRegistry", // FX builder commandlet (editor)
 		});
 
+		// v2.4: the remembered email session is encrypted with Windows DPAPI.
+		if (Target.Platform == UnrealTargetPlatform.Win64)
+		{
+			PublicSystemLibraries.Add("Crypt32.lib");
+		}
+
 		PublicIncludePaths.Add(ModuleDirectory);
 	}
 }

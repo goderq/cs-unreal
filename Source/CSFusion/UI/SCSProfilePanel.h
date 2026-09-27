@@ -2,7 +2,8 @@
 //
 // Profile page: who you are signed in as, your lifetime numbers and the top
 // players. v2.0: the nickname can no longer be changed (it comes from Epic on
-// the first sign-in; only an admin may change it).
+// the first sign-in; only an admin may change it). v2.4: the sign-in methods of
+// the profile - email and Epic Games - and linking the missing one.
 //
 // Everything here is read through UCSAccountSubsystem, which talks to the
 // backend. The page owns no state of its own beyond the last leaderboard it
@@ -14,6 +15,7 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 
+class SEditableTextBox;
 class SVerticalBox;
 class UCSAccountSubsystem;
 
@@ -45,6 +47,7 @@ private:
 	UCSAccountSubsystem* GetAccount() const;
 
 	TSharedRef<SWidget> MakeIdentityCard();
+	TSharedRef<SWidget> MakeMethodsRow();
 	TSharedRef<SWidget> MakeBoardHeader();
 	void RebuildBoard();
 
@@ -59,4 +62,11 @@ private:
 	/** Leaderboard state: a request is out, or the last one failed. */
 	bool bLoading = false;
 	bool bLoadFailed = false;
+
+	// v2.4 linking
+	TSharedPtr<SEditableTextBox> LinkEmailBox;
+	TSharedPtr<SEditableTextBox> LinkPasswordBox;
+	bool bShowEmailForm = false;
+	FString LinkMessage;
+	bool bLinkError = false;
 };

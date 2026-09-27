@@ -18,6 +18,19 @@
 //   * No connection: the player can keep playing offline practice, without
 //     stats, and retry later.
 //
+// v2.4: a second way in - email + password (Supabase Auth; the password goes
+// only to Supabase, over HTTPS, and is never stored). Both ways end in the same
+// login token and the same profile:
+//   * Register: nickname + email + password. The nickname is set once.
+//   * Recovery: a 6-digit code by email, typed into the game, then a new password.
+//   * The email session is remembered (FCSSessionStore, DPAPI) and signs the
+//     player in on the next launch; the last method used is tried first.
+//   * One profile per player: a first Epic sign-in whose Epic account has no
+//     profile yet asks (ChoosingProfile) whether to create one or to link Epic
+//     to the player's email profile. From the profile page, an Epic player can
+//     add an email and an email player can add Epic (functions/account-link).
+//     An email or Epic account opens at most one profile; nothing is merged.
+//
 // Nothing here is authoritative for gameplay or for administration: the role
 // only decides which pages the menu shows. Every admin action is checked again
 // by the backend against the database (functions/admin).
@@ -49,7 +62,17 @@ enum class ECSAccountState : uint8
 	/** v2.0: trying the saved Epic session, silently. */
 	CheckingSession,
 	/** v2.0: the player chose to play offline (practice only, no stats). */
-	Offline
+	Offline,
+	/** v2.4: signed in to Epic, but that Epic account has no profile yet: create one, or link it to the email profile. */
+	ChoosingProfile
+};
+
+UENUM(BlueprintType)
+enum class ECSSignInMethod : uint8
+{
+	None,
+	Epic,
+	Email
 };
 
 USTRUCT(BlueprintType)
@@ -82,6 +105,8 @@ class CSFUSION_API UCSAccountSubsystem : public UGameInstanceSubsystem
 public:
 	/** Code, parsed body ({ "result": ... } or { "error": ... }; may be null). */
 	using FResponseHandler = TFunction<void(int32 Code, const TSharedPtr<FJsonObject>& Json)>;
+	/** Result of an email / link operation: bOk, or the message to show. */
+	using FAccountResult = TFunction<void(bool bOk, const FString& Message)>;
 
 	static UCSAccountSubsystem* Get(const UObject* WorldContextObject);
 
@@ -94,10 +119,49 @@ public:
 	void SignIn();
 	/** Signs out of the game and of Epic (the saved Epic session is deleted). */
 	void SignOut();
-	/** Sign out, then sign in again with the account portal. */
+	/** Sign out; an Epic player then gets the account portal again, an email player the sign-in screen. */
 	void SwitchAccount();
 	/** Keep playing without an account: practice only, nothing is recorded. */
 	void PlayOffline();
+
+	/** v2.4: the launch sign-in - the remembered email session, else the saved Epic session. Silent. */
+	void TryAutoSignIn();
+
+	// --- v2.4 email + password (Supabase Auth) -------------------------------------
+
+	/** Sign in with email + password. On failure the state goes back to SignedOut and OnDone gets the message. */
+	void SignInWithEmail(const FString& Email, const FString& Password, FAccountResult OnDone);
+	/** New account: the nickname is checked first, then the account is created and signed in. */
+	void RegisterWithEmail(const FString& Email, const FString& Password, const FString& Nickname, FAccountResult OnDone);
+	/** Sends the recovery letter (a 6-digit code with a custom template, else a link; the answer is the same whether the email is known or not). */
+	void RequestPasswordReset(const FString& Email, FAccountResult OnDone);
+	/** The code - or the whole reset link - from the email + a new password; signs the player in when it works. */
+	void ResetPassword(const FString& Email, const FString& Code, const FString& NewPassword, FAccountResult OnDone);
+
+	// --- v2.4 one profile, two ways in ---------------------------------------------
+
+	/** ChoosingProfile: create a new profile for this Epic account. */
+	void CreateProfileForEpic();
+	/** ChoosingProfile: sign in with the email profile and link this Epic account to it. */
+	void LinkEpicToEmailProfile(const FString& Email, const FString& Password, FAccountResult OnDone);
+	/** ChoosingProfile: never mind (signs out of Epic). */
+	void CancelProfileChoice();
+	/** Signed in with Epic: add an email + password (a new email account, or an existing one without a profile). */
+	void LinkEmail(const FString& Email, const FString& Password, FAccountResult OnDone);
+	/** Signed in with email: add the Epic account (opens the Epic window when there is no saved Epic session). */
+	void LinkEpic(FAccountResult OnDone);
+
+	ECSSignInMethod GetSignInMethod() const { return SignInMethod; }
+	bool HasEpicLinked() const { return bEpicLinked; }
+	bool HasEmailLinked() const { return bEmailLinked; }
+	const FString& GetEmailAddress() const { return EmailAddress; }
+	/** The email of the remembered session, to pre-fill the form. */
+	const FString& GetRememberedEmail() const { return RememberedEmail; }
+	/** A one-off message for the profile page (e.g. the result of a link made during sign-in). */
+	const FString& GetNotice() const { return Notice; }
+	void ClearNotice() { Notice.Reset(); }
+	/** Something (a sign-in, a link, a recovery) is waiting for the server. */
+	bool IsBusy() const { return bEmailBusy || State == ECSAccountState::SigningIn || State == ECSAccountState::CheckingSession; }
 
 	ECSAccountState GetState() const { return State; }
 	bool IsReady() const { return State == ECSAccountState::Ready; }
@@ -160,6 +224,8 @@ public:
 	 * whatever the account is not allowed.
 	 */
 	void DebugCallFunction(const FString& Function, const TSharedRef<FJsonObject>& Body, FResponseHandler OnDone);
+	/** Self-tests only (CSAuthSelfTest): the Supabase Auth token of an email sign-in. Empty in Shipping. */
+	FString DebugSupabaseAccessToken() const;
 
 private:
 	void BeginEpicLogin(const TCHAR* CredentialType);
@@ -168,8 +234,24 @@ private:
 	void HandleLoginStatusChanged(int32 LocalUserNum, ELoginStatus::Type OldStatus, ELoginStatus::Type NewStatus, const class FUniqueNetId& UserId);
 	/** Reads the Epic token out of the identity interface (several possible names). */
 	FString ReadEpicToken() const;
-	/** eos-login. bRenewal keeps the state (Ready) and only swaps the token. */
-	void ExchangeTokenForSession(const FString& EpicToken, bool bRenewal);
+	/** eos-login. bRenewal keeps the state (Ready) and only swaps the token. bCreate: make a profile for an unknown Epic account. */
+	void ExchangeTokenForSession(const FString& EpicToken, bool bRenewal, bool bCreate = true);
+
+	// v2.4 email plumbing
+	/** POST/PUT to Supabase Auth (/auth/v1/...). OnDone(Code, Json). */
+	void AuthRequest(const FString& Path, const FString& Verb, const TSharedRef<FJsonObject>& Body, const FString& BearerToken, FResponseHandler OnDone);
+	/** Keeps the Supabase session from an Auth answer (access/refresh token). False when it has none. */
+	bool TakeAuthSession(const TSharedPtr<FJsonObject>& Json);
+	/** email-login with the current Supabase access token. bRenewal keeps the state. */
+	void ExchangeEmailSession(bool bRenewal, const FString& Nickname, FAccountResult OnDone);
+	/** Refresh the Supabase session with the refresh token, then email-login. */
+	void RefreshEmailSession(bool bRenewal, FAccountResult OnDone);
+	void RememberSession();
+	void ReadLinked(const TSharedPtr<FJsonObject>& Json);
+	/** account-link with the current login token. */
+	void CallAccountLink(const TSharedRef<FJsonObject>& Body, FAccountResult OnDone);
+	/** A failed email step during sign-in: back to the form, with the message. */
+	void FailEmail(const FString& Message, FAccountResult& OnDone);
 	void ApplySession(const TSharedPtr<FJsonObject>& Json);
 	void ClearSession();
 	void Fail(const FString& Error);
@@ -202,6 +284,20 @@ private:
 	bool bSilentAttempt = false;
 	/** Sign in with the account portal once the running logout finishes. */
 	bool bSignInAfterLogout = false;
+
+	// v2.4
+	ECSSignInMethod SignInMethod = ECSSignInMethod::None;
+	bool bEpicLinked = false;
+	bool bEmailLinked = false;
+	FString EmailAddress;
+	FString RememberedEmail;
+	FString Notice;
+	/** The Supabase Auth session of an email sign-in (never logged). */
+	FString SupabaseAccessToken;
+	FString SupabaseRefreshToken;
+	bool bEmailBusy = false;
+	/** The Epic login in flight only links the Epic account to the signed-in profile. */
+	FAccountResult PendingEpicLink;
 
 	/** FPlatformTime::Seconds() when the backend token expires / should be renewed. */
 	double TokenExpiresAt = 0.0;

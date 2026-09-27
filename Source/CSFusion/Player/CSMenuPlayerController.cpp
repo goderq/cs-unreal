@@ -21,6 +21,7 @@
 #include "UI/SCSLoginScreen.h"
 #include "UI/SCSMainMenu.h"
 #include "Account/CSAccountSubsystem.h"
+#include "Account/CSAuthSelfTest.h"
 #include "UnrealClient.h"
 
 ACSMenuPlayerController::ACSMenuPlayerController()
@@ -53,6 +54,7 @@ void ACSMenuPlayerController::BeginPlay()
 	{
 		AccountChangedHandle = Account->OnAccountChanged.AddUObject(this, &ACSMenuPlayerController::HandleAccountChanged);
 	}
+	CSAuthSelfTest::Start(Account); // -cstestemailauth=STAGE (not in Shipping)
 	const bool bNeedsSignIn = Account && Account->IsSignInRequired() && !Account->IsReady() && !Account->IsOffline();
 	if (bNeedsSignIn)
 	{
@@ -110,6 +112,34 @@ void ACSMenuPlayerController::ShowLoginScreen()
 				*UEnum::GetValueAsString(Account ? Account->GetState() : ECSAccountState::SignedOut),
 				Account ? *Account->GetLastError() : TEXT(""),
 				LoginScreen.IsValid() ? TEXT("LOGIN SCREEN OK") : TEXT("LOGIN SCREEN BROKEN"));
+
+			// v2.4: the email pages too, when nobody got signed in (one screenshot a second).
+			if (LoginScreen.IsValid() && Account && !Account->IsReady())
+			{
+				static int32 PageShot = 0;
+				PageShot = 0;
+				GetWorldTimerManager().SetTimer(MenuTestTimer, [this]()
+				{
+					static const SCSLoginScreen::EPage Pages[] = { SCSLoginScreen::EPage::EmailSignIn, SCSLoginScreen::EPage::Register,
+						SCSLoginScreen::EPage::RecoverRequest, SCSLoginScreen::EPage::RecoverCode, SCSLoginScreen::EPage::Main };
+					static const TCHAR* Names[] = { TEXT("login_email"), TEXT("login_register"), TEXT("login_recover"), TEXT("login_code"), nullptr };
+					// Even ticks switch the page, odd ticks take its screenshot (a frame later).
+					const int32 Index = PageShot / 2;
+					if (!LoginScreen.IsValid() || Index >= UE_ARRAY_COUNT(Pages))
+					{
+						GetWorldTimerManager().ClearTimer(MenuTestTimer);
+						return;
+					}
+					if (PageShot++ % 2 == 0)
+					{
+						LoginScreen->ShowPage(Pages[Index]);
+					}
+					else if (Names[Index])
+					{
+						Screenshot(Names[Index]);
+					}
+				}, 0.6f, true);
+			}
 		}, 4.f, false);
 	}
 }

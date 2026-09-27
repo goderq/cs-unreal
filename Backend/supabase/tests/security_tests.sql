@@ -63,6 +63,9 @@ declare
     v_kills   integer;
     v_matches integer;
     v_tag     text := 'zt' || substr(md5(random()::text), 1, 6);
+    v_auth    uuid := gen_random_uuid();
+    v_auth2   uuid := gen_random_uuid();
+    v_mailonly uuid;
 begin
     -- Test players (every check below compares an expected SQLSTATE or 'ok') ----------
     insert into public.profiles (epic_account_id, nickname) values (v_tag || 'p1', v_tag || '_p1') returning id into v_player;
@@ -361,6 +364,45 @@ begin
     else
         v_fail := v_fail || 'incident with a foreign ticket named somebody';
     end if;
+
+    -- 009: email sign-in identities, linked once, never moved ---------------------------
+    insert into auth.users (id, email, aud, role) values
+        (v_auth, v_tag || '1@test.invalid', 'authenticated', 'authenticated'),
+        (v_auth2, v_tag || '2@test.invalid', 'authenticated', 'authenticated');
+    v_got := pg_temp.cs_try('anon', null, 'select auth_user_id from public.profiles limit 1');
+    if v_got = '42501' then v_pass := v_pass + 1; else v_fail := v_fail || ('anon reads auth_user_id: ' || v_got); end if;
+    v_got := pg_temp.cs_try('authenticated', v_player, format('update public.profiles set auth_user_id = %L where id = %L', v_auth, v_player));
+    if v_got = '42501' then v_pass := v_pass + 1; else v_fail := v_fail || ('player linked an email by update: ' || v_got); end if;
+    v_got := pg_temp.cs_try('authenticated', v_player, format('select public.link_identity(%L, ''email'', %L)', v_player, v_auth));
+    if v_got = '42501' then v_pass := v_pass + 1; else v_fail := v_fail || ('player token executes link_identity: ' || v_got); end if;
+    v_got := pg_temp.cs_call(format('select public.link_identity(%L, ''email'', %L)', v_player, v_auth));
+    if v_got = 'ok' and (public.profile_identities(v_player)->>'email')::boolean
+       and exists (select 1 from public.security_log where action = 'account.link_email' and target_id = v_player) then
+        v_pass := v_pass + 1;
+    else
+        v_fail := v_fail || ('email link failed or not logged: ' || v_got);
+    end if;
+    v_got := pg_temp.cs_call(format('select public.link_identity(%L, ''email'', %L)', v_player, v_auth));
+    if v_got = 'ok' then v_pass := v_pass + 1; else v_fail := v_fail || ('relinking the same email is not a no-op: ' || v_got); end if;
+    v_got := pg_temp.cs_call(format('select public.link_identity(%L, ''email'', %L)', v_player2, v_auth));
+    if v_got = '23505' then v_pass := v_pass + 1; else v_fail := v_fail || ('one email linked to two profiles: ' || v_got); end if;
+    v_got := pg_temp.cs_call(format('select public.link_identity(%L, ''email'', %L)', v_player, v_auth2));
+    if v_got = '23514' then v_pass := v_pass + 1; else v_fail := v_fail || ('a linked email was replaced: ' || v_got); end if;
+    v_got := pg_temp.cs_call(format('update public.profiles set epic_account_id = %L where id = %L', v_tag || 'moved', v_player));
+    if v_got = 'P0001' then v_pass := v_pass + 1; else v_fail := v_fail || ('a linked Epic account was changed: ' || v_got); end if;
+    v_got := pg_temp.cs_call(format('update public.profiles set auth_user_id = %L where id = %L', v_auth2, v_player));
+    if v_got = 'P0001' then v_pass := v_pass + 1; else v_fail := v_fail || ('a linked email was changed by update: ' || v_got); end if;
+    insert into public.profiles (auth_user_id, nickname) values (v_auth2, v_tag || '_mail') returning id into v_mailonly;
+    v_got := pg_temp.cs_call(format('select public.link_identity(%L, ''epic'', %L)', v_mailonly, v_tag || 'p1'));
+    if v_got = '23505' then v_pass := v_pass + 1; else v_fail := v_fail || ('one Epic account linked to two profiles: ' || v_got); end if;
+    v_got := pg_temp.cs_call(format('select public.link_identity(%L, ''epic'', %L)', v_mailonly, v_tag || 'mail_epic'));
+    if v_got = 'ok' and (public.profile_identities(v_mailonly)->>'epic')::boolean then
+        v_pass := v_pass + 1;
+    else
+        v_fail := v_fail || ('Epic link to an email profile failed: ' || v_got);
+    end if;
+    v_got := pg_temp.cs_call(format('select public.link_identity(%L, ''phone'', ''x'')', v_mailonly));
+    if v_got = '22023' then v_pass := v_pass + 1; else v_fail := v_fail || ('unknown identity kind accepted: ' || v_got); end if;
 
     -- Rate limit: the 31st match start within an hour is refused.
     begin

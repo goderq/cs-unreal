@@ -7,7 +7,11 @@
 //      game client - a token from another game is refused;
 //   2. finds the profile, or creates it with the display name read from
 //      Epic's own API. The client never chooses its name: a nickname changes
-//      afterwards only through the administration (functions/admin);
+//      afterwards only through the administration (functions/admin).
+//      With "create": false (the game's first Epic sign-in) an unknown Epic
+//      account gets 404 no_profile instead, so the player can choose between
+//      a new profile and linking Epic to the email profile they already have
+//      (functions/account-link) - no duplicate profiles;
 //   3. refuses banned players;
 //   4. returns a short-lived login token (2 h). The game renews it silently
 //      by calling this function again with its current Epic token.
@@ -118,6 +122,7 @@ Deno.serve(async (request) => {
             throw new HttpError(400, "epic_token is required");
         }
 
+        const mayCreate = body.create !== false;
         const accountId = await verifyEpicToken(epicToken);
         const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
             { auth: { persistSession: false } });
@@ -137,6 +142,9 @@ Deno.serve(async (request) => {
             throw readError;
         }
 
+        if (!profile && !mayCreate) {
+            throw new HttpError(404, "no_profile");
+        }
         if (!profile) {
             const wanted = cleanNickname(await epicDisplayName(epicToken, accountId));
             for (let attempt = 0; attempt < 8 && !profile; attempt++) {
@@ -172,6 +180,7 @@ Deno.serve(async (request) => {
         await db.from("profiles").update({ last_seen_at: new Date().toISOString() }).eq("id", profile.id);
         const { data: stats } = await db.from("player_stats").select(STATS_COLUMNS)
             .eq("profile_id", profile.id).maybeSingle();
+        const { data: linked } = await db.rpc("profile_identities", { p_profile: profile.id });
 
         const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(Deno.env.get("CS_JWT_SECRET")!),
             { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
@@ -198,6 +207,8 @@ Deno.serve(async (request) => {
                 is_staff: role !== "player",
             },
             stats: stats ?? {},
+            method: "epic",
+            linked: { epic: true, email: linked?.email === true, email_address: linked?.email_address ?? null },
         });
     } catch (error) {
         if (error instanceof HttpError) {

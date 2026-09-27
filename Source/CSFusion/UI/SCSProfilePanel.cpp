@@ -6,6 +6,7 @@
 #include "Dom/JsonObject.h"
 #include "UI/CSUIStyle.h"
 #include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -97,6 +98,171 @@ UCSAccountSubsystem* SCSProfilePanel::GetAccount() const
 	return WorldContext.IsValid() ? UCSAccountSubsystem::Get(WorldContext.Get()) : nullptr;
 }
 
+TSharedRef<SWidget> SCSProfilePanel::MakeMethodsRow()
+{
+	const TWeakPtr<SCSProfilePanel> Weak = SharedThis(this);
+	auto OnLinked = [Weak](bool bOk, const FString& Message)
+	{
+		if (const TSharedPtr<SCSProfilePanel> Self = Weak.Pin())
+		{
+			Self->LinkMessage = Message;
+			Self->bLinkError = !bOk;
+			if (bOk)
+			{
+				Self->bShowEmailForm = false;
+				if (Self->LinkPasswordBox.IsValid())
+				{
+					Self->LinkPasswordBox->SetText(FText::GetEmpty());
+				}
+			}
+		}
+	};
+	auto NotBusy = [this]() { const UCSAccountSubsystem* Account = GetAccount(); return Account && !Account->IsBusy(); };
+	auto SubmitEmail = [this, OnLinked]()
+	{
+		if (UCSAccountSubsystem* Account = GetAccount())
+		{
+			LinkMessage.Reset();
+			Account->LinkEmail(LinkEmailBox->GetText().ToString(), LinkPasswordBox->GetText().ToString(), OnLinked);
+		}
+	};
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			// Email
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Font(CSUI::Font(14))
+				.Text_Lambda([this]()
+				{
+					const UCSAccountSubsystem* Account = GetAccount();
+					if (Account && Account->HasEmailLinked())
+					{
+						return FText::Format(LOCTEXT("EmailLinked", "EMAIL: {0}"), FText::FromString(Account->GetEmailAddress().IsEmpty() ? TEXT("linked") : Account->GetEmailAddress()));
+					}
+					return LOCTEXT("EmailNone", "EMAIL: not linked");
+				})
+				.ColorAndOpacity_Lambda([this]()
+				{
+					const UCSAccountSubsystem* Account = GetAccount();
+					return FSlateColor(Account && Account->HasEmailLinked() ? CSUI::Money : CSUI::TextDim);
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 24.f, 0.f)
+			[
+				SNew(SBox).WidthOverride(170.f).HeightOverride(34.f)
+				.Visibility_Lambda([this]()
+				{
+					const UCSAccountSubsystem* Account = GetAccount();
+					return Account && Account->IsReady() && !Account->HasEmailLinked() ? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				[
+					CSUI::MakeButton(LOCTEXT("LinkEmail", "LINK EMAIL"), FOnClicked::CreateLambda([this]()
+					{
+						bShowEmailForm = !bShowEmailForm;
+						LinkMessage.Reset();
+						return FReply::Handled();
+					}), CSUI::EButtonKind::Normal, TAttribute<bool>::CreateLambda(NotBusy), 13)
+				]
+			]
+			// Epic Games
+			+ SHorizontalBox::Slot().FillWidth(1.f).VAlign(VAlign_Center)
+			[
+				SNew(STextBlock).Font(CSUI::Font(14))
+				.Text_Lambda([this]()
+				{
+					const UCSAccountSubsystem* Account = GetAccount();
+					return Account && Account->HasEpicLinked() ? LOCTEXT("EpicLinked", "EPIC GAMES: linked") : LOCTEXT("EpicNone", "EPIC GAMES: not linked");
+				})
+				.ColorAndOpacity_Lambda([this]()
+				{
+					const UCSAccountSubsystem* Account = GetAccount();
+					return FSlateColor(Account && Account->HasEpicLinked() ? CSUI::Money : CSUI::TextDim);
+				})
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(8.f, 0.f, 0.f, 0.f)
+			[
+				SNew(SBox).WidthOverride(200.f).HeightOverride(34.f)
+				.Visibility_Lambda([this]()
+				{
+					const UCSAccountSubsystem* Account = GetAccount();
+					return Account && Account->IsReady() && !Account->HasEpicLinked() ? EVisibility::Visible : EVisibility::Collapsed;
+				})
+				[
+					CSUI::MakeButton(LOCTEXT("LinkEpic", "LINK EPIC GAMES"), FOnClicked::CreateLambda([this, OnLinked]()
+					{
+						if (UCSAccountSubsystem* Account = GetAccount())
+						{
+							LinkMessage = TEXT("Finish the login in the Epic window...");
+							bLinkError = false;
+							Account->LinkEpic(OnLinked);
+						}
+						return FReply::Handled();
+					}), CSUI::EButtonKind::Normal, TAttribute<bool>::CreateLambda(NotBusy), 13)
+				]
+			]
+		]
+		// The email form (a new email account, or an existing one without a profile).
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 8.f, 0.f, 0.f)
+		[
+			SNew(SHorizontalBox)
+			.Visibility_Lambda([this]() { return bShowEmailForm ? EVisibility::Visible : EVisibility::Collapsed; })
+			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(SBox).HeightOverride(36.f)
+				[
+					SAssignNew(LinkEmailBox, SEditableTextBox).Font(CSUI::Font(14)).HintText(LOCTEXT("LinkEmailHint", "email"))
+				]
+			]
+			+ SHorizontalBox::Slot().FillWidth(1.f).Padding(0.f, 0.f, 8.f, 0.f)
+			[
+				SNew(SBox).HeightOverride(36.f)
+				[
+					SAssignNew(LinkPasswordBox, SEditableTextBox).Font(CSUI::Font(14)).IsPassword(true)
+					.HintText(LOCTEXT("LinkPasswordHint", "password (8+ characters)"))
+					.OnTextCommitted_Lambda([SubmitEmail](const FText&, ETextCommit::Type Commit)
+					{
+						if (Commit == ETextCommit::OnEnter)
+						{
+							SubmitEmail();
+						}
+					})
+				]
+			]
+			+ SHorizontalBox::Slot().AutoWidth()
+			[
+				SNew(SBox).WidthOverride(150.f).HeightOverride(36.f)
+				[
+					CSUI::MakeButton(LOCTEXT("LinkEmailGo", "LINK"), FOnClicked::CreateLambda([SubmitEmail]()
+					{
+						SubmitEmail();
+						return FReply::Handled();
+					}), CSUI::EButtonKind::Primary, TAttribute<bool>::CreateLambda(NotBusy), 14)
+				]
+			]
+		]
+		+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 6.f, 0.f, 0.f)
+		[
+			SNew(STextBlock).Font(CSUI::Font(13)).AutoWrapText(true)
+			.Text_Lambda([this]()
+			{
+				const UCSAccountSubsystem* Account = GetAccount();
+				if (Account && Account->IsBusy())
+				{
+					return LOCTEXT("LinkBusy", "Please wait...");
+				}
+				if (!LinkMessage.IsEmpty())
+				{
+					return FText::FromString(LinkMessage);
+				}
+				return FText::FromString(Account ? Account->GetNotice() : FString());
+			})
+			.ColorAndOpacity_Lambda([this]() { return FSlateColor(bLinkError ? CSUI::Danger : CSUI::Money); })
+		];
+}
+
 TSharedRef<SWidget> SCSProfilePanel::MakeIdentityCard()
 {
 	return SNew(SBorder)
@@ -118,9 +284,11 @@ TSharedRef<SWidget> SCSProfilePanel::MakeIdentityCard()
 						{
 							// The role is shown to staff only; players just see who they are.
 							const UCSAccountSubsystem* Account = GetAccount();
+							const FText Method = Account && Account->GetSignInMethod() == ECSSignInMethod::Email
+								? LOCTEXT("SignedInEmail", "SIGNED IN WITH EMAIL") : LOCTEXT("SignedIn", "SIGNED IN WITH EPIC GAMES");
 							return Account && Account->IsStaff()
-								? FText::Format(LOCTEXT("SignedInRole", "SIGNED IN WITH EPIC  -  {0}"), FText::FromString(Account->GetRole().ToUpper()))
-								: LOCTEXT("SignedIn", "SIGNED IN WITH EPIC");
+								? FText::Format(LOCTEXT("SignedInRole", "{0}  -  {1}"), Method, FText::FromString(Account->GetRole().ToUpper()))
+								: Method;
 						})
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 2.f, 0.f, 14.f)
@@ -164,6 +332,10 @@ TSharedRef<SWidget> SCSProfilePanel::MakeIdentityCard()
 							}), CSUI::EButtonKind::Danger, true, 14)
 					]
 				]
+			]
+			+ SVerticalBox::Slot().AutoHeight().Padding(0.f, 0.f, 0.f, 14.f)
+			[
+				MakeMethodsRow()
 			]
 			+ SVerticalBox::Slot().AutoHeight()
 			[
