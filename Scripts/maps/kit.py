@@ -208,16 +208,21 @@ def wall_openings(b, a, c, z0, z1, t, mat, openings, reveal_mat=None, outside=-1
         else:
             b.box(fixed - t / 2, fixed + t / 2, s, e, zb, zt, mat)
 
-    cursor = lo
-    for s, e, zb, zt in sorted(openings):
-        piece(cursor, s, z0, z1)
-        # Clamp to this band: a wall built as plinth + cladding passes every opening to both
-        # calls, and a window above the plinth must not raise the plinth up to its sill
-        # (that piece would sit inside the cladding and z-fight with it).
-        piece(s, e, z0, min(zb, z1))
-        piece(s, e, max(zt, z0), z1)
-        cursor = e
-    piece(cursor, hi, z0, z1)
+    # The wall is cut into vertical strips at every opening edge; in each strip the openings
+    # covering it are merged in z and the wall fills only the gaps between them, clamped to
+    # this band. (Openings stacked on several floors at one span, and a wall built as plinth +
+    # cladding that passes every opening to both calls, both come out right.)
+    edges = sorted({lo, hi} | {min(max(v, lo), hi) for s, e, _, _ in openings for v in (s, e)})
+    for a0, a1 in zip(edges, edges[1:]):
+        if a1 - a0 < 1:
+            continue
+        mid = (a0 + a1) / 2
+        spans = sorted((max(zb, z0), min(zt, z1)) for s, e, zb, zt in openings if s <= mid <= e and min(zt, z1) > max(zb, z0))
+        z = z0
+        for zb, zt in spans:
+            piece(a0, a1, z, zb)
+            z = max(z, zt)
+        piece(a0, a1, z, z1)
 
 
 # ---------------------------------------------------------------------------

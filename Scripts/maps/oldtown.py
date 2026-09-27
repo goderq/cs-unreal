@@ -212,6 +212,7 @@ def build_house(b, det, h, r):
             w = e - s
             if hi - lo == 150:
                 det.add(kit.window(110, 150), at_face(side, mid, face, lo), yaw, cull=9000)
+                behind(b, side, s, e, face, lo, hi)
                 if (int(mid) // 7 + int(lo)) % 3 != 0:
                     det.add(kit.shutters(110, 150), at_face(side, mid, face, lo), yaw, cull=7000)
             elif hi - lo == 235:
